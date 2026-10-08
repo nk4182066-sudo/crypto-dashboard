@@ -4,6 +4,7 @@ import { useState, useEffect, useRef, type FormEvent } from "react";
 import AnnotatedChart, { type ChartAnnotation, type RiskRewardSummary, type TradeVerdict } from "@/components/AnnotatedChart";
 import PhaseThreeWorkspace from "@/components/PhaseThreeWorkspace";
 import TradingChart from "@/components/TradingChart";
+import { scanCandlestickPatterns } from "@/src/lib/chart/candlestickPatterns";
 
 interface ChatMessage {
   role: string;
@@ -20,6 +21,23 @@ interface ChatMessage {
   analysisExplanation?: string;
   chartPattern?: string;
 }
+
+import FreePremiumSignal from "@/components/FreePremiumSignal";
+import AnalysisResults from "@/components/AnalysisResults";
+import ChartAnnotations from "@/components/ChartAnnotations";
+import FilteredPatterns from "@/components/FilteredPatterns";
+import LoginButton from "@/components/LoginButton";
+import SmartMoneyZones from "@/components/SmartMoneyZones";
+import LiquiditySweep from "@/components/LiquiditySweep";
+import VolumeProfile from "@/components/VolumeProfile";
+import MTFConfluence from "@/components/MTFConfluence";
+import BreakoutFilter from "@/components/BreakoutFilter";
+import ATRTrailing from "@/components/ATRTrailing";
+import KellyCriterion from "@/components/KellyCriterion";
+import CoinScanner from "@/components/CoinScanner";
+import BeginnerTooltips from "@/components/BeginnerTooltips";
+import PatternLibrary from "@/components/PatternLibrary";
+
 
 interface TradePlan {
   direction: "buy" | "sell" | "wait";
@@ -486,6 +504,33 @@ export default function Home() {
     ...planLevels,
   ];
   const chartStructure = deriveChartStructure(chartData, marketPattern);
+  const candlePatternHits = scanCandlestickPatterns(chartData);
+  const chartAnnotations: ChartAnnotation[] = [
+    ...displayedChartLevels
+      .filter((level) => level.kind === "support" || level.kind === "resistance" || level.kind === "stopLoss" || level.kind === "takeProfit")
+      .map((level) => ({
+        type: "horizontal" as const,
+        category: level.kind as "support" | "resistance" | "stopLoss" | "takeProfit",
+        y: level.price,
+        label: level.label ?? `${level.kind} ${formatMarketPrice(level.price)}`,
+      })),
+    ...(marketTradePlan && marketTradePlan.direction !== "wait" && marketTradePlan.entry !== null
+      ? [{
+          type: "entry" as const,
+          direction: marketTradePlan.direction as "buy" | "sell",
+          x: 0,
+          y: marketTradePlan.entry,
+          label: formatMarketPrice(marketTradePlan.entry),
+        }]
+      : []),
+    ...candlePatternHits.slice(-3).map((hit) => ({
+        type: "pattern" as const,
+        name: hit.pattern,
+        points: [] as { x: number; y: number }[],
+        label: `${hit.confidence}% confidence`,
+      })),
+  ];
+  const chartVerdict: TradeVerdict = marketTradePlan?.direction === "buy" ? "Take Entry" : "Wait";
   const entryDecision = marketTradePlan?.direction !== "wait"
     ? "Yes"
     : marketTradePlan?.qualityScore !== null && marketTradePlan?.qualityScore !== undefined && marketTradePlan.qualityScore < 80
@@ -1242,6 +1287,9 @@ export default function Home() {
           <button className="px-4 py-2 text-sm text-zinc-400 hover:text-white transition-colors">
             Settings
           </button>
+          <div className="shrink-0">
+            <LoginButton />
+          </div>
           <div className="w-8 h-8 bg-zinc-700 rounded-full flex items-center justify-center">
             <span className="text-white text-sm">U</span>
           </div>
@@ -1527,7 +1575,12 @@ export default function Home() {
                       <div className="text-zinc-400">Loading chart data...</div>
                     </div>
                   ) : (
-                    <div className="h-72 overflow-hidden rounded-xl bg-zinc-900 p-3 sm:h-96 sm:p-6">
+                    <div className="relative h-72 overflow-hidden rounded-xl bg-zinc-900 p-3 sm:h-96 sm:p-6">
+                      <div className="pointer-events-none absolute inset-0 z-10">
+                        <ChartAnnotations annotations={chartAnnotations} verdict={chartVerdict} />
+                        <SmartMoneyZones candles={chartData} currentPrice={latestMarketPrice ?? 0} />
+                        <LiquiditySweep candles={chartData} />
+                      </div>
                       <TradingChart
                         data={chartData}
                         chartKey={chartDataKey}
@@ -1563,6 +1616,11 @@ export default function Home() {
                       {marketExplanation && <p className="basis-full leading-relaxed text-zinc-500">{marketExplanation}</p>}
                     </div>
                   </details>
+                </div>
+
+                <div className="dashboard-grid mt-4">
+                  <FilteredPatterns patterns={candlePatternHits} />
+                  <VolumeProfile candles={chartData} />
                 </div>
 
               </>
@@ -1608,7 +1666,28 @@ export default function Home() {
               className="hidden"
             />
           </div>
+          {/* Phase 5 — Analysis & scanner tools */}
+          <div className="space-y-4 px-3 pb-6 sm:px-6">
+            <FreePremiumSignal />
+            {chartData.length > 0 && (
+              <div className="dashboard-grid">
+                <MTFConfluence candles={chartData} market={selectedMarketLabel} />
+                <BreakoutFilter candles={chartData} currentPrice={latestMarketPrice ?? 0} />
+              </div>
+            )}
+            <CoinScanner />
+            <AnalysisResults />
+          </div>
         </main>
+
+        {/* Right sidebar — risk & pattern tools */}
+        {activeTab !== "workspace" && (
+          <aside className="flex w-full shrink-0 flex-col gap-4 border-t border-zinc-800 bg-zinc-900 p-4 md:w-80 md:overflow-y-auto md:border-l md:border-t-0">
+            <ATRTrailing candles={chartData} currentPrice={latestMarketPrice ?? 0} direction="long" />
+            <KellyCriterion />
+            <PatternLibrary candles={chartData} />
+          </aside>
+        )}
       </div>
 
       {/* Floating AI Chatbot */}
@@ -1949,6 +2028,19 @@ export default function Home() {
           </div>
         )}
       </div>
+
+      {/* Phase 5 — floating educational overlays */}
+      <BeginnerTooltips>{null}</BeginnerTooltips>
+
+      {/* Educational disclaimer */}
+      <footer className="disclaimer-box mx-4 mb-4 mt-2">
+        <p>
+          <strong className="text-zinc-300">Disclaimer:</strong> Everything on this dashboard is for
+          educational purposes only and is not financial, investment, or trading advice. Crypto, forex,
+          and stock markets are volatile — never risk money you cannot afford to lose.
+        </p>
+        <p className="mt-1">100% free for everyone. No hidden charges. No paid signals.</p>
+      </footer>
     </div>
   );
 }

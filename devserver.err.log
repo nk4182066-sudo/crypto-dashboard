@@ -1,0 +1,36 @@
+(node:6020) [MODULE_TYPELESS_PACKAGE_JSON] Warning: Module type of file:///C:/Users/noman/OneDrive/Desktop/crypto%20website/crypto-dashboard/server.ts is not specified and it doesn't parse as CommonJS.
+Reparsing as ES module because module syntax was detected. This incurs a performance overhead.
+To eliminate this warning, add "type": "module" to \\?\C:\Users\noman\OneDrive\Desktop\crypto website\crypto-dashboard\package.json.
+(Use `node --trace-warnings ...` to show where the warning was created)
+Groq market-signal request rejected: 502 Groq signal request failed.
+Groq market-signal request rejected: 502 Groq signal request failed.
+[browser] Error fetching chart data: TypeError: Failed to fetch
+    at Home.useEffect.loadHistory (app/page.tsx:721:32)
+    at Home.useEffect.refreshInterval (app/page.tsx:765:59)
+  719 |         const query = new URLSearchParams({ market: historyMarket, symbol: selectedMarketSymbol, timeframe: selectedHistoryTimeframe });
+  720 |         if (before !== undefined) query.set("before", String(before));
+> 721 |         const response = await fetch(`/api/market/history?${query}`);
+      |                                ^
+  722 |         const result = await response.json() as {
+  723 |           error?: string;
+  724 |           candles?: ChartData[]; (app/page.tsx:738:19)
+Groq market-signal request rejected: 502 Groq signal request failed.
+[browser] Error fetching crypto data: TypeError: Failed to fetch
+    at Home.useEffect.fetchCryptoData (app/page.tsx:648:32)
+  646 |     const fetchCryptoData = async () => {
+  647 |       try {
+> 648 |         const response = await fetch(
+      |                                ^
+  649 |           "https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=250&page=1&sparkline=false&price_change_percentage=24h"
+  650 |         );
+  651 |         const data = await response.json(); (app/page.tsx:656:17)
+Groq market-signal request rejected: 502 Groq signal request failed.
+Groq market-signal request rejected: 502 Groq signal request failed.
+Groq market-signal request rejected: 502 Groq signal request failed.
+Groq market-signal request rejected: 502 Groq signal request failed.
+Groq market-signal request rejected: 502 Groq signal request failed.
+Groq market-signal request rejected: 502 Groq signal request failed.
+Groq market-signal request rejected: 502 Groq signal request failed.
+Groq market-signal request rejected: 502 Groq signal request failed.
+Groq market-signal request rejected: 502 Groq signal request failed.
+Groq market-signal request rejected: 502 Groq signal request failed.

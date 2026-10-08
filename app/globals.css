@@ -1,5 +1,7 @@
 @import "tailwindcss";
 
+@custom-variant dark (& .dark &);
+
 :root {
   --background: #09090b;
   --foreground: #fafafa;
@@ -8,12 +10,97 @@
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
+  --font-sans: var(--font-geist-sans), Inter, Arial, Helvetica, sans-serif;
   --font-mono: var(--font-geist-mono);
 }
 
 body {
   background: var(--background);
   color: var(--foreground);
-  font-family: var(--font-geist-sans), Arial, Helvetica, sans-serif;
+  font-family: var(--font-sans), Arial, Helvetica, sans-serif;
+  font-size: 15px;
+  line-height: 1.6;
+  /* The dashboard is a fixed 3-column app; without this, a wide chart or a
+     long ticker on a narrow phone makes the whole page scroll sideways. */
+  overflow-x: hidden;
+  -webkit-text-size-adjust: 100%;
+}
+
+/*
+ * Touch-target floor. Apple/Android guidance is ~44px, so small controls
+ * (timeframe chips, tab pills, icon buttons) get a min-height on touch
+ * devices while keeping their compact desktop look.
+ */
+@media (pointer: coarse) {
+  button,
+  a,
+  select,
+  input[type="button"],
+  input[type="submit"] {
+    min-height: 44px;
+  }
+
+  /* Icon-only controls still need a comfortable width. */
+  button[aria-label] {
+    min-width: 44px;
+  }
+}
+
+/* Horizontal strips (market tabs, timeframe chips) scroll without a visible
+   scrollbar on desktop and without forcing the page wider than the viewport. */
+.hide-scrollbar {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior-x: contain;
+}
+
+.hide-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
+/* Phase 5 — tool grids under the chart: one column on phones, two from lg up. */
+.dashboard-grid {
+  display: grid;
+  gap: 1rem;
+  grid-template-columns: minmax(0, 1fr);
+}
+
+@media (min-width: 1024px) {
+  .dashboard-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+/* Anchor for the AI Teacher floating button/chat. The transform creates a
+   containing block for its position:fixed children so it stacks above the
+   main chatbot (same default bottom-right spot) instead of overlapping it. */
+.ai-teacher-anchor {
+  position: fixed;
+  right: 1rem;
+  bottom: 5.5rem;
+  z-index: 50;
+  transform: translateZ(0);
+}
+
+/* Educational disclaimer strip at the bottom of the dashboard. */
+.disclaimer-box {
+  border: 1px solid #3f3f46;
+  border-radius: 0.75rem;
+  background: rgba(24, 24, 27, 0.6);
+  padding: 0.85rem 1.25rem;
+  text-align: center;
+  font-size: 0.75rem;
+  line-height: 1.6;
+  color: #a1a1aa;
+}
+
+/* Respect users who ask for less motion. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
 }

@@ -2,6 +2,10 @@
 
 import { useEffect, useMemo, useState, type FormEvent } from "react";
 import TradingChart, { type ChartDrawing, type IndicatorOverlay } from "@/components/TradingChart";
+import PhaseFourWorkspace from "@/components/PhaseFourWorkspace";
+import MasterAnalystWorkspace from "@/components/MasterAnalystWorkspace";
+import { resample } from "@/src/analysis";
+import { fetchWithTimeout } from "@/src/lib/fetchClient";
 
 interface Candle {
   time: number;
@@ -17,7 +21,7 @@ interface Coin {
   symbol: string;
   name: string;
   current_price: number;
-  price_change_percentage_24h: number;
+  price_change_percentage_24h: number | null;
   total_volume?: number;
 }
 
@@ -90,10 +94,11 @@ interface WorkspaceProps {
   initialPanel?: "chart" | "insights";
 }
 
-type WorkspacePanel = "chart" | "insights" | "scanner" | "portfolio" | "journal" | "paper" | "backtest";
+type WorkspacePanel = "chart" | "insights" | "scanner" | "portfolio" | "journal" | "paper" | "backtest" | "analyst" | "phase4";
 type Timeframe = "15m" | "1h" | "4h" | "1d" | "max";
 type DrawingMode = ChartDrawing["kind"] | null;
 type SeriesPoint = { time: number; value: number };
+const overviewTimeframes: Timeframe[] = ["15m", "1h", "4h", "1d", "max"];
 
 const persistenceKeys = {
   drawings: "phase3-drawings-v1",
@@ -206,24 +211,24 @@ function calculateMacd(candles: Candle[]) {
     : []);
 }
 
-function detectDivergence(candles: Candle[], rsiValues: (number | null)[]) {
+function detectDivergence(candles: Candle[], oscillatorValues: (number | null)[], indicator: "RSI" | "MACD") {
   const highs: number[] = [];
   const lows: number[] = [];
   const start = Math.max(2, candles.length - 120);
   for (let index = start; index < candles.length - 2; index += 1) {
     const window = candles.slice(index - 2, index + 3);
-    if (candles[index].high === Math.max(...window.map((candle) => candle.high)) && rsiValues[index] !== null) highs.push(index);
-    if (candles[index].low === Math.min(...window.map((candle) => candle.low)) && rsiValues[index] !== null) lows.push(index);
+    if (candles[index].high === Math.max(...window.map((candle) => candle.high)) && oscillatorValues[index] !== null) highs.push(index);
+    if (candles[index].low === Math.min(...window.map((candle) => candle.low)) && oscillatorValues[index] !== null) lows.push(index);
   }
   const highPair = highs.slice(-2);
   const lowPair = lows.slice(-2);
-  if (highPair.length === 2 && candles[highPair[1]].high > candles[highPair[0]].high && rsiValues[highPair[1]]! < rsiValues[highPair[0]]!) {
-    return "Bearish RSI divergence: price made a higher swing high while RSI made a lower high.";
+  if (highPair.length === 2 && candles[highPair[1]].high > candles[highPair[0]].high && oscillatorValues[highPair[1]]! < oscillatorValues[highPair[0]]!) {
+    return `Bearish ${indicator} divergence: price made a higher swing high while ${indicator} made a lower high.`;
   }
-  if (lowPair.length === 2 && candles[lowPair[1]].low < candles[lowPair[0]].low && rsiValues[lowPair[1]]! > rsiValues[lowPair[0]]!) {
-    return "Bullish RSI divergence: price made a lower swing low while RSI made a higher low.";
+  if (lowPair.length === 2 && candles[lowPair[1]].low < candles[lowPair[0]].low && oscillatorValues[lowPair[1]]! > oscillatorValues[lowPair[0]]!) {
+    return `Bullish ${indicator} divergence: price made a lower swing low while ${indicator} made a higher low.`;
   }
-  return "No confirmed RSI divergence in the recent 120 candles.";
+  return `No confirmed ${indicator} divergence in the recent 120 candles.`;
 }
 
 function money(value: number, maximumFractionDigits = 2) {
@@ -257,11 +262,26 @@ function chartPath(points: SeriesPoint[], min: number, max: number) {
   }).join(" ");
 }
 
+function sparklinePath(candles: Candle[]) {
+  if (candles.length < 2) return "";
+  const prices = candles.map((candle) => candle.close);
+  const low = Math.min(...prices);
+  const high = Math.max(...prices);
+  return prices.map((price, index) => {
+    const x = index / (prices.length - 1) * 1000;
+    const y = 58 - (price - low) / (high - low || 1) * 50;
+    return `${index === 0 ? "M" : "L"}${x.toFixed(1)},${y.toFixed(1)}`;
+  }).join(" ");
+}
+
 export default function PhaseThreeWorkspace({ coins, initialCoin, initialPanel = "chart" }: WorkspaceProps) {
   const [panel, setPanel] = useState<WorkspacePanel>(initialPanel);
   const [selectedCoin, setSelectedCoin] = useState(initialCoin ?? coins[0]?.id ?? "bitcoin");
   const [timeframe, setTimeframe] = useState<Timeframe>("1h");
   const [candles, setCandles] = useState<Candle[]>([]);
+  const [timeframeCandles, setTimeframeCandles] = useState<Partial<Record<Timeframe, Candle[]>>>({});
+  const [timeframeOverviewLoading, setTimeframeOverviewLoading] = useState(true);
+  const [timeframeOverviewError, setTimeframeOverviewError] = useState(false);
   const [historyError, setHistoryError] = useState("");
   const [historyLoading, setHistoryLoading] = useState(false);
   const [drawingMode, setDrawingMode] = useState<DrawingMode>(null);
@@ -297,7 +317,7 @@ export default function PhaseThreeWorkspace({ coins, initialCoin, initialPanel =
       setHistoryLoading(true);
       try {
         const query = new URLSearchParams({ market: "crypto", symbol: historyKey, timeframe });
-        const response = await fetch(`/api/market/history?${query}`);
+        const response = await fetchWithTimeout(`/api/market/history?${query}`);
         const result = await response.json() as { candles?: Candle[]; error?: string };
         if (!response.ok) throw new Error(result.error || "Historical candles could not be loaded.");
         if (active) {
@@ -319,9 +339,34 @@ export default function PhaseThreeWorkspace({ coins, initialCoin, initialPanel =
   }, [historyKey, timeframe]);
 
   useEffect(() => {
+    if (!historyKey) return;
+    let active = true;
+    const loadOverview = async () => {
+      setTimeframeOverviewLoading(true);
+      const results = await Promise.allSettled(overviewTimeframes.map(async (item) => {
+        const query = new URLSearchParams({ market: "crypto", symbol: historyKey, timeframe: item });
+        const response = await fetchWithTimeout(`/api/market/history?${query}`);
+        const result = await response.json() as { candles?: Candle[]; error?: string };
+        if (!response.ok) throw new Error(result.error || `${item} candles could not be loaded.`);
+        return [item, result.candles ?? []] as const;
+      }));
+      if (!active) return;
+      setTimeframeCandles(Object.fromEntries(results.flatMap((result) => result.status === "fulfilled" ? [result.value] : [])) as Partial<Record<Timeframe, Candle[]>>);
+      setTimeframeOverviewError(results.some((result) => result.status === "rejected"));
+      setTimeframeOverviewLoading(false);
+    };
+    void loadOverview();
+    const interval = window.setInterval(() => void loadOverview(), 5 * 60_000);
+    return () => {
+      active = false;
+      window.clearInterval(interval);
+    };
+  }, [historyKey]);
+
+  useEffect(() => {
     let active = true;
     const readFeed = async <T,>(type: string): Promise<T> => {
-      const response = await fetch(`/api/market/phase3?type=${type}`);
+      const response = await fetchWithTimeout(`/api/market/phase3?type=${type}`);
       const result = await response.json();
       if (!response.ok) throw new Error(result.error || `${type} feed unavailable`);
       return result as T;
@@ -394,7 +439,20 @@ export default function PhaseThreeWorkspace({ coins, initialCoin, initialPanel =
       label: `Fib ${(ratio * 100).toFixed(1)}%`,
     }));
   }, [candles]);
-  const divergence = useMemo(() => detectDivergence(candles, rsi.values), [candles, rsi]);
+  const rsiDivergence = useMemo(() => detectDivergence(candles, rsi.values, "RSI"), [candles, rsi]);
+  const macdDivergence = useMemo(() => {
+    const valuesByTime = new Map(macd.map((point) => [point.time, point.line]));
+    return detectDivergence(candles, candles.map((candle) => valuesByTime.get(candle.time) ?? null), "MACD");
+  }, [candles, macd]);
+  const timeframeSummaries = useMemo(() => overviewTimeframes.map((item) => {
+    const series = (timeframeCandles[item] ?? []).slice(-60);
+    const latest = series.at(-1);
+    const first = series[0];
+    const change = first && latest ? (latest.close / first.close - 1) * 100 : null;
+    const latestRsi = calculateRsi(series).values.at(-1) ?? null;
+    const latestMacd = calculateMacd(series).at(-1) ?? null;
+    return { timeframe: item, series, change, rsi: latestRsi, macd: latestMacd };
+  }), [timeframeCandles]);
   const recentVolume = candles.slice(-60);
   const averageVolume = recentVolume.length ? recentVolume.reduce((sum, candle) => sum + candle.volume, 0) / recentVolume.length : 0;
   const latestVolumeRatio = averageVolume > 0 ? (recentVolume.at(-1)?.volume ?? 0) / averageVolume : 0;
@@ -402,6 +460,20 @@ export default function PhaseThreeWorkspace({ coins, initialCoin, initialPanel =
   const scannerRows = useMemo(() => [...coins]
     .sort((first, second) => Math.abs(second.price_change_percentage_24h || 0) - Math.abs(first.price_change_percentage_24h || 0))
     .slice(0, 250), [coins]);
+  const analystFrames = useMemo(() => {
+    const frames: Partial<Record<"15m" | "1h" | "4h" | "1d" | "1w", Candle[]>> = {};
+    for (const key of ["15m", "1h", "4h", "1d"] as const) {
+      const series = timeframeCandles[key];
+      if (series && series.length >= 30) frames[key] = series;
+    }
+    const daily = timeframeCandles["1d"] ?? timeframeCandles["4h"];
+    if (daily && daily.length >= 30) frames["1w"] = resample(daily, 7 * 24 * 60 * 60);
+    return frames;
+  }, [timeframeCandles]);
+  const analystSymbol = useMemo(() => {
+    const coin = coins.find((item) => item.id === selectedCoin);
+    return coin ? `${coin.symbol.toUpperCase()}-USD` : selectedCoin.toUpperCase();
+  }, [coins, selectedCoin]);
 
   const completeDrawing = (drawing: ChartDrawing) => {
     setDrawings((current) => [...current, drawing]);
@@ -535,6 +607,8 @@ export default function PhaseThreeWorkspace({ coins, initialCoin, initialPanel =
     { id: "journal", label: "Trade Journal" },
     { id: "paper", label: "Paper Trading" },
     { id: "backtest", label: "Backtest" },
+    { id: "analyst", label: "Master Analyst" },
+    { id: "phase4", label: "Phase 4" },
   ];
 
   return (
@@ -544,6 +618,8 @@ export default function PhaseThreeWorkspace({ coins, initialCoin, initialPanel =
           <div>
             <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-emerald-300">Phase 3</p>
             <h2 className="mt-1 text-xl font-semibold text-white">Market workbench</h2>
+            {metricCard("RSI divergence", rsiDivergence.startsWith("No ") ? "None" : rsiDivergence.startsWith("Bullish") ? "Bullish" : "Bearish", "Recent confirmed swing comparison")}
+            {metricCard("MACD divergence", macdDivergence.startsWith("No ") ? "None" : macdDivergence.startsWith("Bullish") ? "Bullish" : "Bearish", "MACD-line swing comparison")}
           </div>
           <div className="flex min-w-0 items-center gap-2">
             <label htmlFor="phase3-coin" className="sr-only">Chart instrument</label>
@@ -569,11 +645,12 @@ export default function PhaseThreeWorkspace({ coins, initialCoin, initialPanel =
             {historyLoading && <span role="status" className="text-xs text-zinc-400">Updating candles…</span>}
           </div>
           {historyError && <p role="alert" className="border-l-2 border-amber-400 pl-3 text-sm text-amber-200">{historyError}</p>}
-          <div className="grid grid-cols-2 gap-4 border-y border-zinc-800 py-4 sm:grid-cols-4">
+          <div className="grid grid-cols-2 gap-4 border-y border-zinc-800 py-4 sm:grid-cols-2 lg:grid-cols-5">
             {metricCard("RSI · 14", rsi.values.at(-1) === null || rsi.values.at(-1) === undefined ? "Waiting" : rsi.values.at(-1)!.toFixed(1), "Below 30 oversold · above 70 overbought")}
             {metricCard("MACD · 12/26/9", macd.at(-1) ? macd.at(-1)!.histogram.toFixed(4) : "Waiting", "Histogram: MACD minus signal")}
             {metricCard("Volume vs avg", latestVolumeRatio ? `${latestVolumeRatio.toFixed(2)}×` : "Waiting", "Latest candle vs recent 60-bar mean")}
-            {metricCard("RSI divergence", divergence.startsWith("No ") ? "None" : divergence.startsWith("Bullish") ? "Bullish" : "Bearish", "Recent confirmed swing comparison")}
+            {metricCard("RSI divergence", rsiDivergence.startsWith("No ") ? "None" : rsiDivergence.startsWith("Bullish") ? "Bullish" : "Bearish", "Recent confirmed swing comparison")}
+            {metricCard("MACD divergence", macdDivergence.startsWith("No ") ? "None" : macdDivergence.startsWith("Bullish") ? "Bullish" : "Bearish", "MACD-line swing comparison")}
           </div>
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div className="flex flex-wrap gap-3 text-xs text-zinc-300">
@@ -596,7 +673,20 @@ export default function PhaseThreeWorkspace({ coins, initialCoin, initialPanel =
           <div className="h-[340px] min-w-0 overflow-hidden border border-zinc-800 bg-[#0b0e10] sm:h-[430px]">
             <TradingChart data={candles} chartKey={`${historyKey}:${timeframe}`} indicatorOverlays={overlays} levels={fibLevels} drawings={drawings} drawingMode={drawingMode} onDrawingComplete={completeDrawing} height={430} />
           </div>
-          <div className="grid gap-4 lg:grid-cols-2">
+          <section aria-label="Multi-timeframe analysis" className="border-y border-zinc-800 py-4">
+            <div className="mb-3 flex flex-wrap items-center justify-between gap-2"><h3 className="text-sm font-semibold text-white">Multi-timeframe overview</h3><span className="text-xs text-zinc-500">15m · 1h · 4h · 1d · Max</span></div>
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-5">
+              {timeframeSummaries.map(({ timeframe: item, series, change, rsi: timeframeRsi, macd: timeframeMacd }) => <article key={item} className="min-w-0 border border-zinc-800 bg-zinc-950/60 p-3">
+                <div className="flex items-baseline justify-between gap-2"><h4 className="text-sm font-semibold text-white">{item === "max" ? "Max" : item}</h4><span className={`text-xs ${change === null ? "text-zinc-500" : change >= 0 ? "text-emerald-300" : "text-rose-300"}`}>{change === null ? timeframeOverviewLoading ? "Loading" : "Unavailable" : `${change >= 0 ? "+" : ""}${change.toFixed(2)}%`}</span></div>
+                <svg viewBox="0 0 1000 64" role="img" aria-label={`${item} price trend`} className="mt-2 h-14 w-full">
+                  <path d={sparklinePath(series)} fill="none" stroke={change !== null && change >= 0 ? "#34d399" : "#fb7185"} strokeWidth="3" />
+                </svg>
+                <p className="mt-1 truncate text-[11px] text-zinc-400">RSI {timeframeRsi === null ? "—" : timeframeRsi.toFixed(0)} · MACD {timeframeMacd ? timeframeMacd.histogram >= 0 ? "+" : "−" : "—"}</p>
+              </article>)}
+            </div>
+            {timeframeOverviewError && <p role="status" className="mt-2 text-xs text-amber-200">Some timeframe feeds could not be loaded.</p>}
+          </section>
+          <div className="grid gap-4 sm:grid-cols-2">
             <section aria-label="RSI chart" className="border border-zinc-800 bg-zinc-950/60 p-3">
               <div className="mb-2 flex items-center justify-between"><h3 className="text-sm font-semibold text-white">RSI · 14</h3><span className="text-xs text-zinc-500">70 / 30 guide levels</span></div>
               <svg viewBox="0 0 1000 150" role="img" aria-label="Relative strength index line chart" className="h-28 w-full">
@@ -624,7 +714,7 @@ export default function PhaseThreeWorkspace({ coins, initialCoin, initialPanel =
               {recentVolume.map((candle) => <div key={candle.time} title={`${new Date(candle.time * 1000).toLocaleString()} · ${candle.volume.toLocaleString()} volume`} className={`min-w-0 flex-1 ${candle.close >= candle.open ? "bg-emerald-400/75" : "bg-rose-400/75"}`} style={{ height: `${Math.max(2, averageVolume ? candle.volume / Math.max(...recentVolume.map((item) => item.volume), 1) * 100 : 2)}%` }} />)}
             </div>
           </section>
-          <p className="text-xs leading-relaxed text-zinc-500">{divergence} Fibonacci levels use the recent 120-candle high/low range. Indicators are descriptive calculations, not trade instructions.</p>
+          <p className="text-xs leading-relaxed text-zinc-500">{rsiDivergence} {macdDivergence} Fibonacci levels use the recent 120-candle high/low range. Indicators are descriptive calculations, not trade instructions.</p>
         </>}
 
         {panel === "insights" && <div className="grid gap-6 xl:grid-cols-[minmax(0,1.6fr)_minmax(300px,1fr)]">
@@ -764,6 +854,10 @@ export default function PhaseThreeWorkspace({ coins, initialCoin, initialPanel =
           </div>}
           {!backtestResult && <p className="py-5 text-sm text-zinc-400">Choose a rule and run it against the currently loaded {selectedTicker} candles.</p>}
         </section>}
+
+        {panel === "analyst" && <MasterAnalystWorkspace symbol={analystSymbol} market="crypto" frames={analystFrames} journal={journal} />}
+
+        {panel === "phase4" && <PhaseFourWorkspace coins={coins} trades={journal} />}
       </div>
     </section>
   );

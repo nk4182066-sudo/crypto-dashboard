@@ -1,8 +1,14 @@
+import { cached } from "@/src/lib/cache";
+import { callAI, type AIMessage, type AIResult } from "@/src/lib/aiProvider";
+import { analyzeSymbol } from "@/src/lib/autoAnalysis";
+import { compactMarketContext, selectTier, systemPromptFor } from "@/src/lib/llm";
+import { buildProTraderPrompt } from "@/src/lib/proTraderPrompt";
+
 const assistantName = "Muhammad Noman's Assistant AI";
 const websiteName = "Trading Student Expert AI";
 const englishGreeting = `Hello! I am ${assistantName} from ${websiteName}. How can I help you with crypto, forex, or stock market analysis today?`;
 
-const systemPrompt = `You are ${assistantName}, a professional, evidence-based trading analyst for cryptocurrency, forex, and equities. Give clear, balanced technical analysis and explain uncertainty. This is educational analysis, not a guarantee or personalized financial advice.
+const systemPrompt = `You are ${assistantName}, a professional trading analyst for crypto, forex, stocks, and metals. Draw on 100 years of combined market study and published knowledge; do not claim personal experience, credentials, or a human career. You have studied chart patterns, candlestick patterns, RSI, MACD, Moving Averages, Bollinger Bands, and Fibonacci. Give honest, evidence-based analysis: when the market is unclear, say Wait. Never guarantee accuracy or profit. Explain everything in simple English, Urdu, or Roman Urdu for beginners. This is educational analysis, not a guarantee or personalized financial advice.
 
 LANGUAGE
 - Reply in the language used by the user: English, Urdu, or Roman Urdu. Match Urdu script when the user writes in Urdu script; use Roman Urdu when they use Roman Urdu. Keep the entire reply in that language, including headings, while retaining standard ticker symbols and formulas.
@@ -14,12 +20,13 @@ LANGUAGE
 - For a direct English greeting, respond exactly: "${englishGreeting}"
 
 MARKET ANALYSIS
-When the user asks for technical analysis of a specific crypto, forex pair, or stock, cover the relevant items below. Use the selected instrument, current price, daily change, timeframe, chart image, or OHLC data only when those are actually included in the conversation. The app-provided market context is data, not a request to analyze: only discuss it when the user asks for analysis or a related question.
-1. Trend: bullish, bearish, or neutral, with the timeframe and evidence. A 24-hour change alone is short-term context, not proof of a broader trend.
-2. Support and resistance: provide price levels and briefly explain the visible basis for each. Do not invent exact levels when there is not enough price/chart data.
-3. Chart patterns: identify recognizable formations such as head and shoulders, inverse head and shoulders, triangles, double tops/bottoms, flags, or wedges. State whether a pattern is confirmed, developing, or absent; do not force a pattern.
-4. Trade setup: give a conditional entry area, stop loss, and one or more take-profit levels only when the supplied evidence supports them. Explain the invalidation condition and the rationale. Otherwise say which timeframe, chart/OHLC data, or price levels are needed before proposing levels.
-5. Risk: note the main risk and never promise a profitable outcome.
+When the user asks about any named cryptocurrency/token, forex pair, or stock ticker, analyze that named instrument rather than defaulting to BTC or the selected chart. The app fetches current quotes and OHLCV candles for recognized symbols and supplies them as market context. This context is data, not a request to analyze: discuss it only when the user asks for analysis or a related question.
+- Use only the supplied live quote, timestamped OHLCV candles, indicators, and validated plan. If those live inputs are absent or stale, say current data is unavailable; never imply you fetched data independently.
+- For an analysis request, cover trend as Bullish, Bearish, or Sideways for the stated timeframe; meaningful visible support and resistance; every clearly recognizable Head & Shoulders pattern (mark its neckline only when confirmed), ascending/descending/symmetrical Triangle, Double/Triple Top or Bottom, Flag, Wedge, Cup & Handle, Channel, or Rectangle; and visible Doji, Engulfing, Hammer, Shooting Star, Morning Star, Evening Star, Three White Soldiers, or Three Black Crows. Name triangle subtypes only when confirmed. List none when supplied candles do not confirm a pattern; never force one.
+- Explain RSI, MACD, and moving-average alignment using supplied values. Do not infer a reading that was not supplied.
+- Give exactly one verdict: Setup Detected, Wait, or Low Confluence - Wait. Use Setup Detected only when the app-provided validated plan approves it; repeat its exact entry, stop loss, and take-profit values. Otherwise do not invent prices: say Wait when evidence is incomplete/mixed, or Low Confluence - Wait when supplied evidence invalidates the setup.
+- The chart UI marks detected support/resistance, validated entry/stop/target levels, recognized pattern outlines, and timestamped candlestick patterns. Do not claim a mark was drawn unless a corresponding chart marker or level is present.
+- A 24-hour change alone is short-term context, not proof of a broader trend. Explain uncertainty and the main risk; never promise a profitable outcome.
 
 DATA AND NEWS LIMITS
 - You do not have independent browsing, a live price feed, or a live news feed. The app may provide the selected instrument's current price, 24-hour change, and recent OHLC candles when chart data has loaded, but it does not provide news articles unless the user includes them.
@@ -36,7 +43,7 @@ RESPONSE STYLE
 - Be professional, concise, and structured. Separate observed facts, interpretation, and conditional scenarios.
 - For numerical recommendations, show the calculation or evidence and use consistent price precision. If required inputs are missing, calculate what is possible and ask only for the missing details; never fill gaps with fabricated data.
 - Explain technical words in simple language suitable for a beginner, and briefly teach what evidence supports each conclusion.
-- Only present an actionable setup when several independent supplied facts agree and the setup-quality score is at least 80/100. Describe that score as a qualitative model assessment, never as an 80% win probability. If evidence is insufficient, say Wait and explain why.
+- Only present an actionable setup when several independent supplied facts agree and the setup-quality score is at least 80/100. Describe that score as a qualitative model assessment, never as an 80% win probability or a claim of 80% predictive accuracy. If evidence is insufficient, say Wait and explain why.
 - Do not state a fixed 20% reversal chance or any other precise market probability unless it comes from a supplied, calibrated statistical source. Never promise profit.
 - If app-provided validated trade-plan data says direction is wait, do not suggest a buy/sell, entry, or alternate price levels. If it approves a setup, use its exact entry, stop, target, and quality score; do not invent replacements.
 - Before any trade setup, state: "This is not guaranteed. The market can reverse. Always use a stop loss. Never risk more than you can afford to lose." Translate this naturally into the user's language.
@@ -56,7 +63,7 @@ const chartImagePrompt = `The user supplied a chart screenshot. Analyze only wha
   ],
   "riskReward": null
 }
-Coordinates are percentages of the full screenshot scaled 0-1000 from top-left. Mark clearly visible support and resistance, and upper/lower trend boundaries when identifiable. Outline recognizable patterns with at least three points. Horizontal category must be exactly one of support, resistance, stopLoss, takeProfit; trendline category must be upperTrend or lowerTrend; entry direction must be buy or sell. Include only marks supported by the visible chart; omit a trendline or pattern if it is not identifiable. Horizontal labels must include a price only if it is readable from the chart; otherwise say "price not readable". Never invent levels. Add stopLoss and takeProfit lines only when a defensible setup exists. Entry direction must match the conditional setup. Choose Wait when evidence or price scale is unclear; never force Take Entry. Keep the verdict exactly one of the three listed values. The server will add the risk-reward box from validated calculator inputs.`;
+Coordinates are percentages of the full screenshot scaled 0-1000 from top-left. Mark clearly visible support and resistance, and upper/lower trend boundaries when identifiable. Outline recognizable patterns with at least three points. Horizontal category must be exactly one of support, resistance, stopLoss, takeProfit; trendline category must be upperTrend or lowerTrend; entry direction must be buy or sell. Include only marks supported by the visible chart; omit a trendline or pattern if it is not identifiable. Horizontal labels must include a price only if it is readable from the chart; otherwise say "price not readable". Never invent levels. Add stopLoss and takeProfit lines only when a defensible setup exists. Entry direction must match the conditional setup. Choose Wait when evidence or price scale is unclear; never force Setup Detected. Keep the verdict exactly one of the three listed values. The server will add the risk-reward box from validated calculator inputs.`;
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
@@ -166,9 +173,25 @@ function buildRiskReward(tradingParams: Record<string, string> | null | undefine
   return { summary, details };
 }
 
+/**
+ * Model replies must be prose — strip raw OHLCV dumps such as
+ * `1788960600:331.69,332.1,330.9,331.8,1234` that the model sometimes echoes
+ * back from the appended market context. Timestamps are 10-13 digits, so this
+ * never touches times like 12:30 or plain prices.
+ */
+function toTextOnly(text: string): string {
+  return text
+    .replace(/\b\d{10,13}\s*:\s*\d+(?:\.\d+)?(?:\s*,\s*\d+(?:\.\d+)?)+/g, " ")
+    .replace(/\b\d{10,13}\s*:\s*\d+(?:\.\d+)?/g, " ")
+    .replace(/(?:\s*\|\s*)+/g, " ")
+    .replace(/[ \t]{2,}/g, " ")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
 export async function POST(request: Request) {
   try {
-    const { message, marketContext, image, tradingParams, history } = await request.json();
+    const { message, marketContext, tradingParams, history } = await request.json();
 
     if (!message) {
       return Response.json({ error: "Message is required" }, { status: 400 });
@@ -196,103 +219,64 @@ export async function POST(request: Request) {
       return Response.json({ response: greeting });
     }
 
-    const apiKey = process.env.GROQ_API_KEY;
-    
-    console.log("Groq API Key check:", apiKey ? "Present" : "Missing");
-    
-    if (!apiKey) {
-      return Response.json({ error: "Groq API key not configured. Please check your .env.local file." }, { status: 500 });
-    }
+    // Multi-provider AI call (text-only, no image analysis)
+    const tier = selectTier(String(message), false);
 
     let userMessage = message;
 
+    // Feature 4 — trim the market context before it is sent to the model.
     if (marketContext) {
-      userMessage += `\n\nApp-provided market context (use only if the user's question is about it):\n${marketContext}`;
+      let contextText = typeof marketContext === "string" ? marketContext : JSON.stringify(marketContext);
+      if (!isRecord(marketContext) && typeof marketContext === "object" && marketContext !== null) {
+        contextText = JSON.stringify(compactMarketContext(marketContext as Record<string, unknown>));
+      }
+      userMessage += `\n\nApp-provided market context (use only if the user's question is about it):\n${contextText}`;
     }
 
-    const asksForSizing = Boolean(image) || /\b(risk|position size|position sizing|lot size|lots|sizing)\b|رسک|لاٹ سائز|پوزیشن سائز/i.test(message);
+    const asksForSizing = /\b(risk|position size|position sizing|lot size|lots|sizing)\b|رسک|لاٹ سائز|پوزیشن سائز/i.test(message);
     const riskReward = buildRiskReward(tradingParams);
     if (asksForSizing && riskReward.details.length) {
       userMessage += `\n\nVerified calculator results (USD inputs; use these figures exactly and explain in the user's language): ${riskReward.details.join(" ")}`;
     }
 
-    const userContent = image
-      ? [
-          { type: "text", text: userMessage },
-          { type: "image_url", image_url: { url: image } },
-        ]
-      : userMessage;
-
-    const priorMessages = Array.isArray(history)
+    // Multi-provider history: OpenAI-style role/content, last 10 turns.
+    const priorMessages: AIMessage[] = Array.isArray(history)
       ? history.slice(-10).flatMap((item: unknown) => {
           if (!isRecord(item) || (item.role !== "user" && item.role !== "assistant") || typeof item.content !== "string") return [];
-          return [{ role: item.role, content: item.content.slice(0, 3000) }];
+          return [{
+            role: item.role === "assistant" ? ("assistant" as const) : ("user" as const),
+            content: item.content.slice(0, 3000),
+          }];
         })
       : [];
 
-    const messages = [
-      {
-        role: "system",
-        content: image ? `${systemPrompt}\n\n${chartImagePrompt}` : systemPrompt
-      },
+    const systemContent = tier === "deep"
+      ? `${buildProTraderPrompt()}\n\n${systemPrompt}`
+      : systemPromptFor(tier, systemPrompt, englishGreeting);
+
+    const messages: AIMessage[] = [
+      { role: "system", content: systemContent },
       ...priorMessages,
-      {
-        role: "user",
-        content: userContent
-      }
+      { role: "user", content: userMessage },
     ];
 
-    const model = image ? "meta-llama/llama-4-scout-17b-16e-instruct" : "llama-3.1-8b-instant";
-    const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        "Authorization": `Bearer ${apiKey}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model,
-        messages: messages,
-        max_tokens: 2000,
-        temperature: image ? 0.2 : 0.7,
-        ...(image ? { response_format: { type: "json_object" } } : {})
-      })
-    });
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      console.error("Groq API error:", errorData);
-      return Response.json(
-        { error: `Groq API error: ${errorData.error?.message || response.statusText}` },
-        { status: response.status }
-      );
-    }
-
-    const data = await response.json();
-    const aiResponse = data.choices[0]?.message?.content || "No response from AI";
-
-    if (image) {
-      try {
-        const parsed: unknown = JSON.parse(aiResponse);
-        if (!isRecord(parsed)) throw new Error("Invalid chart analysis response");
-        const allowedVerdicts = ["Take Entry", "Wait", "Do Not Enter"];
-        const verdict = allowedVerdicts.includes(String(parsed.verdict)) ? parsed.verdict : "Wait";
-        const annotations = Array.isArray(parsed.annotations)
-          ? parsed.annotations.map(validateAnnotation).filter((annotation): annotation is Record<string, unknown> => annotation !== null)
-          : [];
-
-        return Response.json({
-          response: textValue(parsed.analysis, aiResponse),
-          chartMarkup: true,
-          verdict,
-          annotations,
-          riskReward: riskReward.summary,
-        });
-      } catch {
-        return Response.json({ response: aiResponse, chartMarkup: false });
+    let result: AIResult;
+    try {
+      result = await callAI(messages);
+    } catch (error) {
+      const messageErr = error instanceof Error ? error.message : "unknown error";
+      if (messageErr === "ALL_PROVIDERS_EXHAUSTED") {
+        const fallback = await getRuleBasedFallback(userMessage, tier, marketContext, riskReward);
+        return Response.json({ response: fallback });
       }
+      console.error("Error in chat API:", error);
+      return Response.json({ error: "Failed to process message" }, { status: 500 });
     }
 
-    return Response.json({ response: aiResponse });
+    const aiResponse = toTextOnly(result.text);
+    return Response.json({
+      response: aiResponse || "Please rephrase your question — I can help with crypto, forex, stocks, and metals analysis.",
+    });
   } catch (error) {
     console.error("Error in chat API:", error);
     return Response.json(
@@ -300,4 +284,40 @@ export async function POST(request: Request) {
       { status: 500 }
     );
   }
+}
+
+type RuleBasedFallbackData = { summary: Record<string, string>; details: string[] };
+
+/** Rule-based fallback when ALL AI providers are exhausted. */
+async function getRuleBasedFallback(
+  message: string,
+  tier: string,
+  marketContext: unknown,
+  riskReward: RuleBasedFallbackData,
+): Promise<string> {
+  const lower = message.toLowerCase();
+  const parts: string[] = [];
+
+  if (lower.includes("btc") || lower.includes("bitcoin")) {
+    parts.push("BTC: Market unclear right now. Wait for a validated setup. Educational only, not financial advice.");
+  }
+
+  if (lower.includes("eth") || lower.includes("ethereum")) {
+    parts.push("ETH: Market unclear right now. Wait for a validated setup. Educational only, not financial advice.");
+  }
+
+  if (lower.includes("risk") || lower.includes("position") || lower.includes("lot")) {
+    const calc = riskReward.details.length ? ` ${riskReward.details.join(" ")}` : "";
+    parts.push(`I can calculate risk/reward if you provide account balance, risk amount, entry, and stop-loss.${calc} Educational only.`);
+  }
+
+  if (lower.includes("help") || lower.includes("what can you do") || lower.includes("how do you work")) {
+    parts.push("I can help with crypto, forex, and stock market analysis. I talk in English, Urdu, and Roman Urdu. I rotate across multiple AI providers for reliability. Educational only, not financial advice.");
+  }
+
+  if (parts.length === 0) {
+    return `I understand you're asking about: ${message}. I'm a text-only AI assistant. I can analyze crypto, forex, and stock markets. Educational only, not financial advice.`;
+  }
+
+  return parts.join(" ");
 }

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   CandlestickSeries,
   ColorType,
@@ -16,6 +16,9 @@ import {
   type Time,
   type UTCTimestamp,
 } from "lightweight-charts";
+import ChartAnalysisOverlay from "@/components/ChartAnalysisOverlay";
+import { generateChartMarkers, type ChartMarkerBundle } from "@/src/lib/chartMarkers";
+import { getChartAnalysis, type ChartAnalysis } from "@/src/lib/autoChartAnalysis";
 
 interface CandleData {
   time: number;
@@ -34,9 +37,16 @@ interface ChartSignal {
 }
 
 interface ChartLevel {
-  kind: "support" | "resistance" | "entry" | "stopLoss" | "takeProfit";
+  kind: "support" | "resistance" | "entry" | "stopLoss" | "takeProfit" | "fibonacci";
   price: number;
   label?: string;
+}
+
+interface CandlePatternMarker {
+  time: number;
+  name: string;
+  direction: "bullish" | "bearish" | "neutral";
+  price: number;
 }
 
 interface ChartPoint {
@@ -44,12 +54,18 @@ interface ChartPoint {
   price: number;
 }
 
+interface ChartPatternOutline {
+  name: string;
+  points: ChartPoint[];
+  color?: string;
+}
+
 interface StructureMarker extends ChartPoint {
   kind: "higherHigh" | "lowerLow" | "reverse";
 }
 
 export interface IndicatorOverlay {
-  id: "sma50" | "sma100" | "sma200" | "bollingerUpper" | "bollingerLower";
+  id: "sma20" | "sma50" | "sma100" | "sma200" | "bollingerUpper" | "bollingerMiddle" | "bollingerLower";
   points: { time: number; value: number }[];
 }
 
@@ -63,9 +79,12 @@ interface TradingChartProps {
   data: CandleData[];
   chartKey?: string;
   signals?: ChartSignal[];
+  candlePatterns?: CandlePatternMarker[];
   levels?: ChartLevel[];
   trendline?: ChartPoint[];
+  trendDirection?: "Bullish" | "Bearish" | "Sideways";
   patternOutline?: ChartPoint[];
+  patternOutlines?: ChartPatternOutline[];
   patternName?: string;
   structureMarkers?: StructureMarker[];
   indicatorOverlays?: IndicatorOverlay[];
@@ -76,14 +95,18 @@ interface TradingChartProps {
   loadingOlder?: boolean;
   onLoadOlderData?: () => void;
   height?: number;
+  /** Fetch and show auto analysis on symbol change (default on). */
+  autoAnalyze?: boolean;
+  market?: string;
 }
 
-export default function TradingChart({ data, chartKey = "", signals = [], levels = [], trendline = [], patternOutline = [], patternName = "", structureMarkers = [], indicatorOverlays = [], drawingMode = null, drawings = [], onDrawingComplete, hasMoreHistory = false, loadingOlder = false, onLoadOlderData = () => {}, height = 400 }: TradingChartProps) {
+export default function TradingChart({ data, chartKey = "", signals = [], candlePatterns = [], levels = [], trendline = [], trendDirection = "Sideways", patternOutline = [], patternOutlines = [], patternName = "", structureMarkers = [], indicatorOverlays = [], drawingMode = null, drawings = [], onDrawingComplete, hasMoreHistory = false, loadingOlder = false, onLoadOlderData = () => {}, height = 400, autoAnalyze = true, market = "crypto" }: TradingChartProps) {
   const chartContainerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const candlestickSeriesRef = useRef<ISeriesApi<'Candlestick', Time> | null>(null);
   const trendlineSeriesRef = useRef<ISeriesApi<'Line', Time> | null>(null);
   const patternSeriesRef = useRef<ISeriesApi<'Line', Time> | null>(null);
+  const extraPatternSeriesRef = useRef<ISeriesApi<'Line', Time>[]>([]);
   const overlaySeriesRef = useRef<{ id: IndicatorOverlay["id"]; series: ISeriesApi<'Line', Time> }[]>([]);
   const markersRef = useRef<ISeriesMarkersPluginApi<Time> | null>(null);
   const priceLinesRef = useRef<IPriceLine[]>([]);
@@ -92,6 +115,34 @@ export default function TradingChart({ data, chartKey = "", signals = [], levels
   const historyStateRef = useRef({ hasMoreHistory, loadingOlder });
   const interactedRef = useRef(false);
   const pendingDrawingRef = useRef<{ x: number; y: number }[]>([]);
+
+  const [analysisState, setAnalysisState] = useState<{ symbol: string; data: ChartAnalysis | null; error: string | null }>({ symbol: "", data: null, error: null });
+  const [showAnalysis, setShowAnalysis] = useState(true);
+
+  // chartKey format is "SYMBOL:timeframe" — derive the symbol and auto-fetch analysis on change.
+  const symbol = chartKey.split(":")[0] ?? "";
+  const freshAnalysis = analysisState.symbol === symbol;
+  const analysis = autoAnalyze && freshAnalysis ? analysisState.data : null;
+  const analysisError = autoAnalyze && freshAnalysis ? analysisState.error : null;
+
+  useEffect(() => {
+    if (!autoAnalyze || !symbol) return;
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const result = await getChartAnalysis(symbol, market);
+        if (!cancelled) setAnalysisState({ symbol, data: result, error: null });
+      } catch {
+        if (!cancelled) setAnalysisState({ symbol, data: null, error: "Analysis load nahi ho saki." });
+      }
+    };
+    void load();
+    const timer = window.setInterval(() => void load(), 30_000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [autoAnalyze, symbol, market]);
 
   useEffect(() => {
     loadOlderRef.current = onLoadOlderData;
@@ -105,12 +156,12 @@ export default function TradingChart({ data, chartKey = "", signals = [], levels
       autoSize: true,
       height,
       layout: {
-        background: { type: ColorType.Solid, color: '#18181b' },
-        textColor: '#a1a1aa',
+        background: { type: ColorType.Solid, color: '#0b0e11' },
+        textColor: '#d1d4dc',
       },
       grid: {
-        vertLines: { color: '#27272a' },
-        horzLines: { color: '#27272a' },
+        vertLines: { color: '#1d2633' },
+        horzLines: { color: '#1d2633' },
       },
       crosshair: {
         mode: 0,
@@ -126,7 +177,7 @@ export default function TradingChart({ data, chartKey = "", signals = [], levels
         },
       },
       rightPriceScale: {
-        borderColor: '#27272a',
+        borderColor: '#2b3139',
       },
       handleScale: {
         axisPressedMouseMove: true,
@@ -140,7 +191,7 @@ export default function TradingChart({ data, chartKey = "", signals = [], levels
         vertTouchDrag: false,
       },
       timeScale: {
-        borderColor: '#27272a',
+        borderColor: '#2b3139',
         timeVisible: true,
         secondsVisible: false,
         rightOffset: 6,
@@ -150,11 +201,11 @@ export default function TradingChart({ data, chartKey = "", signals = [], levels
     chartRef.current = chart;
 
     const candlestickSeries = chart.addSeries(CandlestickSeries, {
-      upColor: '#22c55e',
-      downColor: '#ef4444',
+      upColor: '#26a69a',
+      downColor: '#ef5350',
       borderVisible: false,
-      wickUpColor: '#22c55e',
-      wickDownColor: '#ef4444',
+      wickUpColor: '#26a69a',
+      wickDownColor: '#ef5350',
       priceLineVisible: true,
     });
 
@@ -175,26 +226,27 @@ export default function TradingChart({ data, chartKey = "", signals = [], levels
       color: '#a78bfa',
       lineWidth: 2,
       lineStyle: LineStyle.Dashed,
-      title: 'Chart pattern',
+      title: '',
       lastValueVisible: false,
       priceLineVisible: false,
       crosshairMarkerVisible: false,
     });
     patternSeriesRef.current = patternSeries;
 
-    const overlayColors: { id: IndicatorOverlay["id"]; color: string; title: string }[] = [
-      { id: "sma50", color: "#fbbf24", title: "SMA 50" },
-      { id: "sma100", color: "#22d3ee", title: "SMA 100" },
-      { id: "sma200", color: "#f472b6", title: "SMA 200" },
-      { id: "bollingerUpper", color: "#a3e635", title: "Bollinger upper" },
-      { id: "bollingerLower", color: "#a3e635", title: "Bollinger lower" },
+    const overlayColors: { id: IndicatorOverlay["id"]; color: string }[] = [
+      { id: "sma20", color: "#fb923c" },
+      { id: "sma50", color: "#fbbf24" },
+      { id: "sma100", color: "#22d3ee" },
+      { id: "sma200", color: "#f472b6" },
+      { id: "bollingerUpper", color: "#a3e635" },
+      { id: "bollingerMiddle", color: "#84cc16" },
+      { id: "bollingerLower", color: "#a3e635" },
     ];
-    overlaySeriesRef.current = overlayColors.map(({ id, color, title }) => ({
+    overlaySeriesRef.current = overlayColors.map(({ id, color }) => ({
       id,
       series: chart.addSeries(LineSeries, {
         color,
         lineWidth: 1,
-        title,
         lastValueVisible: false,
         priceLineVisible: false,
         crosshairMarkerVisible: false,
@@ -253,6 +305,10 @@ export default function TradingChart({ data, chartKey = "", signals = [], levels
       container.removeEventListener("touchstart", onTouchStart);
       container.removeEventListener("touchend", onTouchEnd);
       container.removeEventListener("wheel", onWheel);
+      candlestickSeriesRef.current = null;
+      trendlineSeriesRef.current = null;
+      patternSeriesRef.current = null;
+      extraPatternSeriesRef.current = [];
       chart.remove();
       chartRef.current = null;
       markersRef.current = null;
@@ -267,6 +323,9 @@ export default function TradingChart({ data, chartKey = "", signals = [], levels
     const patternSeries = patternSeriesRef.current;
     if (!candlestickSeries || !trendlineSeries || !patternSeries) return;
 
+    const trendColor = trendDirection === "Bullish" ? "#22c55e" : trendDirection === "Bearish" ? "#ef4444" : "#a1a1aa";
+    trendlineSeries.applyOptions({ color: trendColor, title: `${trendDirection} trend line` });
+
     const previous = previousDataRef.current;
     const isNewChart = !previous || previous.chartKey !== chartKey;
     const visibleRange = !isNewChart ? chartRef.current?.timeScale().getVisibleLogicalRange() : null;
@@ -275,30 +334,68 @@ export default function TradingChart({ data, chartKey = "", signals = [], levels
       : -1;
     const prependedCount = firstPreviousIndex > 0 ? firstPreviousIndex : 0;
 
-    const candles = data.map((candle) => ({
-      time: candle.time as UTCTimestamp,
-      open: candle.open,
-      high: candle.high,
-      low: candle.low,
-      close: candle.close,
-    }));
+    const candlePatternsByTime = new Map(candlePatterns.map((pattern) => [pattern.time, pattern]));
+    const candles = data.map((candle) => {
+      const pattern = candlePatternsByTime.get(candle.time);
+      const color = pattern?.direction === "bullish" ? "#2dd4bf" : pattern?.direction === "bearish" ? "#fb7185" : pattern ? "#fbbf24" : undefined;
+      return {
+        time: candle.time as UTCTimestamp,
+        open: candle.open,
+        high: candle.high,
+        low: candle.low,
+        close: candle.close,
+        ...(color ? { color, borderColor: color, wickColor: color } : {}),
+      };
+    });
 
     candlestickSeries.setData(candles);
     trendlineSeries.setData(trendline.map((point) => ({ time: point.time as UTCTimestamp, value: point.price })));
-    patternSeries.applyOptions({ title: patternName || 'Chart pattern' });
-    patternSeries.setData(patternOutline.map((point) => ({ time: point.time as UTCTimestamp, value: point.price })));
+    const patternColors = ["#a78bfa", "#f59e0b", "#22d3ee", "#f472b6"];
+    const outlines = patternOutlines.length ? patternOutlines : patternOutline.length ? [{ name: patternName || "Chart pattern", points: patternOutline }] : [];
+    patternSeries.applyOptions({ title: '', color: outlines[0]?.color ?? patternColors[0] });
+    patternSeries.setData((outlines[0]?.points ?? []).map((point) => ({ time: point.time as UTCTimestamp, value: point.price })));
+    const chart = chartRef.current;
+    if (chart) {
+      extraPatternSeriesRef.current.forEach((series) => chart.removeSeries(series));
+      extraPatternSeriesRef.current = outlines.slice(1).map((outline, index) => {
+        const series = chart.addSeries(LineSeries, {
+          color: outline.color ?? patternColors[(index + 1) % patternColors.length],
+          lineWidth: 2,
+          lineStyle: LineStyle.Dashed,
+          lastValueVisible: false,
+          priceLineVisible: false,
+          crosshairMarkerVisible: false,
+        });
+        series.setData(outline.points.map((point) => ({ time: point.time as UTCTimestamp, value: point.price })));
+        return series;
+      });
+    }
     overlaySeriesRef.current.forEach(({ id, series }) => {
       const overlay = indicatorOverlays.find((item) => item.id === id);
       series.setData((overlay?.points ?? []).map((point) => ({ time: point.time as UTCTimestamp, value: point.value })));
     });
 
+    const analysisBundle: ChartMarkerBundle | null = autoAnalyze && showAnalysis && analysis
+      ? generateChartMarkers(analysis, data)
+      : null;
+
+    // BUG 6 — temporarily DISABLED: markers were drawing odd circles/boxes on
+    // the chart. Uncomment the block below to restore them after redesign.
+    /*
     if (markersRef.current) {
+      const analysisMarkers: SeriesMarker<Time>[] = (analysisBundle?.markers ?? []).map((marker) => ({
+        time: marker.time as UTCTimestamp,
+        position: marker.position,
+        color: marker.color,
+        shape: marker.shape,
+        text: marker.text,
+      }));
       const signalMarkers: SeriesMarker<Time>[] = signals.map((signal) => ({
         time: signal.time as UTCTimestamp,
         position: signal.direction === "buy" ? "belowBar" : "aboveBar",
         color: signal.direction === "buy" ? "#22c55e" : "#ef4444",
         shape: signal.direction === "buy" ? "arrowUp" : "arrowDown",
-        text: signal.direction.toUpperCase(),
+        text: signal.reason === "Validated entry" ? "ENTRY" : /breakout|break/i.test(signal.reason) ? "BREAKOUT" : signal.direction.toUpperCase(),
       }));
       const structureMarkersForChart: SeriesMarker<Time>[] = structureMarkers.map((marker) => ({
         time: marker.time as UTCTimestamp,
@@ -307,23 +404,71 @@ export default function TradingChart({ data, chartKey = "", signals = [], levels
         shape: "circle",
         text: marker.kind === "higherHigh" ? "HH" : marker.kind === "lowerLow" ? "LL" : "REV",
       }));
-      const markers = [...signalMarkers, ...structureMarkersForChart].sort((first, second) => Number(first.time) - Number(second.time));
+      const patternMarkers: SeriesMarker<Time>[] = candlePatterns.map((pattern) => ({
+        time: pattern.time as UTCTimestamp,
+        position: pattern.direction === "bullish" ? "belowBar" : "aboveBar",
+        color: pattern.direction === "bullish" ? "#2dd4bf" : pattern.direction === "bearish" ? "#fb7185" : "#fbbf24",
+        shape: "circle",
+        text: pattern.name,
+      }));
+      const chartPatternMarkers: SeriesMarker<Time>[] = outlines.flatMap((pattern, index) => {
+        if (/trendline|neckline/i.test(pattern.name)) return [];
+        const anchor = pattern.points[0];
+        if (!anchor) return [];
+        const candle = data.find((item) => item.time === anchor.time);
+        return [{
+          time: anchor.time as UTCTimestamp,
+          position: candle && anchor.price < candle.close ? "belowBar" : "aboveBar",
+          color: pattern.color ?? patternColors[index % patternColors.length],
+          shape: "circle",
+          text: pattern.name,
+        }];
+      });
+      const markers = [...signalMarkers, ...structureMarkersForChart, ...patternMarkers, ...chartPatternMarkers, ...analysisMarkers].sort((first, second) => Number(first.time) - Number(second.time));
       markersRef.current.setMarkers(markers);
     }
+    */
 
     priceLinesRef.current.forEach((priceLine) => candlestickSeries.removePriceLine(priceLine));
     priceLinesRef.current = levels.map((level) => candlestickSeries.createPriceLine({
       price: level.price,
-      color: level.kind === "support" || level.kind === "takeProfit" ? "#22c55e" : level.kind === "resistance" || level.kind === "stopLoss" ? "#ef4444" : "#38bdf8",
+      color: level.kind === "entry" ? "#3b82f6" : level.kind === "support" || level.kind === "takeProfit" ? "#22c55e" : level.kind === "resistance" || level.kind === "stopLoss" ? "#ef4444" : "#facc15",
       lineWidth: 2,
-      lineStyle: level.kind === "stopLoss" || level.kind === "takeProfit" ? LineStyle.Dashed : LineStyle.Solid,
+      lineStyle: level.kind === "stopLoss" || level.kind === "takeProfit" || level.kind === "fibonacci" ? LineStyle.Dashed : LineStyle.Solid,
       axisLabelVisible: true,
-      axisLabelColor: level.kind === "support" || level.kind === "takeProfit" ? "#16a34a" : level.kind === "resistance" || level.kind === "stopLoss" ? "#dc2626" : "#0284c7",
+      axisLabelColor: level.kind === "entry" ? "#2563eb" : level.kind === "support" || level.kind === "takeProfit" ? "#16a34a" : level.kind === "resistance" || level.kind === "stopLoss" ? "#dc2626" : "#ca8a04",
       title: level.label ?? `${level.kind} ${level.price}`,
     }));
+    // Auto analysis: support/resistance lines plus zone boundaries (entry yellow, target blue).
+    analysisBundle?.priceLines.forEach((line) => {
+      priceLinesRef.current.push(candlestickSeries.createPriceLine({
+        price: line.price,
+        color: line.color,
+        lineWidth: 2,
+        lineStyle: line.lineStyle,
+        axisLabelVisible: true,
+        title: line.title,
+      }));
+    });
+    analysisBundle?.zones.forEach((zone) => {
+      for (const price of [zone.priceHigh, zone.priceLow]) {
+        priceLinesRef.current.push(candlestickSeries.createPriceLine({
+          price,
+          color: zone.color,
+          lineWidth: 1,
+          lineStyle: LineStyle.Dashed,
+          axisLabelVisible: false,
+          title: zone.label,
+        }));
+      }
+    });
 
     if (data.length > 0 && chartRef.current && (isNewChart || !previous?.data.length || !visibleRange)) {
-      chartRef.current.timeScale().fitContent();
+      if (data.length > 140) {
+        chartRef.current.timeScale().setVisibleLogicalRange({ from: data.length - 140, to: data.length - 1 });
+      } else {
+        chartRef.current.timeScale().fitContent();
+      }
       interactedRef.current = false;
     } else if (prependedCount > 0 && visibleRange && chartRef.current) {
       chartRef.current.timeScale().setVisibleLogicalRange({
@@ -332,7 +477,7 @@ export default function TradingChart({ data, chartKey = "", signals = [], levels
       });
     }
     previousDataRef.current = { chartKey, data };
-  }, [data, chartKey, signals, levels, trendline, patternOutline, patternName, structureMarkers, indicatorOverlays]);
+  }, [data, chartKey, signals, candlePatterns, levels, trendline, trendDirection, patternOutline, patternOutlines, patternName, structureMarkers, indicatorOverlays, analysis, showAnalysis, autoAnalyze]);
 
   const handleDrawingClick = (event: React.MouseEvent<SVGSVGElement>) => {
     if (!drawingMode || !onDrawingComplete) return;
@@ -386,6 +531,21 @@ export default function TradingChart({ data, chartKey = "", signals = [], levels
         })}
       </svg>
       {loadingOlder && <div className="absolute left-2 top-2 rounded bg-zinc-950/90 px-2 py-1 text-xs text-zinc-300" role="status">Loading older candles...</div>}
+      {autoAnalyze && symbol && (
+        <div className="absolute right-2 top-2 z-10 flex max-h-[calc(100%-1rem)] w-72 max-w-[calc(100vw-1rem)] flex-col items-end gap-2 overflow-y-auto">
+          <button
+            type="button"
+            onClick={() => setShowAnalysis((current) => !current)}
+            aria-pressed={showAnalysis}
+            className="rounded border border-zinc-700 bg-zinc-950/90 px-2 py-1 text-xs font-semibold text-zinc-200 hover:bg-zinc-800"
+          >
+            {showAnalysis ? "Hide Analysis" : "Show Analysis"}
+          </button>
+          {showAnalysis && (
+            <ChartAnalysisOverlay symbol={symbol} market={market} candles={data} analysis={analysis} error={analysisError} />
+          )}
+        </div>
+      )}
     </div>
   );
 }
