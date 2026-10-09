@@ -36,10 +36,21 @@ interface ChartSignal {
   reason: string;
 }
 
-interface ChartLevel {
+export interface ChartLevel {
   kind: "support" | "resistance" | "entry" | "stopLoss" | "takeProfit" | "fibonacci";
   price: number;
   label?: string;
+  /** Overrides the default line style for this kind (dashed for S/R watch levels). */
+  lineStyle?: "solid" | "dashed";
+}
+
+/** A single arrow marker (e.g. a buy-point) drawn on the candlestick series. */
+export interface ChartArrowMarker {
+  time: number;
+  position: "aboveBar" | "belowBar";
+  color: string;
+  shape: "arrowUp" | "arrowDown" | "circle" | "square";
+  text: string;
 }
 
 interface CandlePatternMarker {
@@ -94,13 +105,15 @@ interface TradingChartProps {
   hasMoreHistory?: boolean;
   loadingOlder?: boolean;
   onLoadOlderData?: () => void;
+  /** Explicit arrow markers (buy/sell points) drawn on the series. */
+  arrowMarkers?: ChartArrowMarker[];
   height?: number;
   /** Fetch and show auto analysis on symbol change (default on). */
   autoAnalyze?: boolean;
   market?: string;
 }
 
-export default function TradingChart({ data, chartKey = "", signals = [], candlePatterns = [], levels = [], trendline = [], trendDirection = "Sideways", patternOutline = [], patternOutlines = [], patternName = "", structureMarkers = [], indicatorOverlays = [], drawingMode = null, drawings = [], onDrawingComplete, hasMoreHistory = false, loadingOlder = false, onLoadOlderData = () => {}, height = 400, autoAnalyze = true, market = "crypto" }: TradingChartProps) {
+export default function TradingChart({ data, chartKey = "", signals = [], candlePatterns = [], levels = [], trendline = [], trendDirection = "Sideways", patternOutline = [], patternOutlines = [], patternName = "", structureMarkers = [], indicatorOverlays = [], drawingMode = null, drawings = [], onDrawingComplete, hasMoreHistory = false, loadingOlder = false, onLoadOlderData = () => {}, arrowMarkers = [], height = 400, autoAnalyze = true, market = "crypto" }: TradingChartProps) {
   const chartContainerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const candlestickSeriesRef = useRef<ISeriesApi<'Candlestick', Time> | null>(null);
@@ -434,7 +447,9 @@ export default function TradingChart({ data, chartKey = "", signals = [], candle
       price: level.price,
       color: level.kind === "entry" ? "#3b82f6" : level.kind === "support" || level.kind === "takeProfit" ? "#22c55e" : level.kind === "resistance" || level.kind === "stopLoss" ? "#ef4444" : "#facc15",
       lineWidth: 2,
-      lineStyle: level.kind === "stopLoss" || level.kind === "takeProfit" || level.kind === "fibonacci" ? LineStyle.Dashed : LineStyle.Solid,
+      lineStyle: level.lineStyle
+        ? level.lineStyle === "dashed" ? LineStyle.Dashed : LineStyle.Solid
+        : level.kind === "stopLoss" || level.kind === "takeProfit" || level.kind === "fibonacci" ? LineStyle.Dashed : LineStyle.Solid,
       axisLabelVisible: true,
       axisLabelColor: level.kind === "entry" ? "#2563eb" : level.kind === "support" || level.kind === "takeProfit" ? "#16a34a" : level.kind === "resistance" || level.kind === "stopLoss" ? "#dc2626" : "#ca8a04",
       title: level.label ?? `${level.kind} ${level.price}`,
@@ -463,6 +478,18 @@ export default function TradingChart({ data, chartKey = "", signals = [], candle
       }
     });
 
+    // Explicit arrow markers (buy/sell points) supplied by the caller.
+    if (markersRef.current) {
+      const arrowSeriesMarkers: SeriesMarker<Time>[] = arrowMarkers.map((marker) => ({
+        time: marker.time as UTCTimestamp,
+        position: marker.position,
+        color: marker.color,
+        shape: marker.shape,
+        text: marker.text,
+      }));
+      markersRef.current.setMarkers(arrowSeriesMarkers);
+    }
+
     if (data.length > 0 && chartRef.current && (isNewChart || !previous?.data.length || !visibleRange)) {
       if (data.length > 140) {
         chartRef.current.timeScale().setVisibleLogicalRange({ from: data.length - 140, to: data.length - 1 });
@@ -477,7 +504,7 @@ export default function TradingChart({ data, chartKey = "", signals = [], candle
       });
     }
     previousDataRef.current = { chartKey, data };
-  }, [data, chartKey, signals, candlePatterns, levels, trendline, trendDirection, patternOutline, patternOutlines, patternName, structureMarkers, indicatorOverlays, analysis, showAnalysis, autoAnalyze]);
+  }, [data, chartKey, signals, candlePatterns, levels, trendline, trendDirection, patternOutline, patternOutlines, patternName, structureMarkers, indicatorOverlays, analysis, showAnalysis, autoAnalyze, arrowMarkers]);
 
   const handleDrawingClick = (event: React.MouseEvent<SVGSVGElement>) => {
     if (!drawingMode || !onDrawingComplete) return;

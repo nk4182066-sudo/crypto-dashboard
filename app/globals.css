@@ -3,27 +3,200 @@
 @custom-variant dark (& .dark &);
 
 :root {
-  --background: #09090b;
-  --foreground: #fafafa;
+  /* Bitget-style palette */
+  --bg-primary: #0B0E11;
+  --bg-card: #181A20;
+  --bg-hover: #1E2329;
+  --green: #00C087;
+  --red: #F6465D;
+  --text-primary: #EAECEF;
+  --text-secondary: #848E9C;
+  --border: #2B3139;
+  --blue: #4A9EFF;
+  --yellow: #F0B90B;
+
+  /* Kept for backwards-compat with existing --background/--foreground usages. */
+  --background: #0B0E11;
+  --foreground: #EAECEF;
 }
 
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans), Inter, Arial, Helvetica, sans-serif;
-  --font-mono: var(--font-geist-mono);
+  --color-bg-primary: var(--bg-primary);
+  --color-bg-card: var(--bg-card);
+  --color-bg-hover: var(--bg-hover);
+  --color-green: var(--green);
+  --color-red: var(--red);
+  --color-text-primary: var(--text-primary);
+  --color-text-secondary: var(--text-secondary);
+  --color-border: var(--border);
+  --color-blue: var(--blue);
+  --color-yellow: var(--yellow);
+  --font-sans: var(--font-inter), var(--font-geist-sans), Inter, system-ui, sans-serif;
+  --font-mono: var(--font-geist-mono), ui-monospace, monospace;
+}
+
+* {
+  border-color: var(--border);
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: var(--font-sans), Arial, Helvetica, sans-serif;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-family: var(--font-sans);
   font-size: 15px;
   line-height: 1.6;
   /* The dashboard is a fixed 3-column app; without this, a wide chart or a
      long ticker on a narrow phone makes the whole page scroll sideways. */
   overflow-x: hidden;
   -webkit-text-size-adjust: 100%;
+}
+
+/* Task 5 — unified card surface across every page. */
+.card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 16px;
+  transition: all 0.2s ease;
+}
+
+.card:hover {
+  background: var(--bg-hover);
+  transform: translateY(-1px);
+}
+
+/* Task 6 — price badges. */
+.badge-up {
+  background: rgba(0, 192, 135, 0.15);
+  color: var(--green);
+  padding: 4px 8px;
+  border-radius: 6px;
+  font-weight: 600;
+}
+
+.badge-down {
+  background: rgba(246, 70, 93, 0.15);
+  color: var(--red);
+  padding: 4px 8px;
+  border-radius: 6px;
+  font-weight: 600;
+}
+
+.badge-neutral {
+  background: rgba(132, 142, 156, 0.15);
+  color: var(--text-secondary);
+  padding: 4px 8px;
+  border-radius: 6px;
+  font-weight: 600;
+}
+
+/* Task 9 — numeric alignment for prices. */
+.tnum {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum";
+}
+
+/* Task 7 — shimmer skeleton (replaces plain animate-pulse). */
+.skeleton {
+  background: linear-gradient(
+    90deg,
+    var(--bg-card) 0%,
+    var(--bg-hover) 50%,
+    var(--bg-card) 100%
+  );
+  background-size: 200% 100%;
+  animation: shimmer 1.5s infinite;
+  border-radius: 12px;
+}
+
+@keyframes shimmer {
+  0% {
+    background-position: 200% 0;
+  }
+  100% {
+    background-position: -200% 0;
+  }
+}
+
+/*
+ * Touch-target floor. Apple/Android guidance is ~44px, so small controls
+ * (timeframe chips, tab pills, icon buttons) get a min-height on touch
+ * devices while keeping their compact desktop look.
+ */
+@media (pointer: coarse) {
+  button,
+  a,
+  select,
+  input[type="button"],
+  input[type="submit"] {
+    min-height: 44px;
+  }
+
+  /* Icon-only controls still need a comfortable width. */
+  button[aria-label] {
+    min-width: 44px;
+  }
+}
+
+/* Horizontal strips (market tabs, timeframe chips) scroll without a visible
+   scrollbar on desktop and without forcing the page wider than the viewport. */
+.hide-scrollbar {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior-x: contain;
+}
+
+.hide-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
+/* Phase 5 — tool grids under the chart: one column on phones, two from lg up. */
+.dashboard-grid {
+  display: grid;
+  gap: 1rem;
+  grid-template-columns: minmax(0, 1fr);
+}
+
+@media (min-width: 1024px) {
+  .dashboard-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+/* Anchor for the AI Teacher floating button/chat. The transform creates a
+   containing block for its position:fixed children so it stacks above the
+   main chatbot (same default bottom-right spot) instead of overlapping it. */
+.ai-teacher-anchor {
+  position: fixed;
+  right: 1rem;
+  bottom: 5.5rem;
+  z-index: 50;
+  transform: translateZ(0);
+}
+
+/* Educational disclaimer strip at the bottom of the dashboard. */
+.disclaimer-box {
+  border: 1px solid #3f3f46;
+  border-radius: 0.75rem;
+  background: rgba(24, 24, 27, 0.6);
+  padding: 0.85rem 1.25rem;
+  text-align: center;
+  font-size: 0.75rem;
+  line-height: 1.6;
+  color: #a1a1aa;
+}
+
+/* Respect users who ask for less motion. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
 }
 
 /*

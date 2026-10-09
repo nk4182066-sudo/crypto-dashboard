@@ -112,20 +112,9 @@ function TooltipIcon({ label, description }: { label: string; description: strin
   );
 }
 
+// BeginnerTooltips has been disabled: the previous fixed full-screen overlay
+// was getting stuck on top of the UI. It now acts as a transparent pass-through
+// so existing usages keep working without rendering anything on screen.
 export default function BeginnerTooltips({ children }: BeginnerTooltipsProps) {
-  return (
-    <div className="pointer-events-none fixed inset-0 z-40 flex flex-col items-center gap-3 p-4 md:p-6">
-      {TOOLTIPS.map((item) => (
-        <TooltipIcon
-          key={item.trigger}
-          label={item.label}
-          description={item.description}
-        />
-      ))}
-      <div className="pointer-events-auto flex flex-col items-center gap-2 text-[10px] text-zinc-600">
-        <p className="font-medium text-zinc-500">💡 Beginner Tooltips</p>
-        <p className="text-zinc-600">Hover any icon for a short explanation.</p>
-      </div>
-    </div>
-  );
+  return <>{children}</>;
 }

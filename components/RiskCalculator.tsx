@@ -1,129 +1,82 @@
 "use client";
-
-/**
- * Risk Calculator helps users determine safe position sizes.
- * This is a math tool only. Not financial advice.
- */
-
 import { useState } from "react";
 
-interface FormState {
-  balance: string;
-  risk: string;
-  entry: string;
-  stop: string;
-}
-
-interface Result {
-  riskAmount: number;
-  positionSize: number;
-  positionValue: number;
-}
-
-const EMPTY: FormState = { balance: "1000", risk: "1", entry: "", stop: "" };
-
-/** 2 decimals for larger values, 4 for sub-1 quantities. */
-const fmt = (value: number): string => (value >= 1 ? value.toFixed(2) : value.toFixed(4));
-
-const INPUT = "mt-1 w-full rounded border border-zinc-700 bg-zinc-900 px-2 py-1.5 text-sm text-white";
-
 export default function RiskCalculator() {
-  const [form, setForm] = useState<FormState>(EMPTY);
-  const [result, setResult] = useState<Result | null>(null);
-  const [error, setError] = useState("");
-  const [warning, setWarning] = useState("");
+  const [balance, setBalance] = useState(1000);
+  const [leverage, setLeverage] = useState(1);
+  const [riskPercent, setRiskPercent] = useState(1);
 
-  const update = (key: keyof FormState) => (event: React.ChangeEvent<HTMLInputElement>) =>
-    setForm((current) => ({ ...current, [key]: event.target.value }));
-
-  function calculate() {
-    setError("");
-    setWarning("");
-    setResult(null);
-
-    const balance = Number(form.balance);
-    const risk = Number(form.risk);
-    const entry = Number(form.entry);
-    const stop = Number(form.stop);
-
-    if (![balance, risk, entry, stop].every((value) => Number.isFinite(value) && value > 0)) {
-      setError("Sab fields mein positive numbers daliye.");
-      return;
-    }
-    if (risk < 0.1 || risk > 10) {
-      setError("Risk 0.1% aur 10% ke darmiyan hona chahiye.");
-      return;
-    }
-    if (entry === stop) {
-      setError("Entry aur Stop Loss same nahi ho sakte");
-      return;
-    }
-    if (risk > 5) setWarning("Bohot zyada risk hai");
-    else if (risk > 2) setWarning("High risk");
-
-    const riskAmount = balance * (risk / 100);
-    const priceDifference = Math.abs(entry - stop);
-    setResult({
-      riskAmount,
-      positionSize: riskAmount / priceDifference,
-      positionValue: (riskAmount / priceDifference) * entry,
-    });
-  }
-
-  function reset() {
-    setForm(EMPTY);
-    setResult(null);
-    setError("");
-    setWarning("");
-  }
-
-  const field = (label: string, helper: string, key: keyof FormState, min: string, max?: string) => (
-    <label className="block text-xs text-zinc-400">
-      {label}
-      <input type="number" min={min} max={max} step="any" value={form[key]} onChange={update(key)} className={INPUT} />
-      <span className="mt-1 block text-[11px] text-zinc-600">{helper}</span>
-    </label>
-  );
+  const maxLoss = (balance * riskPercent) / 100;
+  const totalPosition = balance * leverage;
+  const safeTradeSize = maxLoss;
 
   return (
-    <section className="rounded-xl border border-purple-500/40 bg-zinc-900/70 p-4" aria-label="Risk calculator">
-      <h3 className="text-sm font-bold tracking-wide text-purple-200">🛡️ RISK CALCULATOR</h3>
-      <p className="mt-1 text-xs text-zinc-400">Apna safe position size calculate karein</p>
-
-      <div className="mt-3 grid gap-3 sm:grid-cols-2">
-        {field("Account Balance ($)", "Aapke account ka total balance.", "balance", "1")}
-        {field("Risk (%)", "Apne account ka kitna % risk karna chahte hain?", "risk", "0.1", "10")}
-        {field("Entry Price", "Trade ki entry price.", "entry", "0.000001")}
-        {field("Stop Loss", "Stop loss price.", "stop", "0.000001")}
-      </div>
-
-      <div className="mt-3 flex gap-2">
-        <button
-          type="button"
-          onClick={calculate}
-          className="rounded bg-gradient-to-r from-purple-500 to-fuchsia-500 px-4 py-2 text-sm font-semibold text-white transition-colors hover:from-purple-400 hover:to-fuchsia-400"
-        >
-          Calculate
-        </button>
-        <button type="button" onClick={reset} className="rounded border border-zinc-700 px-4 py-2 text-sm text-zinc-300 hover:bg-zinc-800">
-          Reset
-        </button>
-      </div>
-
-      {error && <p className="mt-3 text-sm text-red-400">{error}</p>}
-
-      {result && (
-        <div className="mt-4 rounded-lg border border-zinc-800 bg-zinc-950 p-3">
-          <div className="grid gap-2 text-sm sm:grid-cols-3">
-            <div><p className="text-xs text-zinc-500">Risk Amount</p><p className="font-semibold text-white">${fmt(result.riskAmount)}</p></div>
-            <div><p className="text-xs text-zinc-500">Position Size</p><p className="font-semibold text-white">{fmt(result.positionSize)} units</p></div>
-            <div><p className="text-xs text-zinc-500">Position Value</p><p className="font-semibold text-white">${fmt(result.positionValue)}</p></div>
-          </div>
-          {warning && <p className="mt-2 text-sm font-semibold text-red-400">{warning === "High risk" ? "⚠️ High risk" : `⚠️ ${warning}`}</p>}
+    <div className="rounded-xl border border-zinc-700 bg-zinc-900 p-4">
+      <h3 className="text-sm font-bold text-white mb-3">💰 Risk Calculator</h3>
+      
+      <div className="space-y-3">
+        <div>
+          <label className="text-xs text-zinc-400 block mb-1">Account Balance ($)</label>
+          <input
+            type="number"
+            value={balance}
+            onChange={(e) => setBalance(Number(e.target.value))}
+            className="w-full bg-zinc-800 border border-zinc-700 rounded px-3 py-2 text-white text-sm"
+          />
         </div>
-      )}
 
-      <p className="mt-4 border-t border-zinc-800 pt-2 text-[11px] text-zinc-500">⚠️ Ye sirf calculator hai. Koi trading advice nahi.</p>
-    </section>
+        <div>
+          <label className="text-xs text-zinc-400 block mb-1">Leverage</label>
+          <select
+            value={leverage}
+            onChange={(e) => setLeverage(Number(e.target.value))}
+            className="w-full bg-zinc-800 border border-zinc-700 rounded px-3 py-2 text-white text-sm"
+          >
+            <option value="1">1x (No Leverage)</option>
+            <option value="2">2x</option>
+            <option value="5">5x</option>
+            <option value="10">10x</option>
+            <option value="20">20x</option>
+            <option value="50">50x</option>
+          </select>
+        </div>
+
+        <div>
+          <label className="text-xs text-zinc-400 block mb-1">Risk % (Max Loss)</label>
+          <input
+            type="number"
+            value={riskPercent}
+            onChange={(e) => setRiskPercent(Number(e.target.value))}
+            step="0.5"
+            className="w-full bg-zinc-800 border border-zinc-700 rounded px-3 py-2 text-white text-sm"
+          />
+        </div>
+      </div>
+
+      <div className="mt-4 space-y-2 border-t border-zinc-700 pt-3">
+        <div className="flex justify-between text-sm">
+          <span className="text-zinc-400">Max Loss:</span>
+          <span className="text-red-400 font-bold">${maxLoss.toFixed(2)}</span>
+        </div>
+        <div className="flex justify-between text-sm">
+          <span className="text-zinc-400">Position Size:</span>
+          <span className="text-white font-bold">${totalPosition.toFixed(2)}</span>
+        </div>
+        <div className="flex justify-between text-sm">
+          <span className="text-zinc-400">Safe Trade:</span>
+          <span className="text-green-400 font-bold">${safeTradeSize.toFixed(2)}</span>
+        </div>
+      </div>
+
+      <div className="mt-3 rounded bg-zinc-800 p-2 text-xs text-zinc-300 leading-relaxed">
+        Aap is trade mein <strong className="text-red-400">${maxLoss.toFixed(2)}</strong> lose kar sakte hain.
+        Total position <strong className="text-white">${totalPosition.toFixed(2)}</strong>.
+        Safe raho, plan ke saath trade karo.
+      </div>
+
+      <p className="mt-3 text-[10px] text-zinc-500">
+        ⚠️ Educational tool. Not financial advice.
+      </p>
+    </div>
   );
 }

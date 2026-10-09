@@ -458,7 +458,6 @@ export default function Home() {
   const [watchlistOpen, setWatchlistOpen] = useState(false);
   const [chatLoading, setChatLoading] = useState(false);
   const [copiedTradeMessage, setCopiedTradeMessage] = useState<number | null>(null);
-  const [uploadedImage, setUploadedImage] = useState<string | null>(null);
   const [showTradingParams, setShowTradingParams] = useState(false);
   const [tradingParams, setTradingParams] = useState({
     accountBalance: "",
@@ -1055,7 +1054,6 @@ export default function Home() {
     setChatMessages(session.messages);
     setChatHistoryOpen(false);
     setChatInput("");
-    setUploadedImage(null);
   };
 
   const selectChat = (session: ChatSession) => {
@@ -1064,7 +1062,6 @@ export default function Home() {
     setChatMessages(session.messages);
     setChatHistoryOpen(false);
     setChatInput("");
-    setUploadedImage(null);
   };
 
   const appendChatMessage = (sessionId: string, message: ChatMessage, topic?: string) => {
@@ -1111,7 +1108,7 @@ export default function Home() {
 
 
   const handleSendMessage = async () => {
-    if ((!chatInput.trim() && !uploadedImage) || !chatHistoryReady || !activeChatId) return;
+    if (!chatInput.trim() || !chatHistoryReady || !activeChatId) return;
 
     const userMessage = chatInput.trim() || "Please analyze this chart";
     const currentSession = chatHistory.find((session) => session.id === activeChatId);
@@ -1138,7 +1135,7 @@ export default function Home() {
       setChatHistoryOpen(false);
     }
 
-    const newMessage: ChatMessage = { role: "user", content: userMessage, language: detectChatLanguage(userMessage), image: uploadedImage };
+    const newMessage: ChatMessage = { role: "user", content: userMessage, language: detectChatLanguage(userMessage) };
     appendChatMessage(targetChatId, newMessage, topic);
     setChatInput("");
     setChatLoading(true);
@@ -1156,7 +1153,7 @@ export default function Home() {
 
       let analysisCandles = chartDataKey === `${analysisMarket}:${analysisSymbol}:${selectedHistoryTimeframe}` ? chartData : [];
       let analysisCurrentPrice = analysisMarket === activeTab && analysisSymbol === selectedMarketSymbol ? currentPrice : null;
-      if (analysisRequest && !uploadedImage && analysisSymbol && analysisCandles.length < 20) {
+      if (analysisRequest && analysisSymbol && analysisCandles.length < 20) {
         const query = new URLSearchParams({ market: analysisMarket, symbol: analysisSymbol, timeframe: selectedHistoryTimeframe });
         const historyResponse = await fetch(`/api/market/history?${query}`);
         const historyResult = await historyResponse.json() as { candles?: ChartData[]; quote?: { price?: number | null }; error?: string };
@@ -1167,7 +1164,7 @@ export default function Home() {
       }
 
       let automaticAnalysis: MarketAnalysisResult | null = null;
-      if (analysisRequest && !uploadedImage && analysisCandles.length >= 20) {
+      if (analysisRequest && analysisCandles.length >= 20) {
         const latestAnalysisKey = `${analysisMarket}:${analysisSymbol}:${selectedHistoryTimeframe}:${analysisCandles.at(-1)?.time}`;
         if (marketAnalysisKey === latestAnalysisKey && marketAnalysisData) {
           automaticAnalysis = marketAnalysisData;
@@ -1232,8 +1229,7 @@ export default function Home() {
           message: userMessage,
           history: previousMessages.filter((message) => message.role === "user" || message.role === "assistant").slice(-10).map(({ role, content }) => ({ role, content })),
           marketContext,
-          image: uploadedImage,
-          tradingParams: analysisRequest && !uploadedImage ? analysisTradingParams : showTradingParams ? tradingParams : null,
+          tradingParams: analysisRequest ? analysisTradingParams : showTradingParams ? tradingParams : null,
         }),
       });
 
@@ -1249,13 +1245,6 @@ export default function Home() {
           assistantMessage.analysisExplanation = automaticAnalysis.explanation ?? "";
           assistantMessage.chartPattern = automaticAnalysis.pattern ?? "Not clear";
         }
-        if (data.chartMarkup && uploadedImage) {
-          assistantMessage.chartMarkup = true;
-          assistantMessage.image = uploadedImage;
-          assistantMessage.annotations = data.annotations as ChartAnnotation[];
-          assistantMessage.verdict = data.verdict as TradeVerdict;
-          assistantMessage.riskReward = data.riskReward as RiskRewardSummary;
-        }
         appendChatMessage(targetChatId, assistantMessage);
       }
     } catch (error) {
@@ -1263,7 +1252,6 @@ export default function Home() {
       appendChatMessage(targetChatId, { role: "assistant", content: "Sorry, I encountered an error processing your request. Please try again." });
     } finally {
       setChatLoading(false);
-      if (activeChatIdRef.current === targetChatId) setUploadedImage(null);
     }
   };
 
@@ -1627,45 +1615,6 @@ export default function Home() {
             )}
           </div>
 
-          {/* Upload Button */}
-          <div className="px-6 py-4">
-            <button 
-              onClick={() => document.getElementById('main-chart-upload')?.click()}
-              className="w-full py-3 bg-gradient-to-r from-purple-600 to-blue-600 text-white font-semibold rounded-lg hover:from-purple-700 hover:to-blue-700 transition-all flex items-center justify-center gap-2"
-            >
-              <svg
-                className="w-5 h-5"
-                fill="none"
-                stroke="currentColor"
-                viewBox="0 0 24 24"
-              >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth={2}
-                  d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"
-                />
-              </svg>
-              Upload Chart Screenshot for AI Analysis
-            </button>
-            <input
-              type="file"
-              id="main-chart-upload"
-              accept="image/*"
-              onChange={(e) => {
-                const file = e.target.files?.[0];
-                if (file) {
-                  const reader = new FileReader();
-                  reader.onloadend = () => {
-                    setUploadedImage(reader.result as string);
-                    setChatOpen(true);
-                  };
-                  reader.readAsDataURL(file);
-                }
-              }}
-              className="hidden"
-            />
-          </div>
           {/* Phase 5 — Analysis & scanner tools */}
           <div className="space-y-4 px-3 pb-6 sm:px-6">
             <FreePremiumSignal />
@@ -1948,48 +1897,6 @@ export default function Home() {
                   </div>
                 </div>
               )}
-
-              {/* Image Upload */}
-              <div className="mb-3">
-                <input
-                  type="file"
-                  id="chart-upload"
-                  accept="image/*"
-                  onChange={(e) => {
-                    const file = e.target.files?.[0];
-                    if (file) {
-                      const reader = new FileReader();
-                      reader.onloadend = () => {
-                        setUploadedImage(reader.result as string);
-                      };
-                      reader.readAsDataURL(file);
-                    }
-                  }}
-                  className="hidden"
-                />
-                <label
-                  htmlFor="chart-upload"
-                  className="flex items-center gap-2 px-3 py-2 bg-zinc-800 text-zinc-300 text-sm rounded-lg hover:bg-zinc-700 transition-colors cursor-pointer"
-                >
-                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
-                  </svg>
-                  {uploadedImage ? 'Chart Uploaded ✓' : 'Upload Chart Screenshot'}
-                </label>
-                {uploadedImage && (
-                  <div className="mt-2 relative">
-                    <img src={uploadedImage} alt="Uploaded chart" className="w-full h-32 object-cover rounded-lg" />
-                    <button
-                      onClick={() => setUploadedImage(null)}
-                      className="absolute top-1 right-1 bg-red-500 text-white rounded-full p-1 hover:bg-red-600"
-                    >
-                      <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                      </svg>
-                    </button>
-                  </div>
-                )}
-              </div>
 
               <div className="flex min-w-0 gap-2">
                 <input
