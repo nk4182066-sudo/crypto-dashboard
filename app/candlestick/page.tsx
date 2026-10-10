@@ -118,6 +118,9 @@ export default function CandlestickPage() {
                   >
                     {typeLabel(def.type)}
                   </span>
+                  <span className="mt-2 text-xs leading-relaxed" style={{ color: MUTED }}>
+                    {def.romanUrdu}
+                  </span>
                 </Link>
               ))}
             </div>

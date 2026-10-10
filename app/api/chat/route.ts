@@ -3,6 +3,8 @@ import { callAI, type AIMessage, type AIResult } from "@/src/lib/aiProvider";
 import { analyzeSymbol } from "@/src/lib/autoAnalysis";
 import { compactMarketContext, selectTier, systemPromptFor } from "@/src/lib/llm";
 import { buildProTraderPrompt } from "@/src/lib/proTraderPrompt";
+import { getCachedSnapshot, runScan, type ScanResult, type ScanSnapshot } from "@/src/scanner/scanner";
+import { scanUniverse, type ScanMarket } from "@/src/scanner/universe";
 
 const assistantName = "Muhammad Noman's Assistant AI";
 const websiteName = "Trading Student Expert AI";
@@ -154,6 +156,114 @@ function toTextOnly(text: string): string {
     .trim();
 }
 
+// ── Task 2: auto-search — when the user asks for a trade/setup, scan the market ──
+// Returns a formatted reply with the top 80+ confluence setups in the user's
+// language, or null when the message isn't a trade-seeking request.
+const AUTO_SEARCH_HINTS = [
+  "trade", "setup", "signal", "chahiye", "dhundho", "dhoondo", "dhondo",
+  "buy", "sell", "entry", "best", "acha setup", "acha trade", "kya lein",
+  "what should i", "find me", "scan", "opportunit",
+];
+const AUTO_SEARCH_MARKETS: Array<{ market: ScanMarket; words: string[] }> = [
+  { market: "crypto", words: ["crypto", "btc", "bitcoin", "eth", "ethereum", "coin"] },
+  { market: "metals", words: ["gold", "metal", "xau", "silver", "copper", "sona"] },
+  { market: "forex", words: ["forex", "eur", "usd", "gbp", "jpy", "pair", "currency"] },
+  { market: "stocks", words: ["stock", "stocks", "equity", "aapl", "tsla", "nasdaq", "shares"] },
+];
+
+const ROMAN_URDU_MARKERS = [
+  "chahiye", "dhoondo", "dhundho", "dhondo", "do", "batao", "kya", "kaisa",
+  "kaisay", "acha", "theek", "lekin", "nahi", "hai", "karo", "mujhe", "abhi",
+];
+
+function detectAutoSearch(message: string): { wants: boolean; market: ScanMarket | null; romanUrdu: boolean } {
+  const lower = ` ${message.toLowerCase()} `;
+  const wants = AUTO_SEARCH_HINTS.some((hint) => lower.includes(hint));
+  if (!wants) return { wants: false, market: null, romanUrdu: false };
+
+  const market = AUTO_SEARCH_MARKETS.find((m) => m.words.some((w) => lower.includes(w)))?.market ?? null;
+  const romanUrdu = ROMAN_URDU_MARKERS.some((m) => lower.includes(m));
+  return { wants: true, market, romanUrdu };
+}
+
+function directionLabel(direction: ScanResult["direction"]): string {
+  return direction === "buy" ? "Bullish (Buy)" : direction === "sell" ? "Bearish (Sell)" : "Neutral (Wait)";
+}
+
+function formatAutoSearchReply(top: ScanResult[], market: ScanMarket | null, romanUrdu: boolean): string {
+  const marketLabel = market ? market.toUpperCase() : "MARKET";
+  const lines: string[] = [];
+
+  if (romanUrdu) {
+    lines.push(`Bhai, maine ${marketLabel} scan kiya. Ye best setups hain:\n`);
+    top.forEach((r, i) => {
+      lines.push(`${i + 1}. ${r.label} — Score ${Math.round(r.confidence)}/100 🏆 Excellent`);
+      lines.push(`   Direction: ${directionLabel(r.direction)}`);
+      lines.push(`   Current Price: ${r.price.toFixed(2)}`);
+      lines.push(`   Reason: ${r.reason}`);
+      lines.push(`   Setup Detected\n`);
+    });
+    lines.push("⚠️ Ye sirf educational analysis hai. Ye financial advice nahi. Apni research zaroor karein.");
+  } else {
+    lines.push(`I scanned ${marketLabel}. These are the strongest setups right now:\n`);
+    top.forEach((r, i) => {
+      lines.push(`${i + 1}. ${r.label} — Score ${Math.round(r.confidence)}/100 🏆 Excellent`);
+      lines.push(`   Direction: ${directionLabel(r.direction)}`);
+      lines.push(`   Current Price: ${r.price.toFixed(2)}`);
+      lines.push(`   Reason: ${r.reason}`);
+      lines.push(`   Setup Detected\n`);
+    });
+    lines.push("⚠️ Educational analysis only. Not financial advice. Always do your own research.");
+  }
+
+  return lines.join("\n");
+}
+
+function formatNoSetupReply(market: ScanMarket | null, romanUrdu: boolean): string {
+  const marketLabel = market ? market.toUpperCase() : "market";
+  return romanUrdu
+    ? `Bhai, abhi koi high-confluence setup nahi hai ${marketLabel === "MARKET" ? "" : `${marketLabel} mein`}. Market mein sabr karein, 5 minute baad check karein. ⚠️ Educational analysis only.`
+    : `There is no high-confluence setup right now${market === null ? "" : ` in ${market}`}. Wait and check back in 5 minutes. ⚠️ Educational analysis only. Not financial advice.`;
+}
+
+/** Builds the auto-search reply, or null if this isn't a trade-seeking message. */
+async function getAutoSearchReply(message: string): Promise<string | null> {
+  const { wants, market, romanUrdu } = detectAutoSearch(message);
+  if (!wants) return null;
+
+  const targets = market ? scanUniverse.filter((t) => t.market === market) : scanUniverse;
+
+  // Prefer the pre-computed snapshot; fall back to a fresh scan of that market.
+  let snapshot = getCachedSnapshot();
+  if (!snapshot) {
+    try {
+      snapshot = await runScan(targets);
+    } catch (error) {
+      console.error("Auto-search scan failed:", error);
+    }
+  }
+
+  let pool = snapshot?.results ?? [];
+  if (market) pool = pool.filter((r) => r.market === market);
+  if (pool.length === 0) {
+    // Snapshot may be for a different market subset — scan the requested market directly.
+    try {
+      const fresh = await runScan(targets);
+      pool = market ? fresh.results.filter((r) => r.market === market) : fresh.results;
+    } catch (error) {
+      console.error("Auto-search fallback scan failed:", error);
+    }
+  }
+
+  const top = pool
+    .filter((r) => r.confidence >= 80)
+    .sort((a, b) => b.confidence - a.confidence)
+    .slice(0, 5);
+
+  if (top.length === 0) return formatNoSetupReply(market, romanUrdu);
+  return formatAutoSearchReply(top, market, romanUrdu);
+}
+
 export async function POST(request: Request) {
   try {
     const { message, marketContext, tradingParams, history } = await request.json();
@@ -188,6 +298,14 @@ export async function POST(request: Request) {
     const cachedReply = getCachedReply(normalizedMessage);
     if (cachedReply) {
       return Response.json({ reply: cachedReply });
+    }
+
+    // Task 2 — if the user is asking for a trade/setup, scan the market directly
+    // and reply with the top 80+ confluence setups (no AI call needed).
+    const autoSearchReply = await getAutoSearchReply(String(message));
+    if (autoSearchReply) {
+      setCachedReply(normalizedMessage, autoSearchReply);
+      return Response.json({ reply: autoSearchReply });
     }
 
     // Multi-provider AI call (text-only, no image analysis)

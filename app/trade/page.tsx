@@ -11,6 +11,7 @@ import { scanChartPatterns } from "@/src/lib/chart/chartPatterns";
 import { zigZag } from "@/src/analysis/structure";
 import { getChartAnalysis, type ChartAnalysis } from "@/src/lib/autoChartAnalysis";
 import { normalizeSymbol } from "@/src/lib/chart/symbol";
+import { recordHighConfluenceSetup } from "@/src/lib/signalHistory";
 
 const BG = "#0B0E11";
 const CARD = "#181A20";
@@ -21,8 +22,21 @@ const GREEN = "#00C087";
 const RED = "#F6465D";
 const BLUE = "#3b82f6";
 
-const TIMEFRAMES = ["15m", "1h", "4h", "1d"] as const;
+const TIMEFRAMES = ["1m", "5m", "15m", "1h", "4h", "1d"] as const;
 type Timeframe = (typeof TIMEFRAMES)[number];
+
+/** Poll cadence per timeframe — fast ones refresh often, slow ones rarely. */
+function refreshMsFor(timeframe: Timeframe): number {
+  switch (timeframe) {
+    case "1m":
+    case "5m": return 5000;   // 5s
+    case "15m":
+    case "1h": return 30000;  // 30s
+    case "4h":
+    case "1d": return 60000;  // 60s
+    default: return 30000;
+  }
+}
 
 interface Candle {
   time: number;
@@ -67,6 +81,19 @@ async function fetchQuote(symbol: string, market: string): Promise<{ price: numb
     return null;
   }
 }
+/**
+ * Merge freshly polled candles into the current series: update the last candle
+ * in place (live close/high/low tick) and append genuinely new candles. Keeps
+ * historical candles untouched so the chart doesn't jump around.
+ */
+function mergeLiveCandles(prev: Candle[], incoming: Candle[]): Candle[] {
+  if (incoming.length === 0) return prev;
+  const byTime = new Map(prev.map((c) => [c.time, c]));
+  for (const candle of incoming) byTime.set(candle.time, candle);
+  return [...byTime.values()].sort((a, b) => a.time - b.time);
+}
+
+
 function TradeChart() {
   const params = useSearchParams();
   const rawSymbol = params.get("symbol") ?? "BTC-USD";
@@ -83,18 +110,30 @@ function TradeChart() {
   const [quote, setQuote] = useState<{ price: number; previousClose: number } | null>(null);
 
   // Candles for the selected timeframe (drives the chart + pattern scan).
+  // Initial full load, then live polling that updates the last candle in place
+  // and appends new ones — no full reset, so the chart keeps its position.
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
     void fetchCandles(symbol, market, timeframe).then((rows) => {
-      if (!cancelled) {
-        setCandles(rows);
-        setLoading(false);
-      }
+      if (cancelled) return;
+      setCandles(rows);
+      setLoading(false);
     });
     return () => {
       cancelled = true;
     };
+  }, [symbol, market, timeframe]);
+
+  // Real-time refresh: poll Binance/Yahoo on a timeframe-wise cadence and merge.
+  useEffect(() => {
+    const interval = setInterval(() => {
+      void fetchCandles(symbol, market, timeframe).then((rows) => {
+        if (rows.length === 0) return; // ignore empty/error polls, keep last state
+        setCandles((prev) => mergeLiveCandles(prev, rows));
+      });
+    }, refreshMsFor(timeframe));
+    return () => clearInterval(interval);
   }, [symbol, market, timeframe]);
 
   // Rule-based analysis (score, trend, support/resistance, verdict) + header quote.
@@ -103,6 +142,22 @@ function TradeChart() {
     void getChartAnalysis(symbol, market)
       .then((result) => {
         if (!cancelled) setAnalysis(result);
+        // Task 4: persist high-confluence setups (score 80+) to localStorage
+        // so /results can track their outcome. De-duped by symbol+market inside.
+        if (result && result.score >= 80) {
+          recordHighConfluenceSetup({
+            symbol: result.symbol,
+            market: result.market,
+            score: result.score,
+            direction: result.direction,
+            entryPrice: result.currentPrice,
+            targetPrice:
+              result.direction === "bearish" ? result.support : result.resistance || result.currentPrice,
+            support: result.support,
+            resistance: result.resistance,
+            pattern: result.patterns[0]?.name ?? "No clear pattern",
+          });
+        }
       })
       .catch(() => {
         if (!cancelled) setAnalysis(null);

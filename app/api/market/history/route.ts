@@ -29,6 +29,8 @@ interface YahooChartResult {
 }
 
 const intervalOptions = {
+  "1m": { yahoo: "1m", initialDays: 1, chunkDays: 1, maximumDays: 7 },
+  "5m": { yahoo: "5m", initialDays: 2, chunkDays: 2, maximumDays: 30 },
   "15m": { yahoo: "15m", initialDays: 7, chunkDays: 7, maximumDays: 60 },
   "1h": { yahoo: "1h", initialDays: 60, chunkDays: 30, maximumDays: 730 },
   "4h": { yahoo: "1h", initialDays: 90, chunkDays: 30, maximumDays: 730 },
@@ -38,6 +40,8 @@ const intervalOptions = {
 
 function intervalSecondsFor(timeframe: string): number {
   switch (timeframe) {
+    case "1m": return 60;
+    case "5m": return 5 * 60;
     case "15m": return 15 * 60;
     case "1h": return 60 * 60;
     case "4h": return 4 * 60 * 60;
@@ -73,8 +77,10 @@ async function fetchBinanceHistory(
   now: number
 ) {
   const baseSymbol = symbol.replace(/-USD$/, "").replace(/USDT$/, "");
+  // BTC-USD -> BTCUSDT: Binance only lists *USDT spot pairs. Forex/stocks
+  // never reach here (handled by Yahoo / Frankfurter in the GET handler).
   const intervals: Record<string, string> = {
-    "15m": "15m", "1h": "1h", "4h": "4h", "1d": "1d", max: "1d",
+    "1m": "1m", "5m": "5m", "15m": "15m", "1h": "1h", "4h": "4h", "1d": "1d", max: "1d",
   };
   const interval = quoteOnly ? "1m" : intervals[timeframe];
   if (!/^[A-Z0-9]{1,15}$/.test(baseSymbol) || !interval) return null;
@@ -93,10 +99,16 @@ async function fetchBinanceHistory(
 
     const rows = await cached(
       `binance:${url.toString()}`,
-      { ttlMs: quoteOnly ? 30000 : 120000, staleMs: 900000 },
+      // Live: short TTL so 5s/30s client polls get fresh candles, with a long
+      // stale window as a graceful fallback if Binance throttles us.
+      { ttlMs: quoteOnly ? 4000 : 15000, staleMs: 900000 },
       async () => {
         try {
-          const response = await fetch(url, { cache: "no-store" });
+          // 10s hard timeout so a stalled Binance call can't hang the request.
+          const controller = new AbortController();
+          const timer = setTimeout(() => controller.abort(), 10000);
+          const response = await fetch(url, { cache: "no-store", signal: controller.signal });
+          clearTimeout(timer);
           if (!response.ok) return null;
           return response.json() as Promise<unknown>;
         } catch {
@@ -288,7 +300,7 @@ export async function GET(request: Request) {
     // which rate-limits unauthenticated calls.
     const binance = await fetchBinanceHistory(symbol, timeframe, before, quoteOnly, now);
     if (binance && (quoteOnly || binance.candles.length > 0)) {
-      return Response.json(binance, { headers: { "Cache-Control": "no-store" } });
+      return Response.json(binance, { headers: { "Cache-Control": "no-store, max-age=0" } });
     }
   } else if (market === "forex" && (timeframe === "1d" || timeframe === "max")) {
     // Frankfurter publishes once per day, so it only answers daily series.

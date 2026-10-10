@@ -69,6 +69,13 @@ function statusOf(signal: MarketSignal): { text: string; color: string } {
   return { text: "Watch zone", color: AMBER };
 }
 
+/** Score tier badge — only 80+ are shown, so every card is at least "Excellent". */
+function scoreTier(score: number): { emoji: string; label: string } {
+  if (score >= 90) return { emoji: "🏆", label: "Excellent" };
+  if (score >= 80) return { emoji: "⭐", label: "Strong" };
+  return { emoji: "⭐", label: "Strong" };
+}
+
 function timeAgo(iso: string): string {
   const then = new Date(iso).getTime();
   if (!Number.isFinite(then)) return "—";
@@ -115,9 +122,9 @@ export default function SignalsPage() {
     };
   }, [market]);
 
-  // Saare signals, highest score first — no minimum cutoff.
+  // High-confluence only: hide anything below 80/100. Highest score first.
   const visible = useMemo(
-    () => [...signals].sort((first, second) => second.score - first.score),
+    () => signals.filter((s) => s.score >= 80).sort((first, second) => second.score - first.score),
     [signals]
   );
 
@@ -165,7 +172,9 @@ export default function SignalsPage() {
         </div>
       ) : visible.length === 0 ? (
         <div className="rounded-2xl border p-6 text-center text-sm" style={{ backgroundColor: CARD, borderColor: BORDER, color: MUTED }}>
-          Is market mein abhi koi setup nahi mila
+          <p>Abhi koi high-confluence setup nahi hai.</p>
+          <p className="mt-1">Market analysis chal raha hai — thodi der baad check karein.</p>
+          <p className="mt-2 text-xs opacity-70">(Sirf 80+ score wale setups yahan dikhte hain.)</p>
         </div>
       ) : (
         <div className="flex flex-col gap-3">
@@ -181,7 +190,7 @@ export default function SignalsPage() {
                 <div className="mb-2 flex items-center justify-between">
                   <span className="text-base font-bold" style={{ color: TEXT }}>{displaySymbol(signal.symbol)}</span>
                   <span className="rounded-full px-2.5 py-0.5 text-xs font-bold" style={{ color: GREEN, backgroundColor: "rgba(0,192,135,0.12)" }}>
-                    Score: {signal.score}/100
+                    {scoreTier(signal.score).emoji} Score: {signal.score}/100
                   </span>
                 </div>
 
@@ -214,6 +223,14 @@ export default function SignalsPage() {
           })}
         </div>
       )}
+
+      <Link
+        href="/results"
+        className="mt-5 block w-full rounded-lg py-3 text-center text-sm font-bold transition-opacity hover:opacity-90"
+        style={{ backgroundColor: GREEN, color: BG }}
+      >
+        📊 View All Results →
+      </Link>
 
       <footer className="mt-6 text-center text-xs" style={{ color: MUTED }}>
         ⚠️ Educational analysis only. Not financial advice.
