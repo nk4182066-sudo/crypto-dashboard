@@ -6,6 +6,38 @@ import { buildProTraderPrompt } from "@/src/lib/proTraderPrompt";
 
 const assistantName = "Muhammad Noman's Assistant AI";
 const websiteName = "Trading Student Expert AI";
+
+// ── Masla 21: fast reply cache for common one-off queries (BTC, Gold, ETH…) ──
+// Repeats of the same short question are served from memory so the reply comes
+// back well under 2s without touching any AI provider. Educational only.
+const FAST_QUERY_TTL_MS = 5 * 60 * 1000; // 5 minutes
+const fastQueryCache = new Map<string, { reply: string; expires: number }>();
+
+const COMMON_ASSETS = ["btc", "bitcoin", "eth", "ethereum", "gold", "xau", "xauusd"];
+
+/** Returns a cached reply for a repeat common query, or undefined on a miss. */
+function getCachedReply(normalizedMessage: string): string | undefined {
+  if (!COMMON_ASSETS.some((asset) => normalizedMessage.includes(asset))) return undefined;
+  const hit = fastQueryCache.get(normalizedMessage);
+  if (!hit) return undefined;
+  if (Date.now() > hit.expires) {
+    fastQueryCache.delete(normalizedMessage);
+    return undefined;
+  }
+  return hit.reply;
+}
+
+/** Stores a reply for a common query so the next identical ask is instant. */
+function setCachedReply(normalizedMessage: string, reply: string): void {
+  if (!COMMON_ASSETS.some((asset) => normalizedMessage.includes(asset))) return;
+  // Bound the cache so it can't grow without limit.
+  if (fastQueryCache.size > 200) {
+    const oldest = fastQueryCache.keys().next().value;
+    if (oldest !== undefined) fastQueryCache.delete(oldest);
+  }
+  fastQueryCache.set(normalizedMessage, { reply, expires: Date.now() + FAST_QUERY_TTL_MS });
+}
+
 const englishGreeting = `Hello! I am ${assistantName} from ${websiteName}. How can I help you with crypto, forex, or stock market analysis today?`;
 
 const systemPrompt = `You are ${assistantName}, a professional trading analyst for crypto, forex, stocks, and metals. Draw on 100 years of combined market study and published knowledge; do not claim personal experience, credentials, or a human career. You have studied chart patterns, candlestick patterns, RSI, MACD, Moving Averages, Bollinger Bands, and Fibonacci. Give honest, evidence-based analysis: when the market is unclear, say Wait. Never guarantee accuracy or profit. Explain everything in simple English, Urdu, or Roman Urdu for beginners. This is educational analysis, not a guarantee or personalized financial advice.
@@ -51,75 +83,8 @@ RESPONSE STYLE
 - Do not prescribe leverage without instrument-specific margin rules. Explain that leverage magnifies both gains and losses.
 - Include a brief risk disclaimer when discussing a trade setup.`;
 
-const chartImagePrompt = `The user supplied a chart screenshot. Analyze only what is visible in the image and return one JSON object, with no markdown or prose outside JSON, in this shape:
-{
-  "analysis": "Concise technical analysis in the user's language, including trend, visible support/resistance, recognizable pattern (or none), and conditional entry/stop-loss/take-profit reasoning.",
-  "verdict": "Wait",
-  "annotations": [
-    { "type": "horizontal", "category": "support", "y": 420, "label": "Support · $price or price not readable" },
-    { "type": "trendline", "category": "upperTrend", "x1": 0, "y1": 200, "x2": 1000, "y2": 350, "label": "Upper trendline" },
-    { "type": "pattern", "name": "Head & Shoulders | Triangle | Double Top | Double Bottom | Flag", "points": [{ "x": 0, "y": 0 }, { "x": 500, "y": 500 }, { "x": 1000, "y": 0 }], "label": "Pattern name" },
-    { "type": "entry", "direction": "buy", "x": 500, "y": 500, "label": "BUY · entry price or price not readable" }
-  ],
-  "riskReward": null
-}
-Coordinates are percentages of the full screenshot scaled 0-1000 from top-left. Mark clearly visible support and resistance, and upper/lower trend boundaries when identifiable. Outline recognizable patterns with at least three points. Horizontal category must be exactly one of support, resistance, stopLoss, takeProfit; trendline category must be upperTrend or lowerTrend; entry direction must be buy or sell. Include only marks supported by the visible chart; omit a trendline or pattern if it is not identifiable. Horizontal labels must include a price only if it is readable from the chart; otherwise say "price not readable". Never invent levels. Add stopLoss and takeProfit lines only when a defensible setup exists. Entry direction must match the conditional setup. Choose Wait when evidence or price scale is unclear; never force Setup Detected. Keep the verdict exactly one of the three listed values. The server will add the risk-reward box from validated calculator inputs.`;
-
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
-
-const chartCoordinate = (value: unknown) =>
-  typeof value === "number" && Number.isFinite(value)
-    ? Math.max(0, Math.min(1000, value))
-    : null;
-
-const textValue = (value: unknown, fallback = "") =>
-  typeof value === "string" ? value.slice(0, 180) : fallback;
-
-function validateAnnotation(value: unknown): Record<string, unknown> | null {
-  if (!isRecord(value)) return null;
-
-  const item = value;
-  const label = textValue(item.label);
-  if (item.type === "horizontal") {
-    const categories = ["support", "resistance", "stopLoss", "takeProfit"];
-    const y = chartCoordinate(item.y);
-    if (!categories.includes(String(item.category)) || y === null || !label) return null;
-    return { type: item.type, category: item.category, y, label };
-  }
-
-  if (item.type === "trendline") {
-    const categories = ["upperTrend", "lowerTrend"];
-    const x1 = chartCoordinate(item.x1);
-    const y1 = chartCoordinate(item.y1);
-    const x2 = chartCoordinate(item.x2);
-    const y2 = chartCoordinate(item.y2);
-    if (!categories.includes(String(item.category)) || x1 === null || y1 === null || x2 === null || y2 === null || !label) return null;
-    return { type: item.type, category: item.category, x1, y1, x2, y2, label };
-  }
-
-  if (item.type === "pattern" && Array.isArray(item.points)) {
-    const points = item.points.flatMap((point) => {
-      if (!isRecord(point)) return [];
-      const x = chartCoordinate(point.x);
-      const y = chartCoordinate(point.y);
-      return x === null || y === null ? [] : [{ x, y }];
-    });
-    const name = textValue(item.name, "Chart pattern");
-    if (points.length < 3) return null;
-    return { type: item.type, name, points, label: label || name };
-  }
-
-  if (item.type === "entry") {
-    const directions = ["buy", "sell"];
-    const x = chartCoordinate(item.x);
-    const y = chartCoordinate(item.y);
-    if (!directions.includes(String(item.direction)) || x === null || y === null || !label) return null;
-    return { type: item.type, direction: item.direction, x, y, label };
-  }
-
-  return null;
-}
 
 function buildRiskReward(tradingParams: Record<string, string> | null | undefined) {
   const summary = {
@@ -216,7 +181,13 @@ export async function POST(request: Request) {
           : romanUrduHowAreYou
             ? "Main theek hoon, shukriya! Main Muhammad Noman's Assistant AI hoon. Crypto, forex, ya stock market ke hawale se aapki kya madad karoon?"
             : "Assalam-o-alaikum! Main Muhammad Noman's Assistant AI hoon, Trading Student Expert AI ki taraf se. Crypto, forex, ya stock market analysis mein aapki kya madad kar sakta hoon?";
-      return Response.json({ response: greeting });
+      return Response.json({ reply: greeting });
+    }
+
+    // Masla 21 — serve repeat common queries (BTC, Gold, ETH…) from cache.
+    const cachedReply = getCachedReply(normalizedMessage);
+    if (cachedReply) {
+      return Response.json({ reply: cachedReply });
     }
 
     // Multi-provider AI call (text-only, no image analysis)
@@ -239,13 +210,14 @@ export async function POST(request: Request) {
       userMessage += `\n\nVerified calculator results (USD inputs; use these figures exactly and explain in the user's language): ${riskReward.details.join(" ")}`;
     }
 
-    // Multi-provider history: OpenAI-style role/content, last 10 turns.
+    // Multi-provider history: OpenAI-style role/content, last 3 turns only
+    // (kept short so the reply streams back fast — Masla 21).
     const priorMessages: AIMessage[] = Array.isArray(history)
-      ? history.slice(-10).flatMap((item: unknown) => {
+      ? history.slice(-3).flatMap((item: unknown) => {
           if (!isRecord(item) || (item.role !== "user" && item.role !== "assistant") || typeof item.content !== "string") return [];
           return [{
             role: item.role === "assistant" ? ("assistant" as const) : ("user" as const),
-            content: item.content.slice(0, 3000),
+            content: item.content.slice(0, 1200),
           }];
         })
       : [];
@@ -262,21 +234,28 @@ export async function POST(request: Request) {
 
     let result: AIResult;
     try {
-      result = await callAI(messages);
+      // Masla 21 — hard 10s ceiling so the reply never hangs the chat UI.
+      result = await Promise.race([
+        callAI(messages),
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error("CHAT_TIMEOUT")), 10000)
+        ),
+      ]);
     } catch (error) {
       const messageErr = error instanceof Error ? error.message : "unknown error";
-      if (messageErr === "ALL_PROVIDERS_EXHAUSTED") {
+      if (messageErr === "ALL_PROVIDERS_EXHAUSTED" || messageErr === "CHAT_TIMEOUT") {
         const fallback = await getRuleBasedFallback(userMessage, tier, marketContext, riskReward);
-        return Response.json({ response: fallback });
+        setCachedReply(normalizedMessage, fallback);
+        return Response.json({ reply: fallback });
       }
       console.error("Error in chat API:", error);
       return Response.json({ error: "Failed to process message" }, { status: 500 });
     }
 
     const aiResponse = toTextOnly(result.text);
-    return Response.json({
-      response: aiResponse || "Please rephrase your question — I can help with crypto, forex, stocks, and metals analysis.",
-    });
+    const reply = aiResponse || "Please rephrase your question — I can help with crypto, forex, stocks, and metals analysis.";
+    setCachedReply(normalizedMessage, reply);
+    return Response.json({ reply });
   } catch (error) {
     console.error("Error in chat API:", error);
     return Response.json(

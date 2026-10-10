@@ -129,34 +129,8 @@ export default function TradingChart({ data, chartKey = "", signals = [], candle
   const interactedRef = useRef(false);
   const pendingDrawingRef = useRef<{ x: number; y: number }[]>([]);
 
-  const [analysisState, setAnalysisState] = useState<{ symbol: string; data: ChartAnalysis | null; error: string | null }>({ symbol: "", data: null, error: null });
-  const [showAnalysis, setShowAnalysis] = useState(true);
-
-  // chartKey format is "SYMBOL:timeframe" — derive the symbol and auto-fetch analysis on change.
+  // chartKey format is "SYMBOL:timeframe" — derive the symbol.
   const symbol = chartKey.split(":")[0] ?? "";
-  const freshAnalysis = analysisState.symbol === symbol;
-  const analysis = autoAnalyze && freshAnalysis ? analysisState.data : null;
-  const analysisError = autoAnalyze && freshAnalysis ? analysisState.error : null;
-
-  useEffect(() => {
-    if (!autoAnalyze || !symbol) return;
-    let cancelled = false;
-    const load = async () => {
-      try {
-        const result = await getChartAnalysis(symbol, market);
-        if (!cancelled) setAnalysisState({ symbol, data: result, error: null });
-      } catch {
-        if (!cancelled) setAnalysisState({ symbol, data: null, error: "Analysis load nahi ho saki." });
-      }
-    };
-    void load();
-    const timer = window.setInterval(() => void load(), 30_000);
-    return () => {
-      cancelled = true;
-      window.clearInterval(timer);
-    };
-  }, [autoAnalyze, symbol, market]);
-
   useEffect(() => {
     loadOlderRef.current = onLoadOlderData;
     historyStateRef.current = { hasMoreHistory, loadingOlder };
@@ -363,85 +337,15 @@ export default function TradingChart({ data, chartKey = "", signals = [], candle
 
     candlestickSeries.setData(candles);
     trendlineSeries.setData(trendline.map((point) => ({ time: point.time as UTCTimestamp, value: point.price })));
-    const patternColors = ["#a78bfa", "#f59e0b", "#22d3ee", "#f472b6"];
-    const outlines = patternOutlines.length ? patternOutlines : patternOutline.length ? [{ name: patternName || "Chart pattern", points: patternOutline }] : [];
-    patternSeries.applyOptions({ title: '', color: outlines[0]?.color ?? patternColors[0] });
-    patternSeries.setData((outlines[0]?.points ?? []).map((point) => ({ time: point.time as UTCTimestamp, value: point.price })));
-    const chart = chartRef.current;
-    if (chart) {
-      extraPatternSeriesRef.current.forEach((series) => chart.removeSeries(series));
-      extraPatternSeriesRef.current = outlines.slice(1).map((outline, index) => {
-        const series = chart.addSeries(LineSeries, {
-          color: outline.color ?? patternColors[(index + 1) % patternColors.length],
-          lineWidth: 2,
-          lineStyle: LineStyle.Dashed,
-          lastValueVisible: false,
-          priceLineVisible: false,
-          crosshairMarkerVisible: false,
-        });
-        series.setData(outline.points.map((point) => ({ time: point.time as UTCTimestamp, value: point.price })));
-        return series;
-      });
-    }
+    // Pattern markers & outlines are intentionally disabled (Requirement 4):
+    // only the candlestick + support/resistance price lines are drawn.
+
     overlaySeriesRef.current.forEach(({ id, series }) => {
       const overlay = indicatorOverlays.find((item) => item.id === id);
       series.setData((overlay?.points ?? []).map((point) => ({ time: point.time as UTCTimestamp, value: point.value })));
     });
 
-    const analysisBundle: ChartMarkerBundle | null = autoAnalyze && showAnalysis && analysis
-      ? generateChartMarkers(analysis, data)
-      : null;
-
-    // BUG 6 — temporarily DISABLED: markers were drawing odd circles/boxes on
-    // the chart. Uncomment the block below to restore them after redesign.
-    /*
-    if (markersRef.current) {
-      const analysisMarkers: SeriesMarker<Time>[] = (analysisBundle?.markers ?? []).map((marker) => ({
-        time: marker.time as UTCTimestamp,
-        position: marker.position,
-        color: marker.color,
-        shape: marker.shape,
-        text: marker.text,
-      }));
-      const signalMarkers: SeriesMarker<Time>[] = signals.map((signal) => ({
-        time: signal.time as UTCTimestamp,
-        position: signal.direction === "buy" ? "belowBar" : "aboveBar",
-        color: signal.direction === "buy" ? "#22c55e" : "#ef4444",
-        shape: signal.direction === "buy" ? "arrowUp" : "arrowDown",
-        text: signal.reason === "Validated entry" ? "ENTRY" : /breakout|break/i.test(signal.reason) ? "BREAKOUT" : signal.direction.toUpperCase(),
-      }));
-      const structureMarkersForChart: SeriesMarker<Time>[] = structureMarkers.map((marker) => ({
-        time: marker.time as UTCTimestamp,
-        position: marker.kind === "lowerLow" ? "belowBar" : "aboveBar",
-        color: marker.kind === "lowerLow" ? "#fb7185" : marker.kind === "reverse" ? "#f59e0b" : "#fbbf24",
-        shape: "circle",
-        text: marker.kind === "higherHigh" ? "HH" : marker.kind === "lowerLow" ? "LL" : "REV",
-      }));
-      const patternMarkers: SeriesMarker<Time>[] = candlePatterns.map((pattern) => ({
-        time: pattern.time as UTCTimestamp,
-        position: pattern.direction === "bullish" ? "belowBar" : "aboveBar",
-        color: pattern.direction === "bullish" ? "#2dd4bf" : pattern.direction === "bearish" ? "#fb7185" : "#fbbf24",
-        shape: "circle",
-        text: pattern.name,
-      }));
-      const chartPatternMarkers: SeriesMarker<Time>[] = outlines.flatMap((pattern, index) => {
-        if (/trendline|neckline/i.test(pattern.name)) return [];
-        const anchor = pattern.points[0];
-        if (!anchor) return [];
-        const candle = data.find((item) => item.time === anchor.time);
-        return [{
-          time: anchor.time as UTCTimestamp,
-          position: candle && anchor.price < candle.close ? "belowBar" : "aboveBar",
-          color: pattern.color ?? patternColors[index % patternColors.length],
-          shape: "circle",
-          text: pattern.name,
-        }];
-      });
-      const markers = [...signalMarkers, ...structureMarkersForChart, ...patternMarkers, ...chartPatternMarkers, ...analysisMarkers].sort((first, second) => Number(first.time) - Number(second.time));
-      markersRef.current.setMarkers(markers);
-    }
-    */
-
+    // Chart draws only candlesticks + support/resistance price lines (no auto-analysis overlay).
     priceLinesRef.current.forEach((priceLine) => candlestickSeries.removePriceLine(priceLine));
     priceLinesRef.current = levels.map((level) => candlestickSeries.createPriceLine({
       price: level.price,
@@ -454,29 +358,6 @@ export default function TradingChart({ data, chartKey = "", signals = [], candle
       axisLabelColor: level.kind === "entry" ? "#2563eb" : level.kind === "support" || level.kind === "takeProfit" ? "#16a34a" : level.kind === "resistance" || level.kind === "stopLoss" ? "#dc2626" : "#ca8a04",
       title: level.label ?? `${level.kind} ${level.price}`,
     }));
-    // Auto analysis: support/resistance lines plus zone boundaries (entry yellow, target blue).
-    analysisBundle?.priceLines.forEach((line) => {
-      priceLinesRef.current.push(candlestickSeries.createPriceLine({
-        price: line.price,
-        color: line.color,
-        lineWidth: 2,
-        lineStyle: line.lineStyle,
-        axisLabelVisible: true,
-        title: line.title,
-      }));
-    });
-    analysisBundle?.zones.forEach((zone) => {
-      for (const price of [zone.priceHigh, zone.priceLow]) {
-        priceLinesRef.current.push(candlestickSeries.createPriceLine({
-          price,
-          color: zone.color,
-          lineWidth: 1,
-          lineStyle: LineStyle.Dashed,
-          axisLabelVisible: false,
-          title: zone.label,
-        }));
-      }
-    });
 
     // Explicit arrow markers (buy/sell points) supplied by the caller.
     if (markersRef.current) {
@@ -504,7 +385,7 @@ export default function TradingChart({ data, chartKey = "", signals = [], candle
       });
     }
     previousDataRef.current = { chartKey, data };
-  }, [data, chartKey, signals, candlePatterns, levels, trendline, trendDirection, patternOutline, patternOutlines, patternName, structureMarkers, indicatorOverlays, analysis, showAnalysis, autoAnalyze, arrowMarkers]);
+  }, [data, chartKey, signals, candlePatterns, levels, trendline, trendDirection, patternOutline, patternOutlines, patternName, structureMarkers, indicatorOverlays, arrowMarkers]);
 
   const handleDrawingClick = (event: React.MouseEvent<SVGSVGElement>) => {
     if (!drawingMode || !onDrawingComplete) return;
@@ -558,21 +439,7 @@ export default function TradingChart({ data, chartKey = "", signals = [], candle
         })}
       </svg>
       {loadingOlder && <div className="absolute left-2 top-2 rounded bg-zinc-950/90 px-2 py-1 text-xs text-zinc-300" role="status">Loading older candles...</div>}
-      {autoAnalyze && symbol && (
-        <div className="absolute right-2 top-2 z-10 flex max-h-[calc(100%-1rem)] w-72 max-w-[calc(100vw-1rem)] flex-col items-end gap-2 overflow-y-auto">
-          <button
-            type="button"
-            onClick={() => setShowAnalysis((current) => !current)}
-            aria-pressed={showAnalysis}
-            className="rounded border border-zinc-700 bg-zinc-950/90 px-2 py-1 text-xs font-semibold text-zinc-200 hover:bg-zinc-800"
-          >
-            {showAnalysis ? "Hide Analysis" : "Show Analysis"}
-          </button>
-          {showAnalysis && (
-            <ChartAnalysisOverlay symbol={symbol} market={market} candles={data} analysis={analysis} error={analysisError} />
-          )}
-        </div>
-      )}
+      {/* Analysis panel: no overlay on the chart; rendered below the chart in the page (Requirement 3). */}
     </div>
   );
 }

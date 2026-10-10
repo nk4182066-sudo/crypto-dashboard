@@ -141,7 +141,7 @@ export default function AITeacherChat() {
     if (scrollRef.current) scrollRef.current.scrollTop = 0;
   };
 
-  const sendMessage = (text: string) => {
+  const sendMessage = async (text: string) => {
     const trimmed = text.trim();
     if (!trimmed || !activeId || loading) return;
 
@@ -153,30 +153,63 @@ export default function AITeacherChat() {
 
     const userMessage: ChatMessage = { role: "user", content: trimmed };
     const updatedMessages = [...session.messages, userMessage];
-    const updatedSession = { ...session, messages: updatedMessages };
 
-    // Educational simulation — replace with real API call in production
-    const aiResponse: ChatMessage = {
-      role: "assistant",
-      content: "Yeh raha sample response. Aap real AI API call integrate kar ke yeh badal sakte hain.",
-      language: "Roman Urdu",
-    };
-
-    const finalSession = {
-      ...updatedSession,
-      messages: [...updatedMessages, aiResponse],
+    // Optimistically store the user's turn, then fill in the assistant reply.
+    const withUser: ChatSession = {
+      ...session,
+      messages: updatedMessages,
       updatedAt: Date.now(),
-      title: chatTitleFromMessage(trimmed),
+      title: session.title === "New Chat" ? chatTitleFromMessage(trimmed) : session.title,
     };
-
-    saveAndSync([
-      ...sessions.filter((s) => s.id !== activeId),
-      finalSession,
-    ]);
-    setActiveId(finalSession.id);
+    const others = sessions.filter((s) => s.id !== activeId);
+    saveAndSync([withUser, ...others]);
     setInput("");
-    setLoading(false);
-    if (scrollRef.current) scrollRef.current.scrollTop = 0;
+
+    // OpenAI-style history from prior turns (exclude the greeting).
+    const priorHistory = updatedMessages
+      .filter((m) => (m.role === "user" || m.role === "assistant") && m.content !== chatGreeting.content)
+      .slice(-10)
+      .map(({ role, content }) => ({ role, content }));
+
+    try {
+      const response = await fetch("/api/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          message: trimmed,
+          history: priorHistory,
+        }),
+      });
+
+      const data = (await response.json()) as { reply?: string; error?: string };
+
+      if (!response.ok || data.error) {
+        throw new Error(data.error || "Response aa nahi saka. Dobara koshish karein.");
+      }
+
+      // Text-only: strip any raw candle/numerical dumps before displaying.
+      const reply = showText(data.reply ?? "").trim()
+        || "Sorry, koi jawab nahi mila. Dobara poochhein.";
+
+      const finalSession: ChatSession = {
+        ...withUser,
+        messages: [...updatedMessages, { role: "assistant", content: reply }],
+        updatedAt: Date.now(),
+      };
+      saveAndSync([finalSession, ...others]);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Response aa nahi saka. Dobara koshish karein.";
+      setError(message);
+      const finalSession: ChatSession = {
+        ...withUser,
+        messages: [...updatedMessages, { role: "assistant", content: message }],
+        updatedAt: Date.now(),
+      };
+      saveAndSync([finalSession, ...others]);
+    } finally {
+      setLoading(false);
+      if (scrollRef.current) scrollRef.current.scrollTop = 0;
+    }
   };
 
 
@@ -185,7 +218,7 @@ export default function AITeacherChat() {
       {!chatOpen && (
         <button
           onClick={() => setChatOpen(true)}
-          className="fixed bottom-4 right-4 z-50 flex h-14 w-14 items-center justify-center rounded-full bg-gradient-to-br from-purple-600 to-blue-600 text-white shadow-lg transition-all hover:from-purple-700 hover:to-blue-700 hover:scale-105"
+          className="fixed bottom-[80px] right-4 z-40 flex h-14 w-14 items-center justify-center rounded-full bg-gradient-to-br from-purple-600 to-blue-600 text-white shadow-lg transition-all hover:from-purple-700 hover:to-blue-700 hover:scale-105"
           aria-label="Open AI Teacher Chat"
         >
           <svg className="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -200,7 +233,7 @@ export default function AITeacherChat() {
       )}
 
       {chatOpen && (
-        <div className="fixed bottom-4 right-4 z-50 flex h-[calc(100vh-8rem)] w-[calc(100vw-4rem)] max-w-[420px] flex-col rounded-2xl border border-zinc-700 bg-zinc-900 shadow-2xl">
+        <div className="fixed bottom-[80px] right-4 z-40 flex h-[calc(100vh-8rem)] w-[calc(100vw-4rem)] max-w-[420px] flex-col rounded-2xl border border-zinc-700 bg-zinc-900 shadow-2xl">
           {/* Header */}
           <div className="flex items-center justify-between border-b border-zinc-800 p-3">
             <div className="flex min-w-0 items-center gap-2">

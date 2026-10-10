@@ -35,7 +35,7 @@ const PROVIDERS: Provider[] = [
 ];
 
 const COOLDOWN_MS = 60_000;
-const TIMEOUT_MS = 15_000;
+const TIMEOUT_MS = 10_000;
 
 /** envKey name -> epoch ms until which the key stays blocked. */
 const blockedUntil = new Map<string, number>();

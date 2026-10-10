@@ -1,9 +1,11 @@
 "use client";
 
 import { useState, useEffect, useRef, type FormEvent } from "react";
+import Link from "next/link";
 import AnnotatedChart, { type ChartAnnotation, type RiskRewardSummary, type TradeVerdict } from "@/components/AnnotatedChart";
 import PhaseThreeWorkspace from "@/components/PhaseThreeWorkspace";
 import TradingChart from "@/components/TradingChart";
+import ChartAnalysisOverlay from "@/components/ChartAnalysisOverlay";
 import { scanCandlestickPatterns } from "@/src/lib/chart/candlestickPatterns";
 
 interface ChatMessage {
@@ -25,7 +27,6 @@ interface ChatMessage {
 import FreePremiumSignal from "@/components/FreePremiumSignal";
 import AnalysisResults from "@/components/AnalysisResults";
 import ChartAnnotations from "@/components/ChartAnnotations";
-import FilteredPatterns from "@/components/FilteredPatterns";
 import LoginButton from "@/components/LoginButton";
 import SmartMoneyZones from "@/components/SmartMoneyZones";
 import LiquiditySweep from "@/components/LiquiditySweep";
@@ -36,7 +37,7 @@ import ATRTrailing from "@/components/ATRTrailing";
 import KellyCriterion from "@/components/KellyCriterion";
 import CoinScanner from "@/components/CoinScanner";
 import BeginnerTooltips from "@/components/BeginnerTooltips";
-import PatternLibrary from "@/components/PatternLibrary";
+import AITeacherChat from "@/components/AITeacherChat";
 
 
 interface TradePlan {
@@ -1237,7 +1238,7 @@ export default function Home() {
       if (data.error) {
         appendChatMessage(targetChatId, { role: "assistant", content: `Error: ${data.error}. Please check your API key configuration.` });
       } else {
-        const assistantMessage: ChatMessage = { role: "assistant", content: data.response, language: newMessage.language };
+        const assistantMessage: ChatMessage = { role: "assistant", content: data.reply, language: newMessage.language };
         if (automaticAnalysis?.tradePlan && automaticAnalysis.indicators) {
           assistantMessage.tradePlan = automaticAnalysis.tradePlan;
           assistantMessage.indicatorSummary = automaticAnalysis.indicators;
@@ -1265,20 +1266,28 @@ export default function Home() {
           </div>
           <h1 className="text-sm font-bold leading-tight text-white sm:text-xl">Trading Student Expert AI</h1>
         </div>
-        <div className="hidden items-center gap-4 sm:flex">
-          <button className="px-4 py-2 text-sm text-zinc-400 hover:text-white transition-colors">
-            Dashboard
-          </button>
-          <button className="px-4 py-2 text-sm text-zinc-400 hover:text-white transition-colors">
-            Portfolio
-          </button>
-          <button className="px-4 py-2 text-sm text-zinc-400 hover:text-white transition-colors">
-            Settings
-          </button>
-          <div className="shrink-0">
+        <div className="flex items-center gap-2 sm:gap-4">
+          <div className="hidden items-center gap-4 sm:flex">
+            <button className="px-4 py-2 text-sm text-zinc-400 hover:text-white transition-colors">
+              Dashboard
+            </button>
+            <button className="px-4 py-2 text-sm text-zinc-400 hover:text-white transition-colors">
+              Portfolio
+            </button>
+            <button className="px-4 py-2 text-sm text-zinc-400 hover:text-white transition-colors">
+              Settings
+            </button>
+          </div>
+          <Link
+            href="/patterns"
+            className="rounded-lg bg-[#181A20] px-3 py-1 text-sm font-semibold text-[#00C087] transition-colors hover:text-white"
+          >
+            📚 Patterns Library
+          </Link>
+          <div className="hidden shrink-0 sm:block">
             <LoginButton />
           </div>
-          <div className="w-8 h-8 bg-zinc-700 rounded-full flex items-center justify-center">
+          <div className="hidden w-8 h-8 bg-zinc-700 rounded-full items-center justify-center sm:flex">
             <span className="text-white text-sm">U</span>
           </div>
         </div>
@@ -1292,8 +1301,8 @@ export default function Home() {
         </div>
       )}
 
-      <div className="border-b border-zinc-800 bg-zinc-900/70 px-4 py-2 text-center text-xs text-zinc-300 sm:text-sm">
-        100% Free for everyone. No hidden charges. No paid signals.
+      <div className="border-b border-zinc-800 bg-zinc-900/70 px-4 py-2 text-center text-sm" style={{ color: "#848E9C" }}>
+        100% Free for everyone. No hidden charges. No paid analysis.
       </div>
 
       {/* Main Content Area */}
@@ -1438,10 +1447,10 @@ export default function Home() {
               <button
                 key={tab.id}
                 onClick={() => setActiveTab(tab.id)}
-                className={`shrink-0 rounded-lg px-3 py-2 text-xs font-medium transition-all sm:px-4 sm:text-sm ${
+                className={`shrink-0 rounded-lg px-4 py-2 text-xs font-medium transition-all sm:text-sm ${
                   activeTab === tab.id
-                    ? "bg-purple-600 text-white shadow-lg"
-                    : "text-zinc-400 hover:text-white hover:bg-zinc-800"
+                    ? "bg-[#00C087] text-black"
+                    : "bg-[#181A20] text-gray-400 hover:text-white"
                 }`}
               >
                 <span className="mr-2">{tab.icon}</span>
@@ -1470,31 +1479,31 @@ export default function Home() {
               <div className="flex shrink-0 items-center gap-1 sm:gap-2">
                 <button 
                   onClick={() => setTimeframe("0.25")}
-                  className={`rounded px-2 py-1 text-xs transition-colors sm:px-3 sm:text-sm ${timeframe === "0.25" ? "bg-purple-600 text-white" : "bg-zinc-800 text-zinc-300 hover:bg-zinc-700"}`}
+                  className={`rounded-lg px-3 py-1 text-xs font-semibold transition-colors sm:text-sm ${timeframe === "0.25" ? "bg-[#00C087] text-black" : "bg-[#181A20] text-gray-400 hover:text-white"}`}
                 >
                   15m
                 </button>
                 <button 
                   onClick={() => setTimeframe("1")}
-                  className={`rounded px-2 py-1 text-xs transition-colors sm:px-3 sm:text-sm ${timeframe === "1" ? "bg-purple-600 text-white" : "bg-zinc-800 text-zinc-300 hover:bg-zinc-700"}`}
+                  className={`rounded-lg px-3 py-1 text-xs font-semibold transition-colors sm:text-sm ${timeframe === "1" ? "bg-[#00C087] text-black" : "bg-[#181A20] text-gray-400 hover:text-white"}`}
                 >
                   1h
                 </button>
                 <button 
                   onClick={() => setTimeframe("4")}
-                  className={`rounded px-2 py-1 text-xs transition-colors sm:px-3 sm:text-sm ${timeframe === "4" ? "bg-purple-600 text-white" : "bg-zinc-800 text-zinc-300 hover:bg-zinc-700"}`}
+                  className={`rounded-lg px-3 py-1 text-xs font-semibold transition-colors sm:text-sm ${timeframe === "4" ? "bg-[#00C087] text-black" : "bg-[#181A20] text-gray-400 hover:text-white"}`}
                 >
                   4h
                 </button>
                 <button 
                   onClick={() => setTimeframe("24")}
-                  className={`rounded px-2 py-1 text-xs transition-colors sm:px-3 sm:text-sm ${timeframe === "24" ? "bg-purple-600 text-white" : "bg-zinc-800 text-zinc-300 hover:bg-zinc-700"}`}
+                  className={`rounded-lg px-3 py-1 text-xs font-semibold transition-colors sm:text-sm ${timeframe === "24" ? "bg-[#00C087] text-black" : "bg-[#181A20] text-gray-400 hover:text-white"}`}
                 >
                   1d
                 </button>
                 <button
                   onClick={() => setTimeframe("max")}
-                  className={`rounded px-2 py-1 text-xs transition-colors sm:px-3 sm:text-sm ${timeframe === "max" ? "bg-purple-600 text-white" : "bg-zinc-800 text-zinc-300 hover:bg-zinc-700"}`}
+                  className={`rounded-lg px-3 py-1 text-xs font-semibold transition-colors sm:text-sm ${timeframe === "max" ? "bg-[#00C087] text-black" : "bg-[#181A20] text-gray-400 hover:text-white"}`}
                 >
                   Max
                 </button>
@@ -1559,11 +1568,12 @@ export default function Home() {
                   {chartError && chartData.length === 0 ? (
                     <div className="flex h-72 items-center justify-center text-center text-sm text-amber-300 sm:h-96">{chartError}</div>
                   ) : loading ? (
-                    <div className="flex h-72 items-center justify-center sm:h-96">
-                      <div className="text-zinc-400">Loading chart data...</div>
+                    <div className="h-72 rounded-xl border border-zinc-800 bg-zinc-900 sm:h-96" role="status" aria-label="Loading chart">
+                      <div className="skeleton h-full w-full" />
+                      <span className="sr-only">Loading chart data…</span>
                     </div>
                   ) : (
-                    <div className="relative h-72 overflow-hidden rounded-xl bg-zinc-900 p-3 sm:h-96 sm:p-6">
+                    <div className="relative w-full h-[300px] md:h-[400px] overflow-hidden rounded-xl bg-zinc-900 p-3 sm:p-6">
                       <div className="pointer-events-none absolute inset-0 z-10">
                         <ChartAnnotations annotations={chartAnnotations} verdict={chartVerdict} />
                         <SmartMoneyZones candles={chartData} currentPrice={latestMarketPrice ?? 0} />
@@ -1581,7 +1591,7 @@ export default function Home() {
                         hasMoreHistory={hasMoreHistory}
                         loadingOlder={loadingOlder}
                         onLoadOlderData={loadOlderHistory}
-                        height={320}
+                        height={400}
                       />
                     </div>
                   )}
@@ -1591,6 +1601,9 @@ export default function Home() {
                     <span className="text-zinc-300">R:R: <strong className="text-white">{marketTradePlan?.rewardRisk ? `1:${marketTradePlan.rewardRisk.toFixed(2)}` : "Wait"}</strong></span>
                     <span className="text-zinc-400">Pattern: {marketPattern}</span>
                   </div>
+                  {selectedMarketSymbol && (
+                    <ChartAnalysisOverlay symbol={selectedMarketSymbol} market="crypto" candles={chartData} />
+                  )}
                   <details className="group mt-2 rounded border border-zinc-800 bg-zinc-900/60 px-3 py-2">
                     <summary className="cursor-pointer list-none text-xs font-medium text-zinc-300">Advanced indicators</summary>
                     <div className="mt-3 flex flex-wrap gap-x-4 gap-y-2 text-xs text-zinc-400">
@@ -1607,7 +1620,6 @@ export default function Home() {
                 </div>
 
                 <div className="dashboard-grid mt-4">
-                  <FilteredPatterns patterns={candlePatternHits} />
                   <VolumeProfile candles={chartData} />
                 </div>
 
@@ -1629,312 +1641,17 @@ export default function Home() {
           </div>
         </main>
 
-        {/* Right sidebar — risk & pattern tools */}
+        {/* Right sidebar — risk tools */}
         {activeTab !== "workspace" && (
           <aside className="flex w-full shrink-0 flex-col gap-4 border-t border-zinc-800 bg-zinc-900 p-4 md:w-80 md:overflow-y-auto md:border-l md:border-t-0">
             <ATRTrailing candles={chartData} currentPrice={latestMarketPrice ?? 0} direction="long" />
             <KellyCriterion />
-            <PatternLibrary candles={chartData} />
           </aside>
         )}
       </div>
 
-      {/* Floating AI Chatbot */}
-      <div className="fixed bottom-4 right-4 z-50 sm:bottom-6 sm:right-6">
-        {!chatOpen ? (
-          <button
-            onClick={() => setChatOpen(true)}
-            className="w-14 h-14 bg-gradient-to-br from-purple-600 to-blue-600 rounded-full flex items-center justify-center shadow-lg hover:from-purple-700 hover:to-blue-700 transition-all"
-          >
-            <svg
-              className="w-6 h-6 text-white"
-              fill="none"
-              stroke="currentColor"
-              viewBox="0 0 24 24"
-            >
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                strokeWidth={2}
-                d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z"
-              />
-            </svg>
-          </button>
-        ) : (
-          <div className={`flex h-[min(38rem,calc(100dvh-2rem))] max-h-[calc(100dvh-2rem)] w-[calc(100vw-2rem)] flex-col overflow-hidden rounded-2xl border border-zinc-700 bg-zinc-900 shadow-2xl ${chatHistoryOpen ? "sm:w-[min(56rem,calc(100vw-3rem))]" : "sm:w-96"}`}>
-            {/* Chat Header */}
-            <div className="flex items-center justify-between px-4 py-3 bg-zinc-800 border-b border-zinc-700">
-              <div className="flex items-center gap-3">
-                <div className="w-8 h-8 bg-gradient-to-br from-purple-500 to-blue-500 rounded-full flex items-center justify-center">
-                  <span className="text-white text-xs font-bold">AI</span>
-                </div>
-                <div>
-                  <h3 className="text-xs font-semibold leading-tight text-white sm:text-sm">Muhammad Noman&apos;s Assistant AI</h3>
-                  <p className="text-xs text-green-400">Online</p>
-                </div>
-              </div>
-              <div className="flex shrink-0 items-center gap-1">
-                <button type="button" aria-label="View chat history" aria-expanded={chatHistoryOpen} onClick={() => setChatHistoryOpen((open) => !open)} title="Chat history" className="rounded p-2 text-zinc-400 hover:bg-zinc-700 hover:text-white">
-                  <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 12a9 9 0 109-9 9.75 9.75 0 00-6.74 2.74L3 8m0-5v5h5m4-1v5l3 2" /></svg>
-                </button>
-                <button type="button" aria-label="New Chat" title="New Chat" onClick={() => startNewChat()} className="rounded p-2 text-zinc-400 hover:bg-zinc-700 hover:text-white">
-                  <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 5v14m-7-7h14" /></svg>
-                </button>
-                <button type="button" aria-label="Close chat" onClick={() => setChatOpen(false)} className="rounded p-2 text-zinc-400 transition-colors hover:bg-zinc-700 hover:text-white">
-                  <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
-                </button>
-              </div>
-            </div>
-
-            <div className="relative flex min-h-0 flex-1 overflow-hidden">
-              {chatHistoryOpen && (
-                <aside aria-label="Past chats" className="absolute inset-0 z-20 flex min-h-0 flex-col border-r border-zinc-700 bg-zinc-900 p-3 sm:relative sm:inset-auto sm:w-56 sm:shrink-0">
-                  <div className="mb-3 flex items-center justify-between">
-                    <h4 className="text-sm font-semibold text-white">Past Chats</h4>
-                    <button type="button" aria-label="Close chat history" onClick={() => setChatHistoryOpen(false)} className="rounded p-1 text-zinc-400 hover:bg-zinc-800 hover:text-white sm:hidden">×</button>
-                  </div>
-                  <button type="button" onClick={() => startNewChat()} className="mb-3 flex items-center justify-center gap-2 rounded bg-purple-600 px-3 py-2 text-sm font-semibold text-white hover:bg-purple-500">
-                    <span aria-hidden="true">+</span> New Chat
-                  </button>
-                  <div className="min-h-0 flex-1 space-y-1 overflow-y-auto">
-                    {chatHistory.map((session) => (
-                      <button key={session.id} type="button" aria-current={session.id === activeChatId ? "page" : undefined} onClick={() => selectChat(session)} className={`w-full rounded px-3 py-2 text-left ${session.id === activeChatId ? "bg-zinc-800 text-white" : "text-zinc-300 hover:bg-zinc-800"}`}>
-                        <span className="block truncate text-sm">{session.title}</span>
-                        <span className="mt-1 block text-[10px] text-zinc-500">{new Date(session.updatedAt).toLocaleString()}</span>
-                      </button>
-                    ))}
-                  </div>
-                </aside>
-              )}
-
-              <div className={`${chatHistoryOpen ? "hidden sm:flex" : "flex"} min-h-0 min-w-0 flex-1 flex-col`}>
-            {/* Chat Messages */}
-            <div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-4">
-              {chatMessages.map((message, index) => (
-                <div
-                  key={index}
-                  className={`flex ${message.role === "user" ? "justify-end" : "justify-start"}`}
-                >
-                  <div
-                    className={`rounded-lg p-3 ${message.chartMarkup || message.tradeSummary ? "w-full max-w-full" : "max-w-[80%]"} ${
-                      message.role === "user" ? "bg-purple-600 text-white" : "bg-zinc-800 text-zinc-100"
-                    }`}
-                  >
-                    {"image" in message && message.image && !message.chartMarkup && (
-                      <img src={message.image} alt="Chart" className="w-full h-32 object-cover rounded-lg mb-2" />
-                    )}
-                    {message.chartMarkup && message.image && message.verdict && message.riskReward && (
-                      <div className="mb-3">
-                        <AnnotatedChart
-                          image={message.image}
-                          annotations={message.annotations ?? []}
-                          verdict={message.verdict}
-                          riskReward={message.riskReward}
-                        />
-                      </div>
-                    )}
-                    <p className="text-sm whitespace-pre-wrap">{message.content}</p>
-                    {message.tradePlan && message.tradeSummary && (
-                      <section aria-label="Trade plan summary" className="mt-3 space-y-3 rounded-lg border border-zinc-600 bg-zinc-950/80 p-3 text-xs">
-                        <div className="flex flex-wrap items-center justify-between gap-2">
-                          <h4 className="font-bold text-white">Copy-ready trade summary</h4>
-                          <span className={`font-bold ${message.tradePlan.direction === "wait" ? "text-amber-300" : "text-green-400"}`}>
-                            {message.tradePlan.direction === "wait" ? "WAIT · No approved setup" : `${message.tradePlan.direction.toUpperCase()} · Setup quality ${message.tradePlan.qualityScore ?? "n/a"}/100`}
-                          </span>
-                        </div>
-                        {message.tradePlan.direction !== "wait" && <p className="text-[10px] text-zinc-400">Setup quality is a qualitative evidence score, not a probability of profit.</p>}
-                        {message.chartPattern && <p className="text-zinc-300">Pattern: <strong className="text-white">{message.chartPattern}</strong></p>}
-                        {message.analysisExplanation && <p className="text-zinc-300">Why: {message.analysisExplanation}</p>}
-                        <div className="grid grid-cols-2 gap-x-3 gap-y-2 text-zinc-300">
-                          <span>Entry: <strong className="text-white">{message.tradePlan.entry === null ? "Not set" : formatMarketPrice(message.tradePlan.entry)}</strong></span>
-                          <span>Stop Loss: <strong className="text-white">{message.tradePlan.stopLoss === null ? "Not set" : formatMarketPrice(message.tradePlan.stopLoss)}</strong></span>
-                          <span>Take Profit: <strong className="text-white">{message.tradePlan.takeProfit === null ? "Not set" : formatMarketPrice(message.tradePlan.takeProfit)}</strong></span>
-                          <span>Position size: <strong className="text-white">{message.tradeSummary.size}</strong></span>
-                          <span>Leverage: <strong className="text-white">{message.tradeSummary.leverage}</strong></span>
-                          <span>Balance: <strong className="text-white">{message.tradeSummary.balance}</strong></span>
-                          <span>Risk / max loss: <strong className="text-white">{message.tradeSummary.maxLoss}</strong></span>
-                          <span>Reward:risk: <strong className="text-white">{message.tradeSummary.rewardRisk}</strong></span>
-                          <span className="col-span-2">Estimated reward before fees/slippage: <strong className="text-white">{message.tradeSummary.estimatedProfit}</strong></span>
-                        </div>
-                        <div className="space-y-1 border-t border-zinc-800 pt-2 text-[10px] leading-relaxed text-amber-200">
-                          <p>{tradeSafetyNotes(message.language).warning}</p>
-                          <p>{tradeSafetyNotes(message.language).probability}</p>
-                        </div>
-                        {message.tradeSummary.highRisk && <p className="font-bold text-red-400">Warning: planned risk is over 10% of the balance.</p>}
-                        {message.indicatorSummary && (
-                          <p className="border-t border-zinc-800 pt-2 text-[10px] leading-relaxed text-zinc-400">
-                            Indicators: RSI(14) {message.indicatorSummary.rsi14?.toFixed(1) ?? "n/a"}; MACD histogram {message.indicatorSummary.macd ? formatMarketPrice(message.indicatorSummary.macd.histogram) : "n/a"}; SMA20/50 {message.indicatorSummary.movingAverages.sma20 === null ? "n/a" : formatMarketPrice(message.indicatorSummary.movingAverages.sma20)} / {message.indicatorSummary.movingAverages.sma50 === null ? "n/a" : formatMarketPrice(message.indicatorSummary.movingAverages.sma50)}. Bollinger {message.indicatorSummary.bollingerBands ? `${formatMarketPrice(message.indicatorSummary.bollingerBands.lower)}–${formatMarketPrice(message.indicatorSummary.bollingerBands.upper)}` : "n/a"}; Fib 50% {message.indicatorSummary.fibonacci ? formatMarketPrice(message.indicatorSummary.fibonacci.retracement.find((level) => level.ratio === 0.5)?.price ?? message.indicatorSummary.fibonacci.low) : "n/a"}. RSI compares recent up/down moves; MACD compares faster/slower averages; Bollinger bands show a recent price range; Fibonacci lines are possible pullback levels, not predictions.
-                          </p>
-                        )}
-                        {message.tradePlan.direction !== "wait" && (
-                          <div className="flex items-center gap-2">
-                            <button type="button" onClick={() => void copyTradePlan(message, index)} className="flex items-center gap-2 rounded border border-zinc-600 px-3 py-2 font-semibold text-zinc-100 hover:bg-zinc-800">
-                              <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 8V4h12v12h-4M4 8h12v12H4z" /></svg>
-                              {copiedTradeMessage === index ? "Copied" : "Copy trade"}
-                            </button>
-                          </div>
-                        )}
-                      </section>
-                    )}
-                  </div>
-                </div>
-              ))}
-              {chatLoading && (
-                <div className="flex justify-start">
-                  <div className="max-w-[80%] p-3 rounded-lg bg-zinc-800 text-zinc-100">
-                    <div className="flex items-center gap-2">
-                      <div className="w-2 h-2 bg-zinc-400 rounded-full animate-bounce"></div>
-                      <div className="w-2 h-2 bg-zinc-400 rounded-full animate-bounce" style={{ animationDelay: '0.1s' }}></div>
-                      <div className="w-2 h-2 bg-zinc-400 rounded-full animate-bounce" style={{ animationDelay: '0.2s' }}></div>
-                    </div>
-                  </div>
-                </div>
-              )}
-            </div>
-
-            {/* Chat Input */}
-            <div className="border-t border-zinc-700 p-4">
-              {/* Trading Parameters Toggle */}
-              <button
-                onClick={() => setShowTradingParams(!showTradingParams)}
-                className="w-full mb-3 px-3 py-2 bg-zinc-800 text-zinc-300 text-sm rounded-lg hover:bg-zinc-700 transition-colors flex items-center justify-center gap-2"
-              >
-                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 7h6m0 10v-3m-3 3h.01M9 17h.01M9 14h.01M12 14h.01M15 11h.01M12 11h.01M9 11h.01M7 21h10a2 2 0 002-2V5a2 2 0 00-2-2H7a2 2 0 00-2 2v14a2 2 0 002 2z" />
-                </svg>
-                {showTradingParams ? 'Hide Trading Parameters' : 'Show Trading Parameters'}
-              </button>
-
-              {/* Trading Parameters Input */}
-              {showTradingParams && (
-                <div className="mb-3 max-h-[30dvh] space-y-2 overflow-y-auto rounded-lg bg-zinc-800 p-3">
-                  <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-                    <div>
-                      <label className="text-xs text-zinc-400 mb-1 block">Account Balance ($)</label>
-                      <input
-                        type="number"
-                        min="0"
-                        step="any"
-                        value={tradingParams.accountBalance}
-                        onChange={(e) => setTradingParams({...tradingParams, accountBalance: e.target.value})}
-                        placeholder="1000"
-                        className="w-full px-2 py-1 bg-zinc-700 text-white text-sm rounded border border-zinc-600 focus:outline-none focus:border-purple-500"
-                      />
-                    </div>
-                    <div>
-                      <label className="text-xs text-zinc-400 mb-1 block">Risk Amount ($)</label>
-                      <input
-                        type="number"
-                        min="0"
-                        step="any"
-                        value={tradingParams.riskAmount}
-                        onChange={(e) => setTradingParams({...tradingParams, riskAmount: e.target.value})}
-                        placeholder="10"
-                        className="w-full px-2 py-1 bg-zinc-700 text-white text-sm rounded border border-zinc-600 focus:outline-none focus:border-purple-500"
-                      />
-                    </div>
-                    <div>
-                      <label className="text-xs text-zinc-400 mb-1 block">Target Profit ($)</label>
-                      <input
-                        type="number"
-                        min="0"
-                        step="any"
-                        value={tradingParams.targetProfit}
-                        onChange={(e) => setTradingParams({...tradingParams, targetProfit: e.target.value})}
-                        placeholder="20"
-                        className="w-full px-2 py-1 bg-zinc-700 text-white text-sm rounded border border-zinc-600 focus:outline-none focus:border-purple-500"
-                      />
-                    </div>
-                    <div>
-                      <label className="text-xs text-zinc-400 mb-1 block">Entry Price</label>
-                      <input
-                        type="number"
-                        min="0"
-                        step="any"
-                        value={tradingParams.entryPrice}
-                        onChange={(e) => setTradingParams({...tradingParams, entryPrice: e.target.value})}
-                        placeholder="Optional"
-                        className="w-full px-2 py-1 bg-zinc-700 text-white text-sm rounded border border-zinc-600 focus:outline-none focus:border-purple-500"
-                      />
-                    </div>
-                    <div>
-                      <label className="text-xs text-zinc-400 mb-1 block">Stop Loss Price</label>
-                      <input
-                        type="number"
-                        min="0"
-                        step="any"
-                        value={tradingParams.stopLossPrice}
-                        onChange={(e) => setTradingParams({...tradingParams, stopLossPrice: e.target.value})}
-                        placeholder="Optional"
-                        className="w-full px-2 py-1 bg-zinc-700 text-white text-sm rounded border border-zinc-600 focus:outline-none focus:border-purple-500"
-                      />
-                    </div>
-                    <div>
-                      <label className="text-xs text-zinc-400 mb-1 block">Sizing Method</label>
-                      <select
-                        value={tradingParams.sizeMode}
-                        onChange={(e) => setTradingParams({...tradingParams, sizeMode: e.target.value})}
-                        className="w-full px-2 py-1 bg-zinc-700 text-white text-sm rounded border border-zinc-600 focus:outline-none focus:border-purple-500"
-                      >
-                        <option value="lots">Lots (Forex/CFD)</option>
-                        <option value="units">Units (Spot/Shares)</option>
-                      </select>
-                    </div>
-                    {tradingParams.sizeMode === "lots" && (
-                      <div className="sm:col-span-2">
-                        <label className="text-xs text-zinc-400 mb-1 block">Value of a 1.00 Price Move per Lot ($)</label>
-                        <input
-                          type="number"
-                          min="0"
-                          step="any"
-                          value={tradingParams.valuePerPriceUnitPerLot}
-                          onChange={(e) => setTradingParams({...tradingParams, valuePerPriceUnitPerLot: e.target.value})}
-                          placeholder="Check your broker's contract specs"
-                          className="w-full px-2 py-1 bg-zinc-700 text-white text-sm rounded border border-zinc-600 focus:outline-none focus:border-purple-500"
-                        />
-                      </div>
-                    )}
-                  </div>
-                </div>
-              )}
-
-              <div className="flex min-w-0 gap-2">
-                <input
-                  type="text"
-                  value={chatInput}
-                  onChange={(e) => setChatInput(e.target.value)}
-                  onKeyPress={(e) => e.key === "Enter" && handleSendMessage()}
-                  placeholder="Ask about the market or describe the chart..."
-                  className="min-w-0 flex-1 rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-2 text-sm text-white focus:border-purple-500 focus:outline-none sm:px-4"
-                />
-                <button
-                  onClick={handleSendMessage}
-                  disabled={chatLoading}
-                  className="px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  {chatLoading ? (
-                    <svg className="w-5 h-5 animate-spin" fill="none" viewBox="0 0 24 24">
-                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                    </svg>
-                  ) : (
-                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                        strokeWidth={2}
-                        d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8"
-                      />
-                    </svg>
-                  )}
-                </button>
-              </div>
-            </div>
-              </div>
-            </div>
-          </div>
-        )}
-      </div>
+      {/* Floating AI Chatbot - single chat window via AITeacherChat */}
+      <AITeacherChat />
 
       {/* Phase 5 — floating educational overlays */}
       <BeginnerTooltips>{null}</BeginnerTooltips>
@@ -1946,7 +1663,7 @@ export default function Home() {
           educational purposes only and is not financial, investment, or trading advice. Crypto, forex,
           and stock markets are volatile — never risk money you cannot afford to lose.
         </p>
-        <p className="mt-1">100% free for everyone. No hidden charges. No paid signals.</p>
+        <p className="mt-1">100% free for everyone. No hidden charges. No paid analysis.</p>
       </footer>
     </div>
   );

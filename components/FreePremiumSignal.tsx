@@ -156,7 +156,7 @@ export default function FreePremiumSignal() {
   return (
     <section aria-label="Free premium analysis" className="space-y-4 rounded-xl border border-zinc-800 bg-zinc-950/70 p-4 sm:p-6">
       <header className="space-y-1">
-        <h2 className="text-lg font-bold tracking-wide text-white">💎 FREE PREMIUM SIGNAL</h2>
+        <h2 className="text-lg font-bold tracking-wide text-white">💎 FREE PREMIUM ANALYSIS</h2>
         <p className="text-sm text-zinc-400">Auto analysis - High confluence setups</p>
       </header>
       <nav className="flex flex-wrap gap-2" aria-label="Market categories">

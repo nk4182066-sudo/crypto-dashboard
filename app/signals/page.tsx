@@ -1,8 +1,9 @@
 "use client";
 
-// AI Signals page. Clean like /markets: market tabs, then high-confluence
-// setup cards (Score 75+ only), sorted highest first. Educational analysis
-// only — never "Signal", "Buy now", "accuracy" or "Guaranteed".
+// AI Signals page. Clean like /markets: market tabs, then every scanned setup
+// for that market (all-coins API scans the full universe), sorted by score
+// highest first. Educational analysis only — never "Signal", "Buy now",
+// "accuracy" or "Guaranteed".
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 
@@ -114,9 +115,9 @@ export default function SignalsPage() {
     };
   }, [market]);
 
-  // Score 75+ only, highest score first.
+  // Saare signals, highest score first — no minimum cutoff.
   const visible = useMemo(
-    () => signals.filter((s) => s.score >= 75).sort((a, b) => b.score - a.score),
+    () => [...signals].sort((first, second) => second.score - first.score),
     [signals]
   );
 
@@ -124,7 +125,8 @@ export default function SignalsPage() {
     <main className="mx-auto max-w-3xl px-4 py-4">
       <p className="text-xs uppercase tracking-wide" style={{ color: MUTED }}>Analysis</p>
       <div className="mb-3 flex items-center justify-between">
-        <h1 className="text-2xl font-bold" style={{ color: TEXT }}>💎 AI Signals</h1>
+        <h1 className="text-2xl font-bold" style={{ color: TEXT }}>💎 AI Setups</h1>
+        <span className="text-xs" style={{ color: MUTED }}>{visible.length} setups</span>
         {updatedAt && (
           <span className="text-xs" style={{ color: MUTED }}>Updated {timeAgo(updatedAt)}</span>
         )}
@@ -163,7 +165,7 @@ export default function SignalsPage() {
         </div>
       ) : visible.length === 0 ? (
         <div className="rounded-2xl border p-6 text-center text-sm" style={{ backgroundColor: CARD, borderColor: BORDER, color: MUTED }}>
-          No high-confluence setups today
+          Is market mein abhi koi setup nahi mila
         </div>
       ) : (
         <div className="flex flex-col gap-3">

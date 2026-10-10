@@ -137,23 +137,23 @@ export default function Navbar() {
         )}
       </header>
 
-      {/* Bottom tab bar (mobile) — fixed, 60px, safe-area aware */}
+      {/* Bottom tab bar (mobile) — 5 equal tabs, 60px, safe-area aware */}
       <nav
         className="fixed bottom-0 left-0 right-0 z-50 border-t lg:hidden"
         style={{ backgroundColor: CARD, borderColor: BORDER, paddingBottom: "env(safe-area-inset-bottom)" }}
       >
-        <ul className="flex h-[60px] items-stretch justify-around">
+        <ul className="flex h-[60px] items-stretch">
           {BOTTOM_LINKS.map((link) => {
             const active = isActive(pathname, link.href);
             return (
-              <li key={link.label} className="flex-1">
+              <li key={link.label} className="flex-1 min-w-0">
                 <Link
                   href={link.href}
-                  className="flex h-full flex-col items-center justify-center gap-0.5 text-[10px] font-medium transition-colors"
+                  className="flex h-full w-full flex-col items-center justify-center gap-0.5 py-2 text-[10px] font-medium transition-colors"
                   style={{ color: active ? GREEN : MUTED }}
                 >
-                  <span className="text-lg leading-none">{link.icon}</span>
-                  {link.label}
+                  <span className="flex h-5 w-5 items-center justify-center text-xl leading-none">{link.icon}</span>
+                  <span className="truncate max-w-full">{link.label}</span>
                 </Link>
               </li>
             );

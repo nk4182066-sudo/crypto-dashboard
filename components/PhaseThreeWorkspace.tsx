@@ -640,7 +640,7 @@ export default function PhaseThreeWorkspace({ coins, initialCoin, initialPanel =
         {panel === "chart" && <>
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div className="flex flex-wrap gap-1" role="group" aria-label="Chart timeframe">
-              {(["15m", "1h", "4h", "1d", "max"] as Timeframe[]).map((item) => <button key={item} type="button" onClick={() => setTimeframe(item)} aria-pressed={timeframe === item} className={`min-w-12 rounded border px-3 py-1.5 text-xs font-semibold ${timeframe === item ? "border-emerald-400 bg-emerald-400 text-zinc-950" : "border-zinc-700 text-zinc-300 hover:bg-zinc-800"}`}>{item === "max" ? "Max" : item}</button>)}
+              {(["15m", "1h", "4h", "1d", "max"] as Timeframe[]).map((item) => <button key={item} type="button" onClick={() => setTimeframe(item)} aria-pressed={timeframe === item} className={`rounded-lg px-3 py-1 text-xs font-semibold transition-colors ${timeframe === item ? "bg-[#00C087] text-black" : "bg-[#181A20] text-gray-400 hover:text-white"}`}>{item === "max" ? "Max" : item}</button>)}
             </div>
             {historyLoading && <span role="status" className="text-xs text-zinc-400">Updating candles…</span>}
           </div>

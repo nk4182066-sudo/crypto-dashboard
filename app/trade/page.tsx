@@ -226,11 +226,10 @@ function TradeChart() {
             type="button"
             onClick={() => setTimeframe(tf)}
             aria-pressed={timeframe === tf}
-            className="rounded-full px-3.5 py-1 text-xs font-semibold transition-colors"
+            className="rounded-lg px-3 py-1 text-xs font-semibold transition-colors"
             style={{
-              backgroundColor: timeframe === tf ? GREEN : CARD,
-              color: timeframe === tf ? BG : TEXT,
-              border: `1px solid ${BORDER}`,
+              backgroundColor: timeframe === tf ? "#00C087" : "#181A20",
+              color: timeframe === tf ? "#000000" : "#9CA3AF",
             }}
           >
             {tf}

@@ -144,10 +144,10 @@ export default function MarketsPage() {
             key={f.key}
             type="button"
             onClick={() => setFeed(f.key)}
-            className="rounded-full px-3.5 py-1 text-xs font-semibold transition-colors"
+            className="rounded-lg px-4 py-2 text-xs font-semibold transition-colors"
             style={{
               backgroundColor: feed === f.key ? GREEN : CARD,
-              color: feed === f.key ? BG : TEXT,
+              color: feed === f.key ? BG : "#9CA3AF",
               border: `1px solid ${BORDER}`,
             }}
           >

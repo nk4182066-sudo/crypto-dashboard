@@ -1,12 +1,19 @@
 "use client";
 
 // Candlestick pattern detail page. Reads the pattern name from the route and
-// renders its catalogue entry (Roman Urdu explanation + how to act).
-// Educational only. Not financial advice.
-import { useMemo } from "react";
+// renders its catalogue entry with [Roman Urdu] [English] tabs (default Urdu,
+// choice saved to localStorage). Educational only. Not financial advice.
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { candlestickPatternDefs, type PatternType } from "@/src/lib/chart/candlestickPatterns";
+import {
+  PATTERN_LANGUAGE_STORAGE_KEY,
+  candlestickActionText,
+  candlestickEnglish,
+  type PatternDetailLanguage,
+} from "@/src/lib/chart/patternLanguage";
+import PatternLanguageTabs from "@/components/PatternLanguageTabs";
 
 const CARD = "#181A20";
 const BORDER = "#2B3139";
@@ -24,21 +31,31 @@ function typeColor(type: PatternType): string {
   return type === "bullish" ? GREEN : type === "bearish" ? RED : GRAY;
 }
 
-/** "Kya karein" — one educational next-step line driven by the pattern type. */
-function actionFor(type: PatternType): string {
-  if (type === "bullish") {
-    return "Ek confirm green candle (higher close) ka wait karein, phir chhota risk ke saath soch samajh ke plan banayein. Stop-loss neeche rakhein. Educational only.";
-  }
-  if (type === "bearish") {
-    return "Ek confirm red candle (lower close) ka wait karein. Upar ke levels par selling pressure badh sakta hai — risk manage karein. Educational only.";
-  }
-  return "Market confused hai. Direction pakki hone tak wait karein, abhi entry se bachein. Educational only.";
-}
-
 export default function CandlestickDetailPage() {
   const params = useParams();
   const rawName = Array.isArray(params.name) ? params.name[0] : params.name;
   const name = typeof rawName === "string" ? decodeURIComponent(rawName) : "";
+
+  const [lang, setLang] = useState<PatternDetailLanguage>("urdu");
+
+  // Restore the shared language preference once on mount (default: Roman Urdu).
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem(PATTERN_LANGUAGE_STORAGE_KEY);
+      if (saved === "english" || saved === "urdu") setLang(saved);
+    } catch {
+      /* localStorage unavailable — stay on default */
+    }
+  }, []);
+
+  const handleLangChange = (next: PatternDetailLanguage) => {
+    setLang(next);
+    try {
+      localStorage.setItem(PATTERN_LANGUAGE_STORAGE_KEY, next);
+    } catch {
+      /* ignore write failures */
+    }
+  };
 
   const def = useMemo(() => candlestickPatternDefs.find((d) => d.name === name), [name]);
 
@@ -51,23 +68,33 @@ export default function CandlestickDetailPage() {
     );
   }
 
+  const english = candlestickEnglish[def.name];
+  const what = lang === "urdu" ? def.romanUrdu : english?.what ?? def.romanUrdu;
+  const matlab = lang === "urdu" ? def.matlab : english?.matlab ?? def.matlab;
+  const action = candlestickActionText(def.type, lang);
+
   return (
     <main className="mx-auto max-w-3xl px-4 py-4">
       <Link href="/candlestick" className="text-sm font-semibold" style={{ color: GREEN }}>← Back</Link>
 
       <div className="mt-3 rounded-2xl border p-5" style={{ backgroundColor: CARD, borderColor: BORDER }}>
-        <h1 className="text-2xl font-bold" style={{ color: TEXT }}>{def.name}</h1>
-        <span
-          className="mt-2 inline-block rounded-full px-2.5 py-0.5 text-xs font-semibold"
-          style={{ color: typeColor(def.type), backgroundColor: "rgba(255,255,255,0.06)" }}
-        >
-          {typeLabel(def.type)}
-        </span>
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div className="min-w-0">
+            <h1 className="text-2xl font-bold" style={{ color: TEXT }}>{def.name}</h1>
+            <span
+              className="mt-2 inline-block rounded-full px-2.5 py-0.5 text-xs font-semibold"
+              style={{ color: typeColor(def.type), backgroundColor: "rgba(255,255,255,0.06)" }}
+            >
+              {typeLabel(def.type)}
+            </span>
+          </div>
+          <PatternLanguageTabs value={lang} onChange={handleLangChange} />
+        </div>
 
         <div className="mt-5 flex flex-col gap-4">
-          <Block title="Ye kya hai" body={def.romanUrdu} />
-          <Block title="Matlab kya hai" body={def.matlab} />
-          <Block title="Kya karein" body={actionFor(def.type)} />
+          <Block title="Ye kya hai" body={what} />
+          <Block title="Matlab kya hai" body={matlab} />
+          <Block title="Kya karein" body={action} />
         </div>
 
         <p className="mt-6 text-xs" style={{ color: MUTED }}>⚠️ Educational only. Not financial advice.</p>
