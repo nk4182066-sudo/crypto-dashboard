@@ -11,6 +11,8 @@ import PatternLanguageTabs, { type PatternDetailLanguage } from "@/components/Pa
 import { generateFullSignal, type FullSignal } from "@/src/lib/signalGenerator";
 import { saveSignal, MIN_SCORE } from "@/src/lib/signalStorage";
 import { CandlestickVisual, ChartPatternVisual } from "@/components/PatternVisuals";
+import { TrendBadge, ConfirmationSection, ExpertPanel, GuidanceSection } from "@/components/AnalysisInsights";
+import { buildGuidance, type ConfirmationIndicator, type Consensus, type EducatorVerdict } from "@/src/lib/confirmations";
 
 const LANG_STORAGE_KEY = "signals-language";
 
@@ -43,6 +45,10 @@ interface MarketSignal {
   chartPatternNote: string | null;
   candlestickPattern: string | null;
   candlestickConfidence: number;
+  /** Feature 2 — real-data confirmation breakdown (null when candles are cold). */
+  confirmations?: { indicators: ConfirmationIndicator[]; confirmed: number; total: number } | null;
+  /** Feature 3 — expert panel + consensus (save requires agreed >= 3). */
+  experts?: { educators: EducatorVerdict[]; consensus: Consensus } | null;
 }
 
 const TABS: { key: Market; label: string }[] = [
@@ -179,6 +185,9 @@ export default function SignalsPage() {
     if (loading) return;
     for (const signal of visible) {
       if (signal.score < MIN_SCORE) continue;
+      // Feature 3 — only save setups where at least 3 of 4 experts agree
+      // (and skip when the panel data is missing entirely).
+      if (!signal.experts || signal.experts.consensus.agreed < 3) continue;
       const full: FullSignal = generateFullSignal({
         symbol: signal.symbol,
         market: signal.market,
@@ -294,15 +303,34 @@ export default function SignalsPage() {
             const teacher = lang === "urdu" ? full.teacherNotesRomanUrdu : full.teacherNotesEnglish;
             const dirColor = full.direction === "bearish" ? RED : full.direction === "bullish" ? GREEN : MUTED;
             const href = `/trade?symbol=${encodeURIComponent(signal.symbol)}&market=${signal.market}`;
+            // Feature 4 — expert guidance quotes built from the panel summary.
+            const guidanceQuotes =
+              signal.confirmations && signal.experts
+                ? buildGuidance(
+                    { confirmed: signal.confirmations.confirmed, consensus: signal.experts.consensus },
+                    {
+                      direction: signal.direction,
+                      price: signal.price,
+                      support: signal.support ?? signal.price,
+                      resistance: signal.resistance ?? signal.price,
+                      pattern: signal.chartPattern ?? signal.pattern,
+                      breakout: false,
+                      score: signal.score,
+                    }
+                  )
+                : [];
             return (
-              <Link
+              <div
                 key={`${signal.market}:${signal.symbol}`}
+                className="overflow-hidden rounded-2xl border"
+                style={{ backgroundColor: CARD, borderColor: BORDER }}
+              >
+              <Link
                 href={href}
                 // Task 4 — prefetch the trade route on hover/focus for instant open.
                 onMouseEnter={() => router.prefetch(href)}
                 onFocus={() => router.prefetch(href)}
-                className="block rounded-2xl border p-4 transition-colors hover:border-[#3b4252]"
-                style={{ backgroundColor: CARD, borderColor: BORDER }}
+                className="block p-4 transition-colors hover:bg-[#1f232b]"
               >
                 {/* Header */}
                 <div className="mb-2 flex items-center justify-between">
@@ -311,6 +339,9 @@ export default function SignalsPage() {
                     {tier.emoji} Score: {signal.score}/100
                   </span>
                 </div>
+
+                {/* Feature 1 — full-width trend badge at the top of the card. */}
+                <TrendBadge direction={signal.direction} score={signal.score} />
 
                 <div className="mb-3 flex flex-wrap items-center gap-x-2 gap-y-1 text-sm">
                   <span className="font-semibold" style={{ color: dirColor }}>{directionLabel(signal.direction)}</span>
@@ -401,8 +432,21 @@ export default function SignalsPage() {
                 <Section title={lang === "urdu" ? "🎓 Teacher Notes (Roman Urdu)" : "🎓 Teacher Notes (English)"} />
                 <p className="text-xs leading-relaxed" style={{ color: MUTED }}>{teacher}</p>
 
-                <p className="mt-3 text-xs" style={{ color: MUTED }}>⚠️ Educational only. Not financial advice.</p>
+                {/* Features 2-3 — confirmation indicators + expert panel. */}
+                {signal.confirmations ? <ConfirmationSection report={signal.confirmations} /> : null}
+                {signal.experts ? (
+                  <ExpertPanel educators={signal.experts.educators} consensus={signal.experts.consensus} />
+                ) : null}
               </Link>
+              {/* Feature 4 — expandable guidance lives outside the link so the
+                  expand buttons do not trigger card navigation. */}
+              {guidanceQuotes.length > 0 ? (
+                <div className="px-4 pb-1">
+                  <GuidanceSection quotes={guidanceQuotes} />
+                </div>
+              ) : null}
+              <p className="px-4 pb-4 pt-2 text-xs" style={{ color: MUTED }}>⚠️ Educational only. Not financial advice.</p>
+            </div>
             );
           })}
         </div>

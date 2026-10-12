@@ -5,6 +5,7 @@ import { scanUniverse, type ScanMarket, type ScanTarget } from "@/src/scanner/un
 import type { Candle } from "@/src/analysis/types";
 import { detectCandlestickPattern } from "@/src/lib/signalGenerator";
 import { evaluateSignal, type TradePlan } from "@/src/analysis/signalGate";
+import { buildConfirmations, buildEducators, type ConfirmationIndicator, type Consensus, type EducatorVerdict } from "@/src/lib/confirmations";
 
 export const dynamic = "force-dynamic";
 
@@ -55,6 +56,10 @@ export interface MarketSignal {
   plan?: TradePlan;
   /** Why the strict gate rejected the signal (transparency), or null when it passed. */
   gateReason?: string | null;
+  /** Feature 2 — real-data confirmation breakdown (RSI/MACD/EMA/Volume). */
+  confirmations?: { indicators: ConfirmationIndicator[]; confirmed: number; total: number } | null;
+  /** Feature 3 — the 4-educator panel + consensus (agreed >= 3 = delivery-grade). */
+  experts?: { educators: EducatorVerdict[]; consensus: Consensus } | null;
 }
 
 // ------------------------------------------------------------------ frequency
@@ -267,6 +272,32 @@ export async function GET(request: Request) {
       .filter((p) => p.confidence >= 85)
       .sort((a, b) => b.confidence - a.confidence)[0] ?? null;
 
+    // Features 2-3 — real-candle confirmations + expert panel for this setup.
+    // Serializes into `confirmations` / `experts` below; degrade to null when
+    // the candle cache is cold so the card still renders without them.
+    const insightInput = {
+      candles,
+      price: item.price,
+      direction,
+      support: support ?? item.price,
+      resistance: resistance ?? item.price,
+      pattern: classical?.name ?? null,
+      breakout: false,
+      score: item.confidence,
+    };
+    let confirmations: MarketSignal["confirmations"] = null;
+    let experts: MarketSignal["experts"] = null;
+    if (candles.length >= 30) {
+      try {
+        const report = buildConfirmations(insightInput);
+        const built = buildEducators(report, insightInput);
+        confirmations = { indicators: report.indicators, confirmed: report.confirmed, total: report.total };
+        experts = { educators: built.educators, consensus: built.consensus };
+      } catch (error) {
+        console.warn("[market-signals] confirmation build failed:", error);
+      }
+    }
+
     emitted.push({
       symbol: item.symbol,
       label: item.label,
@@ -287,6 +318,8 @@ export async function GET(request: Request) {
       candlestickConfidence: candleHit?.confidence ?? 0,
       plan: gate.plan,
       gateReason: null,
+      confirmations,
+      experts,
     });
     recordEmission(item.symbol, item.market, now);
   }

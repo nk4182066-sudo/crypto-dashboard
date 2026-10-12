@@ -12,6 +12,8 @@ import { zigZag } from "@/src/analysis/structure";
 import { getChartAnalysis, type ChartAnalysis } from "@/src/lib/autoChartAnalysis";
 import { normalizeSymbol } from "@/src/lib/chart/symbol";
 import { recordHighConfluenceSetup } from "@/src/lib/signalHistory";
+import { buildConfirmations, buildEducators, buildGuidance } from "@/src/lib/confirmations";
+import { TrendBadge, ConfirmationSection, ExpertPanel, GuidanceSection } from "@/components/AnalysisInsights";
 
 const BG = "#0B0E11";
 const CARD = "#181A20";
@@ -272,6 +274,26 @@ function TradeChart() {
   const verdictColor =
     analysis?.tradeStatus === "SETUP_FORMING" ? GREEN : analysis?.tradeStatus === "WATCH" ? "#f0b90b" : MUTED;
 
+  // Features 1-4: confirmations (RSI/MACD/EMA/Volume), expert panel and
+  // guidance — all derived from the REAL candles + analysis. Educational only.
+  const insights = useMemo(() => {
+    if (!analysis || candles.length < 30) return null;
+    const input = {
+      candles,
+      price: analysis.currentPrice || candles[candles.length - 1].close,
+      direction: analysis.direction,
+      support: analysis.support,
+      resistance: analysis.resistance,
+      pattern: topPattern === "No clear pattern" ? null : topPattern,
+      breakout: breakout > 0,
+      score: analysis.score,
+    };
+    const report = buildConfirmations(input);
+    const { educators, consensus } = buildEducators(report, input);
+    const guidance = buildGuidance({ confirmed: report.confirmed, consensus }, input);
+    return { report: { ...report, educators, consensus }, educators, consensus, guidance };
+  }, [analysis, candles, topPattern, breakout, score]);
+
   return (
     <main className="mx-auto max-w-3xl px-4 py-4">
       {/* Fullscreen container: header + timeframe + chart stay visible when fullscreen */}
@@ -385,6 +407,8 @@ function TradeChart() {
       {/* AI Analysis box below the chart */}
       <section aria-label="AI analysis" className="mt-4 rounded-2xl border p-4" style={{ backgroundColor: CARD, borderColor: BORDER }}>
         <h2 className="mb-3 text-sm font-bold" style={{ color: TEXT }}>📊 AI ANALYSIS</h2>
+        {/* Feature 1 — full-width trend badge (BULLISH / BEARISH / NEUTRAL). */}
+        {analysis ? <TrendBadge direction={analysis.direction} score={analysis.score} /> : null}
         <div className="flex flex-col gap-2 text-sm">
           <Row label="Pattern" value={topPattern} />
           <Row label="Score" value={`${score}/100`} />
@@ -397,6 +421,10 @@ function TradeChart() {
             <span className="text-sm font-bold" style={{ color: verdictColor }}>{verdict}</span>
           </div>
         </div>
+        {/* Features 2-4 — confirmation indicators, expert panel, expert guidance. */}
+        {insights ? <ConfirmationSection report={insights.report} /> : null}
+        {insights ? <ExpertPanel educators={insights.educators} consensus={insights.consensus} /> : null}
+        {insights ? <GuidanceSection quotes={insights.guidance} /> : null}
         <p className="mt-3 text-xs" style={{ color: MUTED }}>⚠️ Educational only. Not financial advice.</p>
       </section>
 
