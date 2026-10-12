@@ -13,6 +13,7 @@ import { saveSignal, MIN_SCORE } from "@/src/lib/signalStorage";
 import { CandlestickVisual, ChartPatternVisual } from "@/components/PatternVisuals";
 import { TrendBadge, ConfirmationSection, ExpertPanel, GuidanceSection } from "@/components/AnalysisInsights";
 import { buildGuidance, type ConfirmationIndicator, type Consensus, type EducatorVerdict } from "@/src/lib/confirmations";
+import type { CloudDoc } from "@/src/lib/signalCloud";
 
 const LANG_STORAGE_KEY = "signals-language";
 
@@ -58,16 +59,10 @@ const TABS: { key: Market; label: string }[] = [
   { key: "metals", label: "Metals" },
 ];
 
-const REFRESH_MS = 5 * 60 * 1000;
-
-// Task 2 — placeholder setups shown instantly while the live scan loads, so the
-// page never sits on an empty skeleton. Replaced by real data within ~1-2s.
-// Approx values only. Educational only.
-const PLACEHOLDER_SIGNALS: MarketSignal[] = [
-  { symbol: "BTCUSDT", label: "BTC/USDT", market: "crypto", score: 92, direction: "bullish", bias: "Bullish", price: 83000, pattern: "Double Bottom", support: 81000, resistance: 85000, watchLevel: 81000, reason: "Support bounce with rising volume.", analyzedAt: new Date().toISOString(), chartPattern: "Double Bottom", chartPatternNote: "Two equal lows with a peak between.", candlestickPattern: "Hammer", candlestickConfidence: 85 },
-  { symbol: "ETHUSDT", label: "ETH/USDT", market: "crypto", score: 87, direction: "bullish", bias: "Bullish", price: 2300, pattern: "Cup & Handle", support: 2250, resistance: 2400, watchLevel: 2250, reason: "Cup & Handle breakout forming.", analyzedAt: new Date().toISOString(), chartPattern: "Cup & Handle", chartPatternNote: "U shape with a small handle dip.", candlestickPattern: "Bullish Engulfing", candlestickConfidence: 80 },
-  { symbol: "SOLUSDT", label: "SOL/USDT", market: "crypto", score: 84, direction: "bullish", bias: "Bullish", price: 109, pattern: "Ascending Triangle", support: 105, resistance: 112, watchLevel: 105, reason: "Ascending triangle near resistance.", analyzedAt: new Date().toISOString(), chartPattern: "Ascending Triangle", chartPatternNote: "Flat resistance with rising support.", candlestickPattern: "Three White Soldiers", candlestickConfidence: 78 },
-];
+// MASLA 2 — auto-refresh every 30s (spec); also re-runs the 4h TTL check.
+const REFRESH_MS = 30 * 1000;
+/** Stored setups (cloud/backup) older than this expire — same 4h window. */
+const SIGNAL_TTL_MS = 4 * 60 * 60 * 1000;
 
 function fmtPrice(p: number | null): string {
   if (p == null || !Number.isFinite(p) || p === 0) return "—";
@@ -115,11 +110,18 @@ function timeAgo(iso: string): string {
 export default function SignalsPage() {
   const router = useRouter();
   const [market, setMarket] = useState<Market>("crypto");
-  // Task 2 — start with placeholder setups so cards appear instantly (no skeleton).
-  const [signals, setSignals] = useState<MarketSignal[]>(PLACEHOLDER_SIGNALS);
+  // MASLA 2 — three sources merged below: live API, Firestore (real-time) and
+  // the localStorage backup, so setups never vanish on reload.
+  const [apiSignals, setApiSignals] = useState<MarketSignal[]>([]);
+  const [cloudSignals, setCloudSignals] = useState<MarketSignal[]>([]);
+  const [backupSignals, setBackupSignals] = useState<MarketSignal[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [updatedAt, setUpdatedAt] = useState<string | null>(null);
+  // Bumped on every refresh so the 4h TTL re-checks while the page stays open.
+  const [tick, setTick] = useState(0);
+  // Spec: the "Abhi koi signal nahi" empty state appears only after 5 seconds.
+  const [fiveSecDone, setFiveSecDone] = useState(false);
   // Dual-language detail toggle (Task 2). Default Roman Urdu, saved to localStorage.
   const [lang, setLang] = useState<PatternDetailLanguage>("urdu");
 
@@ -141,6 +143,16 @@ export default function SignalsPage() {
     }
   };
 
+  // Spec — the empty state may appear only after 5 seconds of loader;
+  // real data (API / cloud / backup) shows the moment it arrives.
+  useEffect(() => {
+    const timer = window.setTimeout(() => setFiveSecDone(true), 5_000);
+    return () => window.clearTimeout(timer);
+  }, []);
+
+  // Live API — refresh every 30s (spec). Results merge with the cloud/backup
+  // sources below instead of replacing them, so a slow or empty scan never
+  // wipes setups that are already on screen.
   useEffect(() => {
     let cancelled = false;
     const load = async () => {
@@ -151,15 +163,18 @@ export default function SignalsPage() {
         if (!response.ok) throw new Error("Failed to load setups");
         const payload = (await response.json()) as { generatedAt?: string; results?: MarketSignal[] };
         if (cancelled) return;
-        setSignals(Array.isArray(payload.results) ? payload.results : []);
+        setApiSignals(Array.isArray(payload.results) ? payload.results : []);
         setUpdatedAt(payload.generatedAt ?? null);
       } catch {
         if (!cancelled) {
           setError("Setups load nahi ho sake. Thodi der baad try karein.");
-          // Task 2/7 — keep whatever we have (placeholders) instead of emptying.
+          // Keep whatever we have (cloud + backup) instead of emptying.
         }
       } finally {
-        if (!cancelled) setLoading(false);
+        if (!cancelled) {
+          setLoading(false);
+          setTick((current) => current + 1);
+        }
       }
     };
     void load();
@@ -170,11 +185,79 @@ export default function SignalsPage() {
     };
   }, [market]);
 
+  // Cloud layer — real-time Firestore listener + localStorage backup restore.
+  // Dynamic import keeps firebase/firestore out of the initial page bundle.
+  useEffect(() => {
+    let cancelled = false;
+    let unsubscribe: (() => void) | undefined;
+    void import("@/src/lib/signalCloud")
+      .then((cloud) => {
+        if (cancelled) return;
+        setBackupSignals(cloud.loadSignalBackup() as unknown as MarketSignal[]);
+        unsubscribe = cloud.subscribeSignals((docs) => {
+          if (!cancelled) setCloudSignals(docs as unknown as MarketSignal[]);
+        });
+      })
+      .catch((cloudError) => console.warn("[signals] cloud layer unavailable:", cloudError));
+    return () => {
+      cancelled = true;
+      unsubscribe?.();
+    };
+  }, []);
+
+  // Merge live API + cloud + backup into one list: one card per market:symbol,
+  // newest analysis wins (the live API is applied last so it wins ties).
+  // Stored copies older than the 4h TTL drop out while the page is open —
+  // `tick` changes every 30s, which re-runs that freshness filter.
+  const signals = useMemo(() => {
+    const now = Date.now();
+    const fresh = (signal: MarketSignal): boolean => {
+      const stamp = Date.parse(signal.analyzedAt);
+      return Number.isFinite(stamp) && now - stamp < SIGNAL_TTL_MS;
+    };
+    const byKey = new Map<string, MarketSignal>();
+    const put = (signal: MarketSignal) => {
+      const key = `${signal.market}:${signal.symbol}`;
+      const previous = byKey.get(key);
+      if (!previous) {
+        byKey.set(key, signal);
+        return;
+      }
+      const previousAt = Date.parse(previous.analyzedAt) || 0;
+      const incomingAt = Date.parse(signal.analyzedAt) || 0;
+      if (incomingAt > previousAt || (incomingAt === previousAt && signal.score >= previous.score)) {
+        byKey.set(key, signal);
+      }
+    };
+    backupSignals.filter(fresh).forEach(put);
+    cloudSignals.filter(fresh).forEach(put);
+    apiSignals.forEach(put);
+    return [...byKey.values()];
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- `tick` intentionally re-triggers the TTL filter
+  }, [apiSignals, cloudSignals, backupSignals, tick]);
+
   // High-confluence only: hide anything below 80/100. Highest score first.
   const visible = useMemo(
     () => signals.filter((s) => s.score >= 80).sort((first, second) => second.score - first.score),
     [signals]
   );
+
+  // Backup layer — persist whatever is on screen so the next reload starts
+  // from it (works even without Firebase / offline).
+  useEffect(() => {
+    if (signals.length === 0) return;
+    let cancelled = false;
+    void import("@/src/lib/signalCloud")
+      .then((cloud) => {
+        if (!cancelled) cloud.saveSignalBackup(signals as unknown as CloudDoc[]);
+      })
+      .catch(() => {
+        /* backup optional */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [signals]);
 
   // Auto-save every 80+ setup into localStorage so the Results page can track it
   // A→Z (entries, SL, TP1-3, support/resistance, trend, pattern, candlestick).
@@ -263,17 +346,24 @@ export default function SignalsPage() {
         ))}
       </div>
 
-      {/* Cards — no skeleton: placeholders show instantly while the live scan runs. */}
+      {/* Cards — stored setups (Firestore + localStorage backup) survive reloads. */}
       {error && visible.length === 0 ? (
         <div className="rounded-2xl border p-6 text-center text-sm" style={{ backgroundColor: CARD, borderColor: BORDER, color: RED }}>
           {error}
         </div>
-      ) : visible.length === 0 && !loading ? (
-        <div className="rounded-2xl border p-6 text-center text-sm" style={{ backgroundColor: CARD, borderColor: BORDER, color: MUTED }}>
-          <p>Abhi koi high-confluence setup nahi hai.</p>
-          <p className="mt-1">Market analysis chal raha hai — thodi der baad check karein.</p>
-          <p className="mt-2 text-xs opacity-70">(Sirf 80+ score wale setups yahan dikhte hain.)</p>
-        </div>
+      ) : visible.length === 0 ? (
+        fiveSecDone && !loading ? (
+          <div className="rounded-2xl border p-6 text-center text-sm" style={{ backgroundColor: CARD, borderColor: BORDER, color: MUTED }}>
+            <p>Abhi koi signal nahi.</p>
+            <p className="mt-1">Market analysis chal raha hai — 30 second baad dobara check karein.</p>
+            <p className="mt-2 text-xs opacity-70">(Sirf 80+ score wale setups yahan dikhte hain.)</p>
+          </div>
+        ) : (
+          <div className="animate-pulse rounded-2xl border p-6 text-center text-sm" style={{ backgroundColor: CARD, borderColor: BORDER, color: MUTED }} role="status">
+            <p>Signals load ho rahe hain…</p>
+            <p className="mt-1 text-xs opacity-70">Live market scan chal raha hai.</p>
+          </div>
+        )
       ) : (
         <div className="flex flex-col gap-3">
           {loading && (

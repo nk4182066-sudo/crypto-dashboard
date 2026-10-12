@@ -13,9 +13,11 @@ const dev = process.env.NODE_ENV !== "production";
 const hostname = process.env.HOSTNAME ?? "localhost";
 const port = Number(process.env.PORT ?? 3000);
 
-const app = next({ dev, hostname, port, // Match the previous `next dev --webpack` behaviour; the custom
-  // server does not pick up the CLI flag on its own.
-  turbopack: false });
+const app = next({ dev, hostname, port, // Match `next dev --webpack`: Turbopack crashes writing chunks
+  // through OneDrive's cloud file provider (os error 404). A custom server must
+  // opt in with `webpack: true` — `turbopack: false` alone falls back to
+  // Turbopack "auto" mode (see next/dist/server/next.js createServer).
+  webpack: true });
 const handle = app.getRequestHandler();
 
 async function main() {

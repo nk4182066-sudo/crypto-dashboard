@@ -1,10 +1,12 @@
 "use client";
 
 // Enable-alerts card — permission + on/off toggle for the 15-min signal watcher.
-// 3 states: default (Enable button), granted (Enabled + Disable), denied
-// (Blocked + Open Settings link + steps + Reload). A "denied" permission cannot
-// be re-requested from JS, so the user is sent to browser settings. The user's
-// switch is stored in localStorage key "notifications-enabled". Educational only.
+// 3 states: default ("Enable Notifications" button → requestPermission), granted
+// ("✅ Enabled" green + Disable), denied ("❌ Blocked" + Open Settings button that
+// reveals the step-by-step guide — pages cannot open chrome:// links themselves —
+// + Reload). A "denied" permission cannot be re-requested from JS, so the guide
+// walks the user to browser settings. The user's switch is stored in localStorage
+// key "notifications-enabled". Educational only.
 import { useCallback, useEffect, useState } from "react";
 import {
   alertsEnabled,
@@ -24,13 +26,15 @@ const GREEN = "#00C087";
 const RED = "#F6465D";
 const BLUE = "#3B82F6";
 
-/** Browser notifications settings deep-link (Chrome / Edge / Brave). */
-const CHROME_SETTINGS_URL = "chrome://settings/content/notifications";
+/** Instructions are shown in-page: browsers refuse to open chrome:// links
+ *  from a normal page, so a dead anchor would help nobody. */
 
 export default function EnableNotifications() {
   // Drives the 3 UI states: "default" | "granted" | "denied" | "not-supported".
   const [status, setStatus] = useState<PermissionResult>("default");
   const [busy, setBusy] = useState(false);
+  // Denied state — toggle for the "Open Settings" step-by-step guide.
+  const [showSteps, setShowSteps] = useState(false);
 
   // Restore state on mount (no prompt): reflect the real permission and, when
   // already granted, whether the user's own switch is on.
@@ -118,7 +122,7 @@ export default function EnableNotifications() {
               className="mt-2 w-full rounded-lg py-2.5 text-sm font-bold transition-opacity disabled:opacity-60"
               style={{ backgroundColor: GREEN, color: "#0B0E11" }}
             >
-              {busy ? "…" : "🔔 Enable Alerts"}
+              {busy ? "…" : "🔔 Enable Notifications"}
             </button>
           ) : status === "granted" ? (
             <button
@@ -131,27 +135,39 @@ export default function EnableNotifications() {
             </button>
           ) : status === "denied" ? (
             <div className="mt-2 space-y-2">
-              {/* JS cannot re-enable a blocked permission — send the user to
-                  browser settings, then reload. */}
-              <a
-                href={CHROME_SETTINGS_URL}
+              {/* Clear blocked status (spec). */}
+              <p className="text-[11px] font-semibold leading-relaxed" style={{ color: RED }}>
+                Browser mein notifications blocked hain.
+              </p>
+              {/* Pages cannot open chrome:// links — the button reveals the
+                  step-by-step guide instead (spec: Open Settings → instructions). */}
+              <button
+                type="button"
+                onClick={() => setShowSteps((value) => !value)}
                 className="block w-full rounded-lg py-2.5 text-center text-sm font-bold"
                 style={{ backgroundColor: BLUE, color: "#FFFFFF" }}
               >
-                ⚙️ Open Settings
-              </a>
-              <div className="rounded-lg px-3 py-2" style={{ backgroundColor: "rgba(246,70,93,0.08)" }}>
-                <p className="text-[11px] font-semibold leading-relaxed" style={{ color: TEXT }}>
-                  Browser mein notifications allow karo:
-                </p>
-                <ol className="mt-1 list-inside list-decimal space-y-0.5 text-[11px] leading-relaxed" style={{ color: MUTED }}>
-                  <li>Chrome Settings</li>
-                  <li>Site Settings</li>
-                  <li>Notifications</li>
-                  <li>Allow this site</li>
-                  <li>Reload page</li>
-                </ol>
-              </div>
+                {showSteps ? "⚙️ Hide Settings Steps" : "⚙️ Open Settings"}
+              </button>
+              {showSteps ? (
+                <div className="rounded-lg px-3 py-2" style={{ backgroundColor: "rgba(59,130,246,0.10)" }}>
+                  <p className="text-[11px] font-semibold leading-relaxed" style={{ color: TEXT }}>
+                    Chrome Settings → Privacy → Site Settings → Notifications
+                  </p>
+                  <ol className="mt-1 list-inside list-decimal space-y-0.5 text-[11px] leading-relaxed" style={{ color: MUTED }}>
+                    <li>Chrome mein ⋮ → Settings kholo</li>
+                    <li>Privacy and security → Site Settings</li>
+                    <li>Notifications → Blocked sites list</li>
+                    <li>
+                      Is site ko <span className="font-bold" style={{ color: GREEN }}>Allow</span> karo
+                    </li>
+                    <li>Wapas is page pe aayein → 🔄 Reload</li>
+                  </ol>
+                  <p className="mt-1 text-[10px] leading-relaxed" style={{ color: MUTED }}>
+                    Note: browser khud chrome:// links page se open nahi hone deta — is liye steps diye gaye hain.
+                  </p>
+                </div>
+              ) : null}
               <button
                 type="button"
                 onClick={() => window.location.reload()}

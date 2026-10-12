@@ -17,10 +17,16 @@ const RED = "#F6465D";
 const LEVERAGE_OPTIONS = [1, 2, 5, 10, 20, 50] as const;
 
 interface RiskResults {
+  /** Balance × (Risk% / 100) — the amount actually at risk. */
+  riskAmount: string;
+  /** Max loss equals the risked amount (NOT position ÷ leverage). */
   maxLoss: string;
+  /** Balance × Leverage — total position value in USDT. */
   positionSize: string;
+  /** Conservative half of the risked amount (spec: risk ÷ 2). */
   safeTrade: string;
-  liquidation: string;
+  /** Approx adverse move % that triggers liquidation (100 / leverage). */
+  liquidationMovePct: string;
 }
 
 function money(value: number): string {
@@ -52,17 +58,25 @@ export default function RiskPage() {
       return;
     }
 
-    const maxLoss = (bal * risk) / 100;
+    // CORRECTED (MASLA 3) — spec math:
+    //   Risk Amount = Balance × (Risk% / 100)  -> 20 × 3%  = $0.60
+    //   Position    = Balance × Leverage       -> 20 × 20x = $400
+    //   Max Loss    = Risk Amount               (never divided by leverage)
+    //   Safe Trade  = Risk Amount ÷ 2 (conservative)
+    const riskAmount = (bal * risk) / 100;
     const positionSize = bal * leverage;
-    const safeTrade = maxLoss;
-    // Approx isolated-margin liquidation distance in dollar terms.
-    const liquidation = bal - bal / leverage;
+    const maxLoss = riskAmount;
+    const safeTrade = riskAmount / 2;
+    // Isolated-margin liquidation ≈ a 1/leverage move against entry
+    // (ignores maintenance margin + fees — educational approximation).
+    const liquidationMovePct = leverage > 0 ? 100 / leverage : 0;
 
     setResults({
+      riskAmount: riskAmount.toFixed(2),
       maxLoss: maxLoss.toFixed(2),
       positionSize: positionSize.toFixed(2),
       safeTrade: safeTrade.toFixed(2),
-      liquidation: liquidation.toFixed(2),
+      liquidationMovePct: liquidationMovePct.toFixed(2),
     });
     setError(null);
   }, [balance, leverage, riskPercent]);
@@ -71,6 +85,10 @@ export default function RiskPage() {
   useEffect(() => {
     handleCalculate();
   }, [handleCalculate]);
+
+  // Display helpers for the spec Roman Urdu sentence (3% → safe 1.5%).
+  const riskNum = Number(riskPercent) || 0;
+  const halfRisk = Number((riskNum / 2).toFixed(2));
 
   return (
     <main className="mx-auto max-w-3xl px-4 py-4">
@@ -139,14 +157,26 @@ export default function RiskPage() {
       {/* Divider */}
       <div className="my-5 border-t" style={{ borderColor: BORDER }} />
 
-      {/* Results */}
+      {/* Results — spec panel: input echo, then the corrected metrics. */}
       <section aria-label="Risk results" className="rounded-2xl border p-4" style={{ backgroundColor: CARD, borderColor: BORDER }}>
-        <h2 className="mb-3 text-sm font-bold" style={{ color: TEXT }}>📊 RESULTS:</h2>
+        <h2 className="mb-3 text-sm font-bold" style={{ color: TEXT }}>💰 RISK ANALYSIS</h2>
         <div className="flex flex-col gap-2 text-sm">
-          <Row label="Max Loss" value={money(Number(results?.maxLoss ?? 0))} valueColor={RED} />
-          <Row label="Position Size" value={money(Number(results?.positionSize ?? 0))} />
-          <Row label="Safe Trade" value={money(Number(results?.safeTrade ?? 0))} />
-          <Row label="Liquidation Price" value={money(Number(results?.liquidation ?? 0))} valueColor={MUTED} />
+          <Row label="Balance" value={money(Number(balance) || 0)} />
+          <Row label="Leverage" value={`${leverage}x`} />
+          <Row label="Risk %" value={`${riskNum}%`} />
+        </div>
+        <div className="my-3 border-t" style={{ borderColor: BORDER }} />
+        <div className="flex flex-col gap-2 text-sm">
+          <Row label="Risk Amount" value={`${money(Number(results?.riskAmount ?? 0))} USDT`} valueColor={GREEN} />
+          <Row label="Position Size" value={`${money(Number(results?.positionSize ?? 0))} USDT`} />
+          <Row label="Max Loss" value={`${money(Number(results?.maxLoss ?? 0))} USDT`} valueColor={RED} />
+          <Row label="Safe Trade" value={`${money(Number(results?.safeTrade ?? 0))} USDT`} valueColor={GREEN} />
+          <Row
+            label="Liquidation"
+            value={`≈ ${results?.liquidationMovePct ?? "0.00"}% move`}
+            valueColor={MUTED}
+            note="against entry (isolated, approx)"
+          />
         </div>
       </section>
 
@@ -156,7 +186,7 @@ export default function RiskPage() {
         <p className="text-sm leading-relaxed" style={{ color: MUTED }}>
           {error
             ? "Balance aur leverage theek se bharein, phir calculate karein."
-            : `Is trade mein aap ${money(Number(results?.maxLoss ?? 0))} lose kar sakte hain. Total position ${money(Number(results?.positionSize ?? 0))}. Safe raho.`}
+            : `Is trade mein aap ${money(Number(results?.maxLoss ?? 0))} (${riskNum}%) lose kar sakte hain. Total position ${money(Number(results?.positionSize ?? 0))} ki hai. Safe rehne ke liye ${money(Number(results?.safeTrade ?? 0))} (${halfRisk}%) use karo.`}
         </p>
       </section>
 
@@ -176,11 +206,14 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
   );
 }
 
-function Row({ label, value, valueColor }: { label: string; value: string; valueColor?: string }) {
+function Row({ label, value, valueColor, note }: { label: string; value: string; valueColor?: string; note?: string }) {
   return (
-    <div className="flex items-center justify-between">
+    <div className="flex items-center justify-between gap-2">
       <span className="text-xs font-semibold" style={{ color: MUTED }}>{label}</span>
-      <span className="text-sm font-bold" style={{ color: valueColor ?? TEXT }}>{value}</span>
+      <span className="text-right text-sm font-bold" style={{ color: valueColor ?? TEXT }}>
+        {value}
+        {note ? <span className="ml-1 text-xs font-normal" style={{ color: MUTED }}>{note}</span> : null}
+      </span>
     </div>
   );
 }

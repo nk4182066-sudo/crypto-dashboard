@@ -15,6 +15,10 @@
 // Educational only. Not financial advice.
 
 export const dynamic = "force-dynamic";
+export const revalidate = 0;
+// Vercel — keep this route on the Node.js runtime (not edge): it fans out to
+// five providers with timeouts and caches the payload in Node memory.
+export const runtime = "nodejs";
 
 type Category = "spot" | "futures" | "forex" | "stocks" | "metals";
 type LegacyMarket = "crypto" | "futures" | "metals" | "stocks" | "forex";
@@ -52,7 +56,9 @@ function num(value: unknown): number {
   return Number.isFinite(n) ? n : 0;
 }
 
-async function fetchJson(url: string, timeoutMs = 12_000): Promise<unknown> {
+async function fetchJson(url: string, timeoutMs = 5_000): Promise<unknown> {
+  // Keep every attempt well under Vercel's 10s function limit — the provider
+  // fan-out runs in parallel, so the slowest single attempt bounds the route.
   const response = await fetch(url, {
     cache: "no-store",
     headers: { "User-Agent": "Mozilla/5.0" },
@@ -72,11 +78,35 @@ interface BinanceTicker {
 }
 
 async function fetchBinance(category: Category): Promise<MarketCoin[]> {
-  const url =
+  const path = category === "futures" ? "/fapi/v1/ticker/24hr" : "/api/v3/ticker/24hr";
+  // Vercel runs in US regions where api.binance.com answers HTTP 451
+  // (restricted territory) — that is why the page is empty on deploy but fine
+  // locally. data-api.binance.vision is Binance's official keyless market-data
+  // mirror with no geo-restriction (spot only; /fapi is not served there —
+  // futures degrades to an empty list, logged above).
+  const attempts: Array<{ host: string; timeoutMs: number }> =
     category === "futures"
-      ? "https://fapi.binance.com/fapi/v1/ticker/24hr"
-      : "https://api.binance.com/api/v3/ticker/24hr";
-  const payload = await fetchJson(url);
+      ? [{ host: "https://fapi.binance.com", timeoutMs: 5_000 }]
+      : [
+          { host: "https://api.binance.com", timeoutMs: 3_000 },
+          { host: "https://data-api.binance.vision", timeoutMs: 5_000 },
+        ];
+
+  let payload: unknown = null;
+  let lastError: unknown = null;
+  for (const attempt of attempts) {
+    try {
+      payload = await fetchJson(`${attempt.host}${path}`, attempt.timeoutMs);
+      break;
+    } catch (error) {
+      lastError = error;
+      console.warn(
+        `[all-coins] ${category} ${attempt.host} failed:`,
+        error instanceof Error ? error.message : error,
+      );
+    }
+  }
+  if (payload === null) throw lastError instanceof Error ? lastError : new Error("Binance unreachable");
   if (!Array.isArray(payload)) return [];
   const coins: MarketCoin[] = [];
   for (const raw of payload as BinanceTicker[]) {
@@ -331,10 +361,23 @@ interface CachedPayload {
 const CACHE_MS = 15_000;
 let cache: { payload: CachedPayload; expires: number } | null = null;
 
+// Vercel CDN + browser friendly headers — CORS so the live site (and any
+// static consumer) can read the JSON, s-maxage so the edge caches the 15s
+// in-memory snapshot instead of re-running the provider fan-out.
+const RESPONSE_HEADERS: Record<string, string> = {
+  "Content-Type": "application/json",
+  "Access-Control-Allow-Origin": "*",
+  "Cache-Control": "public, s-maxage=15",
+};
+
+function jsonResponse(payload: CachedPayload): Response {
+  return new Response(JSON.stringify(payload), { status: 200, headers: RESPONSE_HEADERS });
+}
+
 export async function GET(): Promise<Response> {
   const now = Date.now();
   if (cache && now < cache.expires) {
-    return Response.json(cache.payload);
+    return jsonResponse(cache.payload);
   }
 
   // Each source degrades independently â€” one failure never breaks the whole API.
@@ -379,5 +422,5 @@ export async function GET(): Promise<Response> {
   };
 
   cache = { payload, expires: now + CACHE_MS };
-  return Response.json(payload);
+  return jsonResponse(payload);
 }

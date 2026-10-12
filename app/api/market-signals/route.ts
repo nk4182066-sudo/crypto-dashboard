@@ -3,9 +3,10 @@ import { getCachedAnalysis, getCachedSnapshot, runScan, type ScanResult, type Sc
 import { startScheduler } from "@/src/scanner/scheduler";
 import { scanUniverse, type ScanMarket, type ScanTarget } from "@/src/scanner/universe";
 import type { Candle } from "@/src/analysis/types";
-import { detectCandlestickPattern } from "@/src/lib/signalGenerator";
+import { detectCandlestickPattern, generateFullSignal } from "@/src/lib/signalGenerator";
 import { evaluateSignal, type TradePlan } from "@/src/analysis/signalGate";
 import { buildConfirmations, buildEducators, type ConfirmationIndicator, type Consensus, type EducatorVerdict } from "@/src/lib/confirmations";
+import { persistSignals, type CloudDoc } from "@/src/lib/signalCloud";
 
 export const dynamic = "force-dynamic";
 
@@ -27,6 +28,48 @@ interface AllCoinsCoin {
   label?: string;
   market?: string;
   quoteVolume?: number;
+}
+
+/**
+ * Flattens an emitted setup into the Firestore document (MASLA 2 spec fields):
+ * entry1/entry2, stopLoss, TP1-3, trend, reasoning, timeframe, consensus "X/4"
+ * and the 4 educators — plus the full MarketSignal payload so the Signals page
+ * can rebuild the exact card from the cloud document.
+ */
+function toCloudDoc(signal: MarketSignal, timeframe: string): CloudDoc {
+  const full = generateFullSignal({
+    symbol: signal.symbol,
+    market: signal.market,
+    price: signal.price,
+    direction: signal.direction,
+    support: signal.support,
+    resistance: signal.resistance,
+    pattern: signal.pattern,
+    score: signal.score,
+    bias: signal.bias,
+    reason: signal.reason,
+    chartPattern: signal.chartPattern,
+    chartPatternNote: signal.chartPatternNote,
+    candlestick: signal.candlestickPattern
+      ? { name: signal.candlestickPattern, confidence: signal.candlestickConfidence, type: signal.direction }
+      : null,
+  });
+  const agreed = signal.experts?.consensus.agreed ?? null;
+  const total = signal.experts?.consensus.total ?? 4;
+  return {
+    ...signal,
+    timeframe,
+    trend: full.trend,
+    entry1: full.entry1,
+    entry2: full.entry2,
+    stopLoss: full.stopLoss,
+    tp1: full.tp1,
+    tp2: full.tp2,
+    tp3: full.tp3,
+    reasoning: signal.reason,
+    consensus: agreed === null ? null : `${agreed}/${total}`,
+    createdAt: Date.now(),
+  };
 }
 
 /** One enriched analysis card for the Signals page. Educational only. */
@@ -322,6 +365,14 @@ export async function GET(request: Request) {
       experts,
     });
     recordEmission(item.symbol, item.market, now);
+  }
+
+  // MASLA 2 — persist every emitted setup (Firestore `signals` collection) so
+  // the Signals page survives reloads. Dedupe (same symbol+timeframe <4h →
+  // skip) and the 4h auto-delete sweep live inside persistSignals(); failures
+  // never break the response (localStorage backup still covers the page).
+  if (emitted.length > 0) {
+    await persistSignals(emitted.map((signal) => toCloudDoc(signal, "1h")));
   }
 
   return Response.json(

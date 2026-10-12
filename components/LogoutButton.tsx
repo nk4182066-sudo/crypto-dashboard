@@ -1,9 +1,11 @@
 "use client";
 
-// Header logout button. Signs out of Firebase, clears the stored user + the
-// onboarding flag (so the login/welcome flow reshows), shows a "Logout
-// successful" toast, then reloads to the app root where OnboardingGate serves
-// the login screen. Self-contained toast (no external lib). Educational only.
+// Header logout button. Signs out of Firebase first (session), then wipes ALL
+// client storage per spec — localStorage.clear() + sessionStorage.clear() —
+// shows a "Logout successful" toast, then reloads to the app root where
+// OnboardingGate serves the login / welcome flow (this app has no /login
+// route — the gate IS the login screen). Self-contained toast (no external
+// lib). Educational only.
 import { useState } from "react";
 import { signOutUser } from "@/src/lib/firebase";
 import { clearUser } from "@/src/lib/userAuth";
@@ -16,13 +18,24 @@ export default function LogoutButton() {
     if (busy) return;
     setBusy(true);
     try {
-      // Firebase session + localStorage user + onboarding flag.
-      clearUser();
+      // 1) Firebase sign-out (signOutUser wraps firebase signOut + clears the
+      //    onboarding flag). No-op when Firebase is not configured.
       await signOutUser();
     } catch (error) {
       console.warn("[auth] sign-out failed:", error);
     }
-    // Show the confirmation toast, then send the user to the login/welcome flow.
+    try {
+      // 2) Full client wipe per spec: stored user, chat sessions, cached
+      //    signals, language prefs … + sessionStorage. Runs AFTER signOut so
+      //    Firebase's own auth persistence is removed cleanly.
+      clearUser();
+      localStorage.clear();
+      sessionStorage.clear();
+    } catch (error) {
+      console.warn("[auth] storage clear failed:", error);
+    }
+    // 3) Toast, then reload to the root where OnboardingGate reshows the
+    //    login / welcome flow (no /login route exists in this app).
     setToast(true);
     window.setTimeout(() => {
       window.location.assign("/");

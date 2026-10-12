@@ -3,6 +3,7 @@ import { Geist, Geist_Mono, Inter } from "next/font/google";
 import Navbar from "@/components/navbar";
 import ServiceWorkerRegister from "@/components/ServiceWorkerRegister";
 import OnboardingGate from "@/components/OnboardingGate";
+import FloatingChat from "@/components/FloatingChat";
 import "./globals.css";
 
 const geistSans = Geist({
@@ -48,6 +49,8 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
         <Navbar />
         <OnboardingGate>
           <div className="flex-1 pb-16 md:pb-0">{children}</div>
+          {/* MASLA 4 — floating AI chat on every page except /chat (hidden there). */}
+          <FloatingChat />
         </OnboardingGate>
       </body>
     </html>
