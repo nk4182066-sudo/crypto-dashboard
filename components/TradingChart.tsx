@@ -52,6 +52,8 @@ export interface ChartLevel {
   label?: string;
   /** Overrides the default line style for this kind (dashed for S/R watch levels). */
   lineStyle?: "solid" | "dashed";
+  /** Overrides the default color for this kind (e.g. distinct TP shades). */
+  color?: string;
 }
 
 /** A single arrow marker (e.g. a buy-point) drawn on the candlestick series. */
@@ -470,44 +472,87 @@ export default function TradingChart({ data, chartKey = "", signals = [], candle
       lastBarTimeRef.current = lastHistorical;
     }
     trendlineSeries.setData(trendline.map((point) => ({ time: point.time as UTCTimestamp, value: point.price })));
-    // Pattern markers & outlines are intentionally disabled (Requirement 4):
-    // only the candlestick + support/resistance price lines are drawn.
+
+    // Pattern outlines: primary shape on `patternSeries`, extras on dynamically
+    // created line series (reused across updates). Green/red/bullish-bearish
+    // color comes from the caller. Hidden when no outline is supplied.
+    const chart = chartRef.current;
+    if (chart) {
+      const [primary, ...extras] = patternOutlines;
+      const drawOutline = (
+        series: ISeriesApi<"Line", Time>,
+        outline: ChartPatternOutline | undefined
+      ) => {
+        if (!outline || outline.points.length < 2) {
+          series.setData([]);
+          series.applyOptions({ title: "" });
+          return;
+        }
+        series.applyOptions({ color: outline.color ?? "#a78bfa", title: outline.name });
+        series.setData(outline.points.map((point) => ({ time: point.time as UTCTimestamp, value: point.price })));
+      };
+      drawOutline(patternSeries, primary);
+
+      // Grow / shrink the extra-series pool to match `extras`.
+      while (extraPatternSeriesRef.current.length < extras.length) {
+        const series = chart.addSeries(LineSeries, {
+          color: "#a78bfa",
+          lineWidth: 2,
+          lineStyle: LineStyle.Dashed,
+          title: "",
+          lastValueVisible: false,
+          priceLineVisible: false,
+          crosshairMarkerVisible: false,
+        });
+        extraPatternSeriesRef.current.push(series);
+      }
+      while (extraPatternSeriesRef.current.length > extras.length) {
+        const series = extraPatternSeriesRef.current.pop();
+        if (series) chart.removeSeries(series);
+      }
+      extras.forEach((outline, index) => drawOutline(extraPatternSeriesRef.current[index], outline));
+    }
 
     overlaySeriesRef.current.forEach(({ id, series }) => {
       const overlay = indicatorOverlays.find((item) => item.id === id);
       series.setData((overlay?.points ?? []).map((point) => ({ time: point.time as UTCTimestamp, value: point.value })));
     });
 
-    // Chart draws only candlesticks + support/resistance price lines (no auto-analysis overlay).
+    // Chart draws candlesticks + support/resistance/entry/SL/TP price lines and
+    // the caller-supplied pattern outline / arrow markers.
     priceLinesRef.current.forEach((priceLine) => candlestickSeries.removePriceLine(priceLine));
-    priceLinesRef.current = levels.map((level) => candlestickSeries.createPriceLine({
-      price: level.price,
-      color: level.kind === "entry" ? "#3b82f6" : level.kind === "support" || level.kind === "takeProfit" ? "#22c55e" : level.kind === "resistance" || level.kind === "stopLoss" ? "#ef4444" : "#facc15",
-      lineWidth: 2,
-      lineStyle: level.lineStyle
-        ? level.lineStyle === "dashed" ? LineStyle.Dashed : LineStyle.Solid
-        : level.kind === "stopLoss" || level.kind === "takeProfit" || level.kind === "fibonacci" ? LineStyle.Dashed : LineStyle.Solid,
-      axisLabelVisible: true,
-      axisLabelColor: level.kind === "entry" ? "#2563eb" : level.kind === "support" || level.kind === "takeProfit" ? "#16a34a" : level.kind === "resistance" || level.kind === "stopLoss" ? "#dc2626" : "#ca8a04",
-      title: level.label ?? `${level.kind} ${level.price}`,
-    }));
+    const kindColor = (kind: ChartLevel["kind"]): string =>
+      kind === "entry" ? "#3b82f6"
+      : kind === "support" ? "#22c55e"
+      : kind === "takeProfit" ? "#22c55e"
+      : kind === "resistance" ? "#ef4444"
+      : kind === "stopLoss" ? "#ef4444"
+      : "#facc15";
+    priceLinesRef.current = levels.map((level) => {
+      const color = level.color ?? kindColor(level.kind);
+      return candlestickSeries.createPriceLine({
+        price: level.price,
+        color,
+        lineWidth: 2,
+        lineStyle: level.lineStyle
+          ? level.lineStyle === "dashed" ? LineStyle.Dashed : LineStyle.Solid
+          : level.kind === "stopLoss" || level.kind === "takeProfit" || level.kind === "fibonacci" ? LineStyle.Dashed : LineStyle.Solid,
+        axisLabelVisible: true,
+        axisLabelColor: color,
+        title: level.label ?? `${level.kind} ${level.price}`,
+      });
+    });
 
     // Explicit arrow markers (buy/sell points) supplied by the caller.
-    // Pattern/arrow markers temporarily DISABLED (Setup 3, Masla 2): the marker
-    // blocks looked like stray green/red bars behind the candles. Only candles +
-    // support/resistance price lines are drawn for now; markers return later.
-    // if (markersRef.current) {
-    //   const arrowSeriesMarkers: SeriesMarker<Time>[] = arrowMarkers.map((marker) => ({
-    //     time: marker.time as UTCTimestamp,
-    //     position: marker.position,
-    //     color: marker.color,
-    //     shape: marker.shape,
-    //     text: marker.text,
-    //   }));
-    //   markersRef.current.setMarkers(arrowSeriesMarkers);
-    // }
     if (markersRef.current) {
-      markersRef.current.setMarkers([]);
+      const arrowSeriesMarkers: SeriesMarker<Time>[] = arrowMarkers.map((marker) => ({
+        time: marker.time as UTCTimestamp,
+        position: marker.position,
+        color: marker.color,
+        shape: marker.shape,
+        text: marker.text,
+      }));
+      markersRef.current.setMarkers(arrowSeriesMarkers);
     }
 
     if (data.length > 0 && chartRef.current && (isNewChart || !previous?.data.length || !visibleRange)) {

@@ -16,8 +16,9 @@
  *  8. R:R >= 1:2          — TP1 reward is at least 2x the risk
  *
  * TP/SL math (spec):
- *  - SL is capped at 2.5% of entry (max risk distance).
- *  - TP1 = 2x SL distance, TP2 = 4x, TP3 = 6x  (min R:R = 1:2).
+ *  - SL is a fixed 3% of entry (max risk distance → ≈30% margin loss @10x).
+ *  - TP1 = 10% entry move, TP2 = 20%, TP3 = 30%  (≈100/200/300% profit @10x).
+ *  - Min R:R = 1:3.
  *
  * Educational only. Not financial advice.
  */
@@ -35,9 +36,11 @@ export const GATE = {
   volumeMultiple: 1.2,
   /** Price must be within this fraction of the S/R level to be "near". */
   srProximity: 0.015,
-  minRewardRisk: 2,
-  /** Stop loss is capped at this fraction of entry. */
-  maxStopLossPercent: 0.025,
+  minRewardRisk: 3,
+  /** Stop loss is a fixed 3% of entry (≈30% margin loss at 10x). */
+  maxStopLossPercent: 0.03,
+  /** Fixed target price-move multiples of entry (≈100/200/300% profit @10x). */
+  tpPercent: [0.1, 0.2, 0.3],
 } as const;
 
 /** Result of the gate for one candidate. */
@@ -52,8 +55,16 @@ export interface GateResult {
 export interface TradePlan {
   entry: number;
   stopLoss: number;
-  takeProfits: { label: string; price: number; rewardRisk: number }[];
+  takeProfits: { label: string; price: number; rewardRisk: number; pricePercent: number; profitPercent: number }[];
   rewardRisk: number;
+  /** SL price-move % (fixed 3). */
+  slPercent: number;
+  /** Margin loss % (price% × leverage; 0 when leverage unknown). */
+  slLossPercent: number;
+  /** Reward:risk summary string, e.g. "1:3.33". */
+  rr: string;
+  /** Leverage used for margin percentages (0 = not provided). */
+  leverage: number;
 }
 
 
@@ -84,27 +95,42 @@ function roundPrice(value: number): number {
 }
 
 /**
- * Builds the SL/TP plan from the spec:
- *  - risk distance = min(2.5% of entry, structural level distance)
- *  - TP1/2/3 at 2x / 4x / 6x the risk distance  (min R:R = 1:2)
+ * Builds the SL/TP plan from the spec (leverage-aware, direction-correct):
+ *  - SL = fixed 3% of entry  (≈30% margin loss @10x)
+ *  - TP1/2/3 = 10% / 20% / 30% of entry  (≈100/200/300% profit @10x)
+ *  - R:R per target = target% / sl% (min 1:3.33)
+ *
+ * `structuralStop` is retained for call-site compatibility but the fixed
+ * spec governs the distances so loss/profit stay in the 20-30% / 100%+ band.
  */
-function buildPlan(entry: number, dir: Direction, structuralStop: number | null): TradePlan {
-  const maxRisk = entry * GATE.maxStopLossPercent;
-  let risk = maxRisk;
-  if (structuralStop !== null && Number.isFinite(structuralStop)) {
-    const structuralRisk = Math.abs(entry - structuralStop);
-    // Prefer the tighter of the structural stop and the 2.5% cap (never wider).
-    if (structuralRisk > 0) risk = Math.min(maxRisk, structuralRisk);
-  }
-  const stopLoss = dir === "bullish" ? roundPrice(entry - risk) : roundPrice(entry + risk);
-  const tp = (r: number) =>
-    dir === "bullish" ? roundPrice(entry + risk * r) : roundPrice(entry - risk * r);
-  const takeProfits = [
-    { label: "TP1", price: tp(2), rewardRisk: 2 },
-    { label: "TP2", price: tp(4), rewardRisk: 4 },
-    { label: "TP3", price: tp(6), rewardRisk: 6 },
-  ];
-  return { entry: roundPrice(entry), stopLoss, takeProfits, rewardRisk: 2 };
+function buildPlan(entry: number, dir: Direction, _structuralStop: number | null, leverage = 0): TradePlan {
+  const slPricePercent = GATE.maxStopLossPercent * 100; // 3
+  const stopLoss = dir === "bullish"
+    ? roundPrice(entry * (1 - GATE.maxStopLossPercent))
+    : roundPrice(entry * (1 + GATE.maxStopLossPercent));
+  const takeProfits = GATE.tpPercent.map((pct, index) => {
+    const price = dir === "bullish"
+      ? roundPrice(entry * (1 + pct))
+      : roundPrice(entry * (1 - pct));
+    return {
+      label: `TP${index + 1}`,
+      price,
+      rewardRisk: Math.round((pct / GATE.maxStopLossPercent) * 100) / 100,
+      pricePercent: Math.round(pct * 100),
+      profitPercent: Math.round(pct * 100 * leverage),
+    };
+  });
+  const firstRR = takeProfits[0]?.rewardRisk ?? 0;
+  return {
+    entry: roundPrice(entry),
+    stopLoss,
+    takeProfits,
+    rewardRisk: firstRR,
+    slPercent: slPricePercent,
+    slLossPercent: Math.round(slPricePercent * leverage),
+    rr: `1:${firstRR.toFixed(2)}`,
+    leverage,
+  };
 }
 
 export type Direction = "bullish" | "bearish";
@@ -117,6 +143,8 @@ export interface SignalCandidate {
   candlestick: { name: string; confidence: number; type: "bullish" | "bearish" | "neutral" } | null;
   /** Overall confluence score (analysis.confidence). */
   score: number;
+  /** Trader's leverage (drives margin loss/profit %). Optional. */
+  leverage?: number;
 }
 
 /** Maps an ADX value to a 0-100 trend-confidence score (higher = cleaner trend). */
@@ -212,12 +240,12 @@ export function evaluateSignal(candidate: SignalCandidate): GateResult {
     : `Price not near a clear ${dir === "bullish" ? "support" : "resistance"} level.`;
   if (!levelOk) return { pass: false, checks };
 
-  // 8 — R:R >= 1:2 (structurally guaranteed by buildPlan; asserted for safety).
+  // 8 — R:R >= 1:3 (structurally guaranteed by buildPlan; asserted for safety).
   const structuralStop =
     dir === "bullish" ? analysis.structure.lastSwingLow?.price ?? null : analysis.structure.lastSwingHigh?.price ?? null;
-  const plan = buildPlan(price, dir, typeof structuralStop === "number" ? structuralStop : null);
+  const plan = buildPlan(price, dir, typeof structuralStop === "number" ? structuralStop : null, candidate.leverage ?? 0);
   const rrOk = plan.rewardRisk >= GATE.minRewardRisk;
-  checks.rewardRisk = rrOk ? `OK R:R ${plan.rewardRisk.toFixed(2)}` : `R:R ${plan.rewardRisk.toFixed(2)} below ${GATE.minRewardRisk}.`;
+  checks.rewardRisk = rrOk ? `OK R:R ${plan.rr}` : `R:R ${plan.rr} below 1:${GATE.minRewardRisk}.`;
   if (!rrOk) return { pass: false, checks };
 
   return { pass: true, checks, plan };

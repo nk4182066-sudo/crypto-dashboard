@@ -519,13 +519,13 @@ export default function SignalsPage() {
 
                 {/* Stop loss */}
                 <Section title="🛑 Stop Loss" />
-                <Line label="SL" value={`$${fmtPrice(full.stopLoss)}`} valueColor={RED} note={`(Risk ~${full.riskPercent}%)`} />
+                <Line label="SL" value={`$${fmtPrice(full.stopLoss)}`} valueColor={RED} note={`(${full.slPercent}% price · -${full.slLossPercent}% margin @${full.leverage}x)`} />
 
                 {/* Targets */}
                 <Section title="🎯 Targets" />
-                <Line label="TP1" value={`$${fmtPrice(full.tp1)}`} valueColor={GREEN} note={`(1:${full.rr1} R:R)`} />
-                <Line label="TP2" value={`$${fmtPrice(full.tp2)}`} valueColor={GREEN} note={`(1:${full.rr2} R:R)`} />
-                <Line label="TP3" value={`$${fmtPrice(full.tp3)}`} valueColor={GREEN} note={`(1:${full.rr3} R:R)`} />
+                <Line label="TP1" value={`$${fmtPrice(full.tp1)}`} valueColor={GREEN} note={`(1:${full.rr1} R:R · +${full.tp1ProfitPercent}%)`} />
+                <Line label="TP2" value={`$${fmtPrice(full.tp2)}`} valueColor={GREEN} note={`(1:${full.rr2} R:R · +${full.tp2ProfitPercent}%)`} />
+                <Line label="TP3" value={`$${fmtPrice(full.tp3)}`} valueColor={GREEN} note={`(1:${full.rr3} R:R · +${full.tp3ProfitPercent}%)`} />
 
                 {/* Why */}
                 <Section title={lang === "urdu" ? "📈 Why (Roman Urdu)" : "📈 Why (English)"} />

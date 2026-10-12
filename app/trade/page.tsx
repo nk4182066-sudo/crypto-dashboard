@@ -7,6 +7,7 @@
 import { Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import TradingChart, { type ChartArrowMarker, type ChartLevel } from "@/components/TradingChart";
+import { buildLeverageLevels } from "@/src/lib/signalGenerator";
 import { scanChartPatterns } from "@/src/lib/chart/chartPatterns";
 import { zigZag } from "@/src/analysis/structure";
 import { getChartAnalysis, type ChartAnalysis } from "@/src/lib/autoChartAnalysis";
@@ -119,6 +120,17 @@ function TradeChart() {
   // Fullscreen chart container + toggle.
   const chartRef = useRef<HTMLDivElement>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
+  // On-chart overlay toggles (all ON by default). Each gates one visual layer
+  // so the user can declutter the chart without losing the analysis box below.
+  const [layers, setLayers] = useState({
+    pattern: true,
+    trend: true,
+    levels: true,
+    experts: true,
+    indicators: true,
+  });
+  const toggleLayer = (key: keyof typeof layers) =>
+    setLayers((prev) => ({ ...prev, [key]: !prev[key] }));
   const toggleFullscreen = () => {
     if (!document.fullscreenElement) {
       void chartRef.current?.requestFullscreen?.().catch(() => {});
@@ -206,19 +218,24 @@ function TradeChart() {
     const pivots = zigZag(candles.slice(-150), 3);
     const points = pivots.slice(-6).map((p) => ({ time: p.time, price: p.price }));
     if (points.length < 2) return [];
-    return [{ name: top.pattern, points, color: BLUE }];
+    // Green for bullish patterns, red for bearish, neutral amber otherwise.
+    const color = top.type === "bullish" ? GREEN : top.type === "bearish" ? RED : "#f0b90b";
+    return [{ name: top.pattern, points, color }];
   }, [patternHits, candles]);
 
   // Support / resistance as green / red dashed lines.
   const srLevels: ChartLevel[] = useMemo(() => {
     if (!analysis) return [];
     const levels: ChartLevel[] = [];
-    if (analysis.support > 0) levels.push({ kind: "support", price: analysis.support, label: "Support", lineStyle: "dashed" });
-    if (analysis.resistance > 0) levels.push({ kind: "resistance", price: analysis.resistance, label: "Resistance", lineStyle: "dashed" });
+    if (analysis.support > 0) levels.push({ kind: "support", price: analysis.support, label: `Support $${fmtPrice(analysis.support)}`, lineStyle: "dashed" });
+    if (analysis.resistance > 0) levels.push({ kind: "resistance", price: analysis.resistance, label: `Resistance $${fmtPrice(analysis.resistance)}`, lineStyle: "dashed" });
     return levels;
   }, [analysis]);
 
-  // Entry / SL / TP zones + buy-point arrow only when there is a directional posture.
+  // Leverage-aware Entry / SL / TP1-2-3 lines + entry arrow.
+  // Spec: SL = 3% price move (≈30% margin loss @leverage), TP1/2/3 = 10/20/30%
+  // price moves (≈100/200/300% margin profit @leverage), R:R ≥ 1:3.33.
+  // Direction-correct: bullish → SL below entry, targets above; bearish reversed.
   const { planLevels, arrowMarkers } = useMemo(() => {
     const empty: { planLevels: ChartLevel[]; arrowMarkers: ChartArrowMarker[] } = { planLevels: [], arrowMarkers: [] };
     if (!analysis || candles.length === 0) return empty;
@@ -228,24 +245,54 @@ function TradeChart() {
     const bullish = analysis.direction === "bullish";
     const last = candles[candles.length - 1];
     const entry = analysis.currentPrice || last.close;
-    const stopLoss = bullish ? analysis.support : analysis.resistance;
-    const takeProfit = bullish ? analysis.resistance : analysis.support;
-    const levels: ChartLevel[] = [{ kind: "entry", price: entry, label: "Entry" }];
-    if (stopLoss > 0) levels.push({ kind: "stopLoss", price: stopLoss, label: "SL" });
-    if (takeProfit > 0) levels.push({ kind: "takeProfit", price: takeProfit, label: "TP" });
+    const lev = leverage > 0 ? leverage : 10;
+    const plan = buildLeverageLevels(entry, bullish ? "bullish" : "bearish", lev);
+
+    // Distinct green shades for TP1 (light) → TP3 (deep).
+    const tpColors = ["#4ade80", "#22c55e", "#15803d"];
+    const levels: ChartLevel[] = [
+      { kind: "entry", price: plan.entry, label: `Entry $${fmtPrice(plan.entry)}`, lineStyle: "solid" },
+      { kind: "stopLoss", price: plan.stopLoss, label: `SL $${fmtPrice(plan.stopLoss)} (-${plan.slLossPercent}%)` },
+      { kind: "takeProfit", price: plan.tp1, color: tpColors[0], label: `TP1 $${fmtPrice(plan.tp1)} (+${plan.tp1ProfitPercent}%)` },
+      { kind: "takeProfit", price: plan.tp2, color: tpColors[1], label: `TP2 $${fmtPrice(plan.tp2)} (+${plan.tp2ProfitPercent}%)` },
+      { kind: "takeProfit", price: plan.tp3, color: tpColors[2], label: `TP3 $${fmtPrice(plan.tp3)} (+${plan.tp3ProfitPercent}%)` },
+    ];
 
     const markers: ChartArrowMarker[] = [{
       time: last.time,
       position: bullish ? "belowBar" : "aboveBar",
       color: bullish ? GREEN : RED,
       shape: bullish ? "arrowUp" : "arrowDown",
-      text: "BP",
+      text: bullish ? "Entry here" : "Exit here",
     }];
 
     return { planLevels: levels, arrowMarkers: markers };
-  }, [analysis, candles]);
+  }, [analysis, candles, leverage]);
 
-  const levels = useMemo(() => [...srLevels, ...planLevels], [srLevels, planLevels]);
+  // Gated by the on-chart toggles: Levels controls S/R + Entry/SL/TP lines,
+  // Pattern the outline, and arrows follow Levels.
+  const levels = useMemo(
+    () => [...(layers.levels ? srLevels : []), ...(layers.levels ? planLevels : [])],
+    [srLevels, planLevels, layers.levels]
+  );
+  const visibleArrowMarkers = layers.levels ? arrowMarkers : [];
+  const visiblePatternOutlines = layers.pattern ? patternOutlines : [];
+
+  // Trend line through the recent swing pivots that follow the dominant
+  // direction: higher-highs/higher-lows for bullish, the mirror for bearish.
+  // Gated by the Trend toggle. Direction is derived from `analysis` (not the
+  // later `trendLabel`) to avoid a temporal-dead-zone reference.
+  const trendline = useMemo(() => {
+    const dir = analysis?.direction;
+    if (!layers.trend || dir !== "bullish" && dir !== "bearish") return [];
+    const pivots = zigZag(candles.slice(-150), 3);
+    if (pivots.length < 2) return [];
+    const wantHigh = dir === "bullish";
+    // Follow the pivots that build the structure in the trend's direction.
+    const chosen = pivots.filter((p) => (wantHigh ? p.kind === "high" : p.kind === "low")).slice(-4);
+    const points = (chosen.length >= 2 ? chosen : pivots.slice(-4)).map((p) => ({ time: p.time, price: p.price }));
+    return points;
+  }, [candles, layers.trend, analysis]);
 
   // ---- Header numbers ------------------------------------------------------
   const headerPrice = quote?.price ?? analysis?.currentPrice ?? candles[candles.length - 1]?.close ?? 0;
@@ -390,16 +437,62 @@ function TradeChart() {
           ) : candles.length === 0 ? (
             <p className="px-4 py-6 text-sm" style={{ color: MUTED }}>No chart data available.</p>
           ) : (
+            <>
+            {/* Toggle buttons — top-left of the chart, above everything else */}
+            <div className="absolute left-2 top-2 z-20 flex flex-wrap gap-1.5">
+              <LayerToggle label="Pattern" active={layers.pattern} onClick={() => toggleLayer("pattern")} />
+              <LayerToggle label="Trend" active={layers.trend} onClick={() => toggleLayer("trend")} />
+              <LayerToggle label="Levels" active={layers.levels} onClick={() => toggleLayer("levels")} />
+              <LayerToggle label="Experts" active={layers.experts} onClick={() => toggleLayer("experts")} />
+              <LayerToggle label="Indicators" active={layers.indicators} onClick={() => toggleLayer("indicators")} />
+            </div>
+            {/* Educators panel — top-right inside the chart */}
+            {layers.experts && insights ? (
+              <div
+                className="pointer-events-none absolute right-2 top-12 z-10 max-w-[46%] rounded-lg p-2 text-[10px] leading-tight shadow-lg sm:text-[11px]"
+                style={{ backgroundColor: "rgba(24,26,32,0.92)", color: TEXT, border: `1px solid ${BORDER}` }}
+              >
+                <p className="mb-1 text-[10px] font-bold" style={{ color: MUTED }}>🧠 EDUCATORS · Consensus {insights.consensus.agreed}/{insights.consensus.total}</p>
+                {insights.educators.map((e) => (
+                  <p key={e.role} className="flex items-center justify-between gap-2">
+                    <span className="truncate">{e.emoji} {e.role}</span>
+                    <span style={{ color: e.confirms ? GREEN : RED }}>{e.confirms ? "✅" : "⚠️"}</span>
+                  </p>
+                ))}
+              </div>
+            ) : null}
+            {/* Indicators panel — bottom-left inside the chart */}
+            {layers.indicators && insights ? (
+              <div
+                className="pointer-events-none absolute bottom-2 left-2 z-10 max-w-[52%] rounded-lg p-2 text-[10px] leading-tight shadow-lg sm:text-[11px]"
+                style={{ backgroundColor: "rgba(24,26,32,0.92)", color: TEXT, border: `1px solid ${BORDER}` }}
+              >
+                <p className="mb-1 text-[10px] font-bold" style={{ color: MUTED }}>📊 INDICATORS</p>
+                {insights.report.indicators.map((ind) => (
+                  <p key={ind.name} className="flex items-center justify-between gap-2">
+                    <span className="truncate">{ind.name}</span>
+                    <span style={{ color: ind.confirms ? GREEN : ind.icon === "against" ? RED : "#f0b90b" }}>{ind.value}</span>
+                  </p>
+                ))}
+              </div>
+            ) : null}
             <TradingChart
               data={candles}
               chartKey={`${symbol}:${timeframe}`}
               levels={levels}
-              patternOutlines={patternOutlines}
-              arrowMarkers={arrowMarkers}
+              patternOutlines={visiblePatternOutlines}
+              arrowMarkers={visibleArrowMarkers}
+              trendline={trendline}
+              trendDirection={
+                analysis?.direction === "bullish" ? "Bullish"
+                : analysis?.direction === "bearish" ? "Bearish"
+                : "Sideways"
+              }
               market={dataMarket}
               autoAnalyze={false}
               height={isFullscreen ? undefined : 420}
             />
+            </>
           )}
         </div>
       </div>
@@ -441,6 +534,26 @@ function Row({ label, value, valueColor }: { label: string; value: string; value
       <span className="text-xs font-semibold" style={{ color: MUTED }}>{label}</span>
       <span className="text-sm font-semibold" style={{ color: valueColor ?? TEXT }}>{value}</span>
     </div>
+  );
+}
+
+/** Small on-chart toggle pill for one visual layer (Pattern/Trend/Levels/...). */
+function LayerToggle({ label, active, onClick }: { label: string; active: boolean; onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-pressed={active}
+      title={`${active ? "Hide" : "Show"} ${label}`}
+      className="rounded-md border px-2 py-0.5 text-[10px] font-bold transition-colors sm:text-[11px]"
+      style={{
+        backgroundColor: active ? "rgba(59,130,246,0.25)" : "rgba(24,26,32,0.9)",
+        color: active ? "#93c5fd" : MUTED,
+        borderColor: active ? "#3b82f6" : BORDER,
+      }}
+    >
+      {label}
+    </button>
   );
 }
 

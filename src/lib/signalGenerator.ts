@@ -56,6 +56,8 @@ export interface FullSignalInput {
   chartPatternNote?: string | null;
   /** Detected candlestick confirmation, if any. */
   candlestick?: CandlestickDetection | null;
+  /** Trader's leverage (drives margin loss/profit %). Defaults to 10. */
+  leverage?: number;
 }
 
 export interface FullSignal {
@@ -87,6 +89,22 @@ export interface FullSignal {
   rr1: number;
   rr2: number;
   rr3: number;
+  /** Leverage used for margin loss/profit percentages. */
+  leverage: number;
+  /** SL price-move % (fixed 3). */
+  slPercent: number;
+  /** Margin loss % at leverage (e.g. 30 at 10x). */
+  slLossPercent: number;
+  /** TP price-move % (10 / 20 / 30). */
+  tp1Percent: number;
+  tp2Percent: number;
+  tp3Percent: number;
+  /** Margin profit % at leverage (e.g. 100 / 200 / 300 at 10x). */
+  tp1ProfitPercent: number;
+  tp2ProfitPercent: number;
+  tp3ProfitPercent: number;
+  /** Reward:risk summary string, e.g. "1:3.33". */
+  rr: string;
   support: number;
   resistance: number;
   prevHigh: number;
@@ -122,13 +140,76 @@ function trendOf(direction: SignalDirection, bias?: string | null): string {
   return "Sideways / Range";
 }
 
+// ── Leverage-aware SL/TP constants (single source of truth) ──────────────
+// SL is a fixed 3% price move (≈30% margin loss at 10x) and the targets are
+// fixed 10% / 20% / 30% price moves (≈100% / 200% / 300% margin profit at
+// 10x). This guarantees R:R ≥ 1:3.33 on every signal.
+const SL_PRICE_PCT = 0.03;
+const TP1_PRICE_PCT = 0.1;
+const TP2_PRICE_PCT = 0.2;
+const TP3_PRICE_PCT = 0.3;
+
+export interface LeverageLevels {
+  direction: "bullish" | "bearish";
+  entry: number;
+  stopLoss: number;
+  tp1: number;
+  tp2: number;
+  tp3: number;
+  slPercent: number;
+  slLossPercent: number;
+  tp1Percent: number;
+  tp2Percent: number;
+  tp3Percent: number;
+  tp1ProfitPercent: number;
+  tp2ProfitPercent: number;
+  tp3ProfitPercent: number;
+  rr: string;
+  leverage: number;
+}
+
 /**
- * Builds the full educational signal. Math follows the requested spec:
- * - Entry 1 (aggressive): price ± 0.5%
+ * Leverage-aware SL/TP plan shared by the signal generator and the trade
+ * chart. SL = 3% price move; TP1/2/3 = 10/20/30% price moves. At L× leverage
+ * the trade risks ≈(3×L)% of margin to make ≈(10×L)%+ on TP1 (R:R 1:3.33).
+ * Direction flips which side of the entry each level sits on:
+ *   bullish → SL below entry, targets above;  bearish → the reverse.
+ */
+export function buildLeverageLevels(price: number, direction: "bullish" | "bearish", leverage = 10): LeverageLevels {
+  const lev = Number.isFinite(leverage) && leverage > 0 ? leverage : 10;
+  const entry = roundPrice(price);
+  const sign = direction === "bullish" ? 1 : -1;
+  const stopLoss = roundPrice(entry * (1 - sign * SL_PRICE_PCT));
+  const tp1 = roundPrice(entry * (1 + sign * TP1_PRICE_PCT));
+  const tp2 = roundPrice(entry * (1 + sign * TP2_PRICE_PCT));
+  const tp3 = roundPrice(entry * (1 + sign * TP3_PRICE_PCT));
+  return {
+    direction,
+    entry,
+    stopLoss,
+    tp1,
+    tp2,
+    tp3,
+    slPercent: SL_PRICE_PCT * 100,
+    slLossPercent: Math.round(SL_PRICE_PCT * 100 * lev),
+    tp1Percent: TP1_PRICE_PCT * 100,
+    tp2Percent: TP2_PRICE_PCT * 100,
+    tp3Percent: TP3_PRICE_PCT * 100,
+    tp1ProfitPercent: Math.round(TP1_PRICE_PCT * 100 * lev),
+    tp2ProfitPercent: Math.round(TP2_PRICE_PCT * 100 * lev),
+    tp3ProfitPercent: Math.round(TP3_PRICE_PCT * 100 * lev),
+    rr: `1:${(TP1_PRICE_PCT / SL_PRICE_PCT).toFixed(2)}`,
+    leverage: lev,
+  };
+}
+
+/**
+ * Builds the full educational signal. Leverage-aware SL/TP math:
+ * - Entry 1 (aggressive): current price
  * - Entry 2 (conservative): near support (bullish) / resistance (bearish)
- * - SL: support × 0.997 (bullish) or resistance × 1.003 (bearish)
- * - TP1/2/3: entry ± risk × 1.3 / 2.5 / 4.0
- * - R:R per target = reward / risk
+ * - SL: 3% price move from entry (≈30% margin loss at 10x)
+ * - TP1/2/3: 10% / 20% / 30% price moves (≈100% / 200% / 300% profit at 10x)
+ * - R:R per target = reward / risk (min 1:3.33)
  */
 export function generateFullSignal(input: FullSignalInput): FullSignal {
   const { symbol, market, direction, pattern = null, score = 0, bias, reason } = input;
@@ -150,34 +231,23 @@ export function generateFullSignal(input: FullSignalInput): FullSignal {
   const bullish = direction === "bullish";
   const bearish = direction === "bearish";
 
-  let entry1: number;
-  let entry2: number;
-  let stopLoss: number;
-  let tp1: number;
-  let tp2: number;
-  let tp3: number;
+  const lev = input.leverage && input.leverage > 0 ? input.leverage : 10;
+  // Leverage-aware plan: SL 3% (≈30% loss @10x), TP1/2/3 10/20/30%
+  // (≈100/200/300% profit @10x), R:R 1:3.33. Direction-aware.
+  const plan = buildLeverageLevels(price, bearish ? "bearish" : "bullish", lev);
 
-  if (bearish) {
-    entry1 = roundPrice(price * 0.995);
-    entry2 = roundPrice(resistance);
-    stopLoss = roundPrice(resistance * 1.003);
-    const risk = Math.max(stopLoss - entry1, entry1 * 0.005);
-    tp1 = roundPrice(entry1 - risk * 1.3);
-    tp2 = roundPrice(entry1 - risk * 2.5);
-    tp3 = roundPrice(entry1 - risk * 4.0);
-  } else {
-    entry1 = roundPrice(price * 1.005);
-    entry2 = roundPrice(support);
-    stopLoss = roundPrice(support * 0.997);
-    const risk = Math.max(entry1 - stopLoss, entry1 * 0.005);
-    tp1 = roundPrice(entry1 + risk * 1.3);
-    tp2 = roundPrice(entry1 + risk * 2.5);
-    tp3 = roundPrice(entry1 + risk * 4.0);
-  }
+  // Entry 1 (aggressive) = current price; Entry 2 (conservative) = the S/R
+  // level (support for longs, resistance for shorts).
+  const entry1 = plan.entry;
+  const entry2 = bearish ? roundPrice(resistance) : roundPrice(support);
+  const stopLoss = plan.stopLoss;
+  const tp1 = plan.tp1;
+  const tp2 = plan.tp2;
+  const tp3 = plan.tp3;
 
   const riskAbs = Math.abs(entry1 - stopLoss) || 1;
   const rr = (tp: number) => Math.round((Math.abs(tp - entry1) / riskAbs) * 10) / 10;
-  const riskPercent = Math.round((riskAbs / (entry1 || 1)) * 1000) / 10;
+  const riskPercent = plan.slPercent;
 
   const dirWord = bearish ? "Bearish" : bullish ? "Bullish" : "Neutral";
   const trend = trendOf(direction, bias);
@@ -259,6 +329,16 @@ export function generateFullSignal(input: FullSignalInput): FullSignal {
     rr1: rr(tp1),
     rr2: rr(tp2),
     rr3: rr(tp3),
+    leverage: plan.leverage,
+    slPercent: plan.slPercent,
+    slLossPercent: plan.slLossPercent,
+    tp1Percent: plan.tp1Percent,
+    tp2Percent: plan.tp2Percent,
+    tp3Percent: plan.tp3Percent,
+    tp1ProfitPercent: plan.tp1ProfitPercent,
+    tp2ProfitPercent: plan.tp2ProfitPercent,
+    tp3ProfitPercent: plan.tp3ProfitPercent,
+    rr: plan.rr,
     support,
     resistance,
     prevHigh: resistance,
