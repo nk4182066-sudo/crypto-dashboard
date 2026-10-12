@@ -48,3 +48,7 @@ next-env.d.ts
 # keep the env template
 !env-template.txt
 
+
+# local dev/debug helper scripts (not part of the app)
+/scripts/
+start-dev.pid

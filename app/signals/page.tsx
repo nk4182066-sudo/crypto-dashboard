@@ -236,11 +236,16 @@ export default function SignalsPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- `tick` intentionally re-triggers the TTL filter
   }, [apiSignals, cloudSignals, backupSignals, tick]);
 
-  // High-confluence only: hide anything below 80/100. Highest score first.
-  const visible = useMemo(
-    () => signals.filter((s) => s.score >= 80).sort((first, second) => second.score - first.score),
-    [signals]
-  );
+  // Feature 3 — split signals into FREE (75-84) and PREMIUM (85+). Anything
+  // below 75 is hidden (kept high-quality only). Highest score first.
+  const { premium, free } = useMemo(() => {
+    const sorted = signals.filter((s) => s.score >= 75).sort((first, second) => second.score - first.score);
+    return {
+      premium: sorted.filter((s) => s.score >= 85),
+      free: sorted.filter((s) => s.score >= 75 && s.score < 85),
+    };
+  }, [signals]);
+  const visible = useMemo(() => [...premium, ...free], [premium, free]);
 
   // Backup layer — persist whatever is on screen so the next reload starts
   // from it (works even without Firebase / offline).
@@ -369,7 +374,20 @@ export default function SignalsPage() {
           {loading && (
             <p className="text-center text-xs" style={{ color: MUTED }} role="status">Live scan chal raha hai…</p>
           )}
-          {visible.map((signal) => {
+          {visible.map((signal, index) => {
+            const isPremium = signal.score >= 85;
+            // Feature 3 — show a section header at the top of each group.
+            const isFirstPremium = isPremium && index === 0;
+            const isFirstFree = !isPremium && index === premium.length;
+            const sectionHeader = isFirstPremium ? (
+              <h2 className="flex items-center gap-2 text-sm font-bold" style={{ color: AMBER }}>
+                ⭐ PREMIUM SIGNALS — Score 85+ (detailed + expert panel)
+              </h2>
+            ) : isFirstFree ? (
+              <h2 className="flex items-center gap-2 text-sm font-bold" style={{ color: MUTED }}>
+                📊 FREE SIGNALS — Score 75–84
+              </h2>
+            ) : null;
             const status = statusOf(signal);
             const tier = scoreTier(signal.score);
             const full: FullSignal = generateFullSignal({
@@ -410,6 +428,8 @@ export default function SignalsPage() {
                   )
                 : [];
             return (
+              <>
+              {sectionHeader}
               <div
                 key={`${signal.market}:${signal.symbol}`}
                 className="overflow-hidden rounded-2xl border"
@@ -425,10 +445,18 @@ export default function SignalsPage() {
                 {/* Header */}
                 <div className="mb-2 flex items-center justify-between">
                   <span className="text-base font-bold" style={{ color: TEXT }}>{displaySymbol(signal.symbol)}</span>
-                  <span className="rounded-full px-2.5 py-0.5 text-xs font-bold" style={{ color: GREEN, backgroundColor: "rgba(0,192,135,0.12)" }}>
+                  <span className="flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-bold" style={{ color: GREEN, backgroundColor: "rgba(0,192,135,0.12)" }}>
+                    {signal.score >= 85 ? <span aria-label="Premium">⭐</span> : null}
                     {tier.emoji} Score: {signal.score}/100
                   </span>
                 </div>
+
+                {/* Feature 3 — PREMIUM ribbon for 85+ setups. */}
+                {signal.score >= 85 ? (
+                  <p className="mb-2 text-xs font-bold" style={{ color: AMBER }}>
+                    ⭐ PREMIUM — High-confluence setup ({signal.confirmations ? `${signal.confirmations.confirmed}/8 conditions` : "detailed analysis"})
+                  </p>
+                ) : null}
 
                 {/* Feature 1 — full-width trend badge at the top of the card. */}
                 <TrendBadge direction={signal.direction} score={signal.score} />
@@ -528,6 +556,17 @@ export default function SignalsPage() {
                   <ExpertPanel educators={signal.experts.educators} consensus={signal.experts.consensus} />
                 ) : null}
               </Link>
+              {/* Feature 4 — "Discuss in Chat": open the AI chat with THIS signal
+                  loaded so the user can ask entry/SL/TP questions live. */}
+              <div className="px-4 pb-2">
+                <Link
+                  href={`/chat?symbol=${encodeURIComponent(signal.symbol)}`}
+                  className="flex w-full items-center justify-center gap-2 rounded-lg py-2 text-xs font-bold transition-opacity hover:opacity-90"
+                  style={{ backgroundColor: "rgba(0,192,135,0.14)", color: GREEN, border: `1px solid ${GREEN}` }}
+                >
+                  💬 Discuss in Chat
+                </Link>
+              </div>
               {/* Feature 4 — expandable guidance lives outside the link so the
                   expand buttons do not trigger card navigation. */}
               {guidanceQuotes.length > 0 ? (
@@ -537,6 +576,7 @@ export default function SignalsPage() {
               ) : null}
               <p className="px-4 pb-4 pt-2 text-xs" style={{ color: MUTED }}>⚠️ Educational only. Not financial advice.</p>
             </div>
+            </>
             );
           })}
         </div>

@@ -78,55 +78,201 @@ interface BinanceTicker {
 }
 
 async function fetchBinance(category: Category): Promise<MarketCoin[]> {
-  const path = category === "futures" ? "/fapi/v1/ticker/24hr" : "/api/v3/ticker/24hr";
-  // Vercel runs in US regions where api.binance.com answers HTTP 451
-  // (restricted territory) — that is why the page is empty on deploy but fine
-  // locally. data-api.binance.vision is Binance's official keyless market-data
-  // mirror with no geo-restriction (spot only; /fapi is not served there —
-  // futures degrades to an empty list, logged above).
-  const attempts: Array<{ host: string; timeoutMs: number }> =
-    category === "futures"
-      ? [{ host: "https://fapi.binance.com", timeoutMs: 5_000 }]
+  const isFutures = category === "futures";
+  // MASLA 1 + MASLA 2 — Binance Futures 2-step approach, merged so we ship
+  // 200+ futures coins even when api.binance.com answers HTTP 451 from Vercel's
+  // US edge. Futures is NOT served by data-api.binance.vision (spot mirror), so
+  // the fallback chain for futures ends at fapi.binance.com:
+  //   STEP A — exchangeInfo: canonical symbol universe (USDT + TRADING + no
+  //            leveraged tokens + no COIN-M margin pairs)
+  //   STEP B — ticker/24hr: live prices for that exact universe
+  //   STEP C — merge: every STEP A symbol gets a price entry (0 if live data
+  //            is missing) — never an empty row.
+  const attempts: Array<{
+    host: string;
+    exchangePath: string;
+    tickerPath: string;
+    timeoutMs: number;
+  }> =
+    isFutures
+      ? [
+          { host: "https://fapi.binance.com", exchangePath: "/fapi/v1/exchangeInfo", tickerPath: "/fapi/v1/ticker/24hr", timeoutMs: 5_000 },
+          { host: "https://data-api.binance.vision", exchangePath: "/fapi/v1/exchangeInfo", tickerPath: "/fapi/v1/ticker/24hr", timeoutMs: 6_000 },
+          { host: "https://fapi.binance.com", exchangePath: "/fapi/v1/exchangeInfo", tickerPath: "/fapi/v1/ticker/price", timeoutMs: 5_000 },
+        ]
       : [
-          { host: "https://api.binance.com", timeoutMs: 3_000 },
-          { host: "https://data-api.binance.vision", timeoutMs: 5_000 },
+          { host: "https://api.binance.com", exchangePath: "/api/v3/exchangeInfo", tickerPath: "/api/v3/ticker/24hr", timeoutMs: 3_000 },
+          { host: "https://data-api.binance.vision", exchangePath: "/api/v3/exchangeInfo", tickerPath: "/api/v3/ticker/24hr", timeoutMs: 6_000 },
         ];
 
-  let payload: unknown = null;
-  let lastError: unknown = null;
+  // STEP A — canonical symbol universe (crypto futures: USDT, TRADING only).
+  let exchange: unknown = null;
+  let exchangeError: unknown = null;
   for (const attempt of attempts) {
     try {
-      payload = await fetchJson(`${attempt.host}${path}`, attempt.timeoutMs);
+      exchange = await fetchJson(`${attempt.host}${attempt.exchangePath}`, attempt.timeoutMs);
       break;
     } catch (error) {
-      lastError = error;
+      exchangeError = error;
       console.warn(
-        `[all-coins] ${category} ${attempt.host} failed:`,
+        `[all-coins] ${isFutures ? "futures" : "spot"} exchangeInfo ${attempt.host} failed:`,
         error instanceof Error ? error.message : error,
       );
     }
   }
-  if (payload === null) throw lastError instanceof Error ? lastError : new Error("Binance unreachable");
-  if (!Array.isArray(payload)) return [];
-  const coins: MarketCoin[] = [];
-  for (const raw of payload as BinanceTicker[]) {
-    if (!raw || typeof raw.symbol !== "string") continue;
-    const symbol = raw.symbol;
-    if (!symbol.endsWith("USDT")) continue;
-    const base = symbol.slice(0, -4);
-    if (!base || LEVERAGED_TOKEN.test(base)) continue;
-    const price = num(raw.lastPrice);
-    if (price <= 0) continue;
-    coins.push({
-      symbol,
-      name: base,
-      price,
-      change24h: num(raw.priceChangePercent),
-      volume: num(raw.quoteVolume),
+  if (exchange === null) {
+    console.error(
+      `[all-coins] ${isFutures ? "futures" : "spot"} exchangeInfo unreachable from every provider:`,
+      exchangeError instanceof Error ? exchangeError.message : exchangeError,
+    );
+    return [];
+  }
+  const symbols = extractExchangeSymbols(exchange, isFutures);
+  if (symbols.length === 0 && isFutures) {
+    // Exposed futures pairs are the edge case: the fapi exchangeInfo can ship
+    // empty (or a provider may drop the payload), so fall back to building the
+    // universe straight from the live ticker/24hr list (USDT only).
+    try {
+      const primary = attempts[0];
+      const tickerPayload = await fetchJson(`${primary.host}${primary.tickerPath}`, primary.timeoutMs);
+      const list = Array.isArray(tickerPayload) ? tickerPayload : [];
+      const seen = new Set<string>();
+      const fromTicker: string[] = [];
+      for (const raw of list as Array<Record<string, unknown>>) {
+        const symbol = typeof raw.symbol === "string" ? raw.symbol : "";
+        if (symbol.endsWith("USDT") && !seen.has(symbol)) {
+          seen.add(symbol);
+          fromTicker.push(symbol);
+        }
+      }
+      if (fromTicker.length > 0) {
+        console.warn(
+          `[all-coins] futures: exchangeInfo universe empty — built ${fromTicker.length} symbols from ticker/24hr (USDT)`,
+        );
+        symbols.splice(0, symbols.length, ...fromTicker);
+      }
+    } catch (error) {
+      console.warn(
+        `[all-coins] futures: ticker-based universe fallback failed:`,
+        error instanceof Error ? error.message : error,
+      );
+    }
+    if (symbols.length === 0) return [];
+  }
+
+  // STEP B — live prices for the exact universe built in STEP A.
+  let ticker: unknown = null;
+  let tickerError: unknown = null;
+  for (const attempt of attempts) {
+    try {
+      ticker = await fetchJson(`${attempt.host}${attempt.tickerPath}`, attempt.timeoutMs);
+      break;
+    } catch (error) {
+      tickerError = error;
+      console.warn(
+        `[all-coins] ${isFutures ? "futures" : "spot"} ticker/24hr ${attempt.host} failed:`,
+        error instanceof Error ? error.message : error,
+      );
+    }
+  }
+  if (ticker === null) {
+    console.error(
+      `[all-coins] ${isFutures ? "futures" : "spot"} ticker/24hr unreachable from every provider:`,
+      tickerError instanceof Error ? tickerError.message : tickerError,
+    );
+    return symbols.map((symbol) => ({
+      symbol: symbol as string,
+      name: baseName(symbol as string),
+      price: 0,
+      change24h: 0,
+      volume: 0,
       category,
+      note: "price-unavailable",
+    }));
+  }
+  if (!Array.isArray(ticker)) {
+    return symbols.map((symbol) => ({
+      symbol: symbol as string,
+      name: baseName(symbol as string),
+      price: 0,
+      change24h: 0,
+      volume: 0,
+      category,
+      note: "price-unavailable",
+    }));
+  }
+
+  const prices = new Map<string, { price: number; change24h: number; volume: number }>();
+  for (const raw of ticker as unknown[]) {
+    const normalized = normalizeTicker(raw as Record<string, unknown>);
+    if (!normalized) continue;
+    if (!symbols.includes(normalized.symbol)) continue;
+    prices.set(normalized.symbol, {
+      price: normalized.lastPrice,
+      change24h: normalized.change24h,
+      volume: normalized.volume,
+    });
+  }
+
+  // STEP C — merge universe (STEP A) with prices (STEP B).
+  const coins: MarketCoin[] = [];
+  for (const symbol of symbols) {
+    const priceData = prices.get(symbol);
+    coins.push({
+      symbol: symbol as string,
+      name: baseName(symbol as string),
+      price: priceData ? priceData.price : 0,
+      change24h: priceData ? priceData.change24h : 0,
+      volume: priceData ? priceData.volume : 0,
+      category,
+      ...(priceData ? {} : { note: "price-unavailable" }),
     });
   }
   return coins;
+}
+
+
+// STEP A helper — tradable USDT pairs only (no leveraged tokens, no COIN-M).
+// Accepts both the new "symbols at top level" payload shape and the older
+// "result.symbols" shape, so a provider change can never drop the universe.
+function extractExchangeSymbols(payload: unknown, isFutures: boolean): string[] {
+  const container = payload as Record<string, unknown>;
+  const result =
+    (container as { result?: { symbols?: unknown[] } }).result?.symbols ??
+    (container as { symbols?: unknown[] }).symbols ??
+    [];
+  if (!Array.isArray(result)) return [];
+  const out: string[] = [];
+  for (const raw of result as Array<Record<string, unknown>>) {
+    if (!raw || typeof raw.symbol !== "string") continue;
+    const symbol = raw.symbol;
+    const status = raw.status;
+    if (status !== "TRADING") continue;
+    if (!symbol.endsWith("USDT")) continue;
+    if (LEVERAGED_TOKEN.test(symbol)) continue;
+    if (symbol.includes("COIN-M")) continue;
+    out.push(symbol);
+  }
+  return out;
+}
+
+// STEP B helper — normalises both /fapi/v1/ticker/24hr and /fapi/v1/ticker/price
+// (the fallback endpoint) into one shape: { symbol, lastPrice, change24h, volume }.
+function normalizeTicker(raw: Record<string, unknown>): { symbol: string; lastPrice: number; change24h: number; volume: number } | null {
+  const symbol = typeof raw.symbol === "string" ? raw.symbol : null;
+  if (!symbol) return null;
+  const price = num(raw.lastPrice ?? raw.price);
+  if (price <= 0) return null;
+  return {
+    symbol,
+    lastPrice: price,
+    change24h: num(raw.priceChangePercent),
+    volume: num(raw.quoteVolume),
+  };
+}
+
+function baseName(symbol: string): string {
+  return symbol.slice(0, -4);
 }
 
 // â”€â”€ Forex â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€

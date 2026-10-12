@@ -6,6 +6,7 @@ import { compactMarketContext, selectTier, systemPromptFor } from "@/src/lib/llm
 import { buildProTraderPrompt } from "@/src/lib/proTraderPrompt";
 import { getCachedSnapshot, runScan, type ScanResult, type ScanSnapshot } from "@/src/scanner/scanner";
 import { scanUniverse, type ScanMarket } from "@/src/scanner/universe";
+import { detectIntent, generateResponse, type DiscussionSignal, type Intent } from "@/src/lib/localAI";
 
 const assistantName = "Muhammad Noman's Assistant AI";
 const websiteName = "Trading Student Expert AI";
@@ -305,7 +306,7 @@ async function getAutoSearchReply(message: string): Promise<string | null> {
 
 export async function POST(request: Request) {
   try {
-    const { message, marketContext, tradingParams, history } = await request.json();
+    const { message, marketContext, tradingParams, history, signalContext } = await request.json();
 
     if (!message) {
       return Response.json({ error: "Message is required" }, { status: 400 });
@@ -322,29 +323,64 @@ export async function POST(request: Request) {
     ].some((greeting) => greeting.replace(/\s/g, "") === compactMessage);
     const romanUrduHowAreYou = /^(kaise|kese|kesy|kesi|kise|kaisay)ho$|^(kya|kia)haal(hai)?$/.test(compactMessage);
 
-    if (englishGreetingOnly || urduScriptGreetingOnly || romanUrduGreetingOnly) {
-      const greeting = urduScriptGreetingOnly
+    // MASLA 1 — greetings also go through the real AI so the reply feels
+    // natural. The canned lines below are only the fallback when every
+    // provider fails.
+    const greetingOnly = englishGreetingOnly || urduScriptGreetingOnly || romanUrduGreetingOnly || romanUrduHowAreYou;
+    const greetingFallback = urduScriptGreetingOnly
         ? "السلام علیکم! میں محمد نومان کا اسسٹنٹ AI ہوں، Trading Student Expert AI کی جانب سے۔ میں کرپٹو، فاریکس، یا اسٹاک مارکیٹ کے تجزیے میں آپ کی کیا مدد کر سکتا ہوں؟"
         : englishGreetingOnly
           ? englishGreeting
           : romanUrduHowAreYou
             ? "Main theek hoon, shukriya! Main Muhammad Noman's Assistant AI hoon. Crypto, forex, ya stock market ke hawale se aapki kya madad karoon?"
-            : "Assalam-o-alaikum! Main Muhammad Noman's Assistant AI hoon, Trading Student Expert AI ki taraf se. Crypto, forex, ya stock market analysis mein aapki kya madad kar sakta hoon?";
-      return Response.json({ reply: greeting });
+            : greetingOnly
+            ? "Assalam-o-alaikum! Main Muhammad Noman's Assistant AI hoon, Trading Student Expert AI ki taraf se. Crypto, forex, ya stock market analysis mein aapki kya madad kar sakta hoon?"
+            : null;
+
+    // MASLA 3 — sanitize the client's signal payload so the teacher prompt
+    // only ever carries discussion-relevant fields.
+    const signalData = sanitizeSignalContext(signalContext);
+
+    // ── LOCAL SMART AI (no API keys) — fast primary path ──────────────────────
+    // Knowledge intents + greetings + live price + signal discussion are all
+    // answered locally in <5ms (price/ discussion do one Binance fetch). This
+    // runs BEFORE any paid provider so the chat is instant and key-free.
+    const localIntent: Intent = detectIntent(String(message));
+    const LOCAL_FIRST: Intent[] = [
+      "GREETING",
+      "HOW_ARE_YOU",
+      "PATTERN_QUERY",
+      "INDICATOR_HELP",
+      "RISK_HELP",
+      "MARKET_OVERVIEW",
+      "COIN_PRICE",
+      "SIGNAL_DISCUSSION",
+      "HELP",
+    ];
+    if (LOCAL_FIRST.includes(localIntent)) {
+      const localReply = await generateResponse(String(message), localIntent, {
+        signal: (signalData as DiscussionSignal | null) ?? null,
+      });
+      return Response.json({ reply: localReply, provider: "local" });
     }
 
     // Masla 21 — serve repeat common queries (BTC, Gold, ETH…) from cache.
-    const cachedReply = getCachedReply(normalizedMessage);
-    if (cachedReply) {
-      return Response.json({ reply: cachedReply });
+    // Signal discussions are never cached — every answer is signal-specific.
+    if (!signalData) {
+      const cachedReply = getCachedReply(normalizedMessage);
+      if (cachedReply) {
+        return Response.json({ reply: cachedReply });
+      }
     }
 
     // Task 2 — if the user is asking for a trade/setup, scan the market directly
     // and reply with the top 80+ confluence setups (no AI call needed).
-    const autoSearchReply = await getAutoSearchReply(String(message));
-    if (autoSearchReply) {
-      setCachedReply(normalizedMessage, autoSearchReply);
-      return Response.json({ reply: autoSearchReply });
+    if (!greetingOnly && !signalData) {
+      const autoSearchReply = await getAutoSearchReply(String(message));
+      if (autoSearchReply) {
+        setCachedReply(normalizedMessage, autoSearchReply);
+        return Response.json({ reply: autoSearchReply });
+      }
     }
 
     // Multi-provider AI call (text-only, no image analysis)
@@ -359,6 +395,24 @@ export async function POST(request: Request) {
         contextText = JSON.stringify(compactMarketContext(marketContext as Record<string, unknown>));
       }
       userMessage += `\n\nApp-provided market context (use only if the user's question is about it):\n${contextText}`;
+    }
+
+    // MASLA 3 — signal discussion: frame the question as a teacher request.
+    if (signalData) {
+      const signalSymbol = typeof signalData.symbol === "string" ? signalData.symbol : "unknown";
+      userMessage = `I want to discuss my latest trading signal (${signalSymbol}). My question: ${String(message)}`;
+    }
+
+    // MASLA 4 — live engine analysis for any detected asset (BTC, DOGE, SOL…)
+    // so the AI answers with REAL numbers instead of generalities.
+    if (!greetingOnly && !signalData) {
+      const assetMention = detectAssetSymbol(String(message));
+      if (assetMention) {
+        const liveContext = await getLiveAssetContext(assetMention, new URL(request.url).origin);
+        if (liveContext) {
+          userMessage += `\n\nLIVE ENGINE DATA for ${assetMention.label} (use these REAL numbers in your reply; never invent prices):\n${liveContext}`;
+        }
+      }
     }
 
     const asksForSizing = /\b(risk|position size|position sizing|lot size|lots|sizing)\b|رسک|لاٹ سائز|پوزیشن سائز/i.test(message);
@@ -379,9 +433,12 @@ export async function POST(request: Request) {
         })
       : [];
 
-    const systemContent = tier === "deep"
+    const baseSystem = tier === "deep"
       ? `${buildProTraderPrompt()}\n\n${systemPrompt}`
       : systemPromptFor(tier, systemPrompt, englishGreeting);
+    const systemContent = signalData
+      ? `${baseSystem}\n\n${SIGNAL_TEACHER_PROMPT}\n\nSIGNAL DATA (JSON):\n${JSON.stringify(signalData)}`
+      : baseSystem;
 
     const messages: AIMessage[] = [
       { role: "system", content: systemContent },
@@ -401,8 +458,13 @@ export async function POST(request: Request) {
     } catch (error) {
       const messageErr = error instanceof Error ? error.message : "unknown error";
       if (messageErr === "ALL_PROVIDERS_EXHAUSTED" || messageErr === "CHAT_TIMEOUT") {
-        const fallback = await getRuleBasedFallback(userMessage, tier, marketContext, riskReward, new URL(request.url).origin);
-        setCachedReply(normalizedMessage, fallback);
+        // MASLA 1/3 — honest fallbacks, never a generic "service busy" reply
+        // for greetings or signal discussions.
+        if (greetingFallback) return Response.json({ reply: greetingFallback });
+        const fallback = signalData
+          ? buildSignalFallbackReply(signalData, String(message))
+          : await getRuleBasedFallback(userMessage, tier, marketContext, riskReward, new URL(request.url).origin);
+        if (!signalData) setCachedReply(normalizedMessage, fallback);
         return Response.json({ reply: fallback });
       }
       console.error("Error in chat API:", error);
@@ -411,7 +473,7 @@ export async function POST(request: Request) {
 
     const aiResponse = toTextOnly(result.text);
     const reply = aiResponse || "Sorry, mujhe theek se samajh nahi aaya. Aap thoda aur detail mein poochh lein — main crypto, forex, stocks aur metals analysis aur trading concepts mein madad kar sakta hoon.";
-    setCachedReply(normalizedMessage, reply);
+    if (!signalData) setCachedReply(normalizedMessage, reply);
     return Response.json({ reply });
   } catch (error) {
     console.error("Error in chat API:", error);
@@ -446,7 +508,200 @@ const FALLBACK_ASSETS: Array<{ test: RegExp; asset: AssetTarget }> = [
 /** Detects which asset (if any) the message is asking about. */
 function detectAssetSymbol(message: string): AssetTarget | null {
   const lower = ` ${message.toLowerCase()} `;
-  return FALLBACK_ASSETS.find((entry) => entry.test.test(lower))?.asset ?? null;
+  const mapped = FALLBACK_ASSETS.find((entry) => entry.test.test(lower))?.asset;
+  if (mapped) return mapped;
+
+  // MASLA 4 — resolve ANY tracked coin (DOGE, XRP, ADA, SHIB…) against the
+  // scanner universe so every coin in the app gets real analysis from chat.
+  const words = lower.split(/[^a-z0-9]+/).filter((word) => word.length >= 2);
+  for (const word of words) {
+    const hit = scanUniverse.find((target) => {
+      const base = target.symbol.toLowerCase().replace(/[-=].*$/, "");
+      return base === word || target.label.toLowerCase() === word;
+    });
+    if (hit) {
+      return { symbol: hit.symbol, market: hit.market, label: `${hit.label} (${hit.symbol})`, name: hit.label };
+    }
+  }
+  return null;
+}
+
+// ── MASLA 4 — live engine analysis injected into the AI prompt ────────────────
+
+/** Per-symbol cache so repeat coin questions don't refetch 4 timeframes. */
+const LIVE_TTL_MS = 2 * 60 * 1000;
+const liveAnalysisCache = new Map<string, { data: string; expires: number }>();
+
+/** Compact real-data block for the model, or null when candles are unavailable. */
+async function getLiveAssetContext(asset: AssetTarget, origin?: string): Promise<string | null> {
+  const hit = liveAnalysisCache.get(asset.symbol);
+  if (hit && Date.now() < hit.expires) return hit.data;
+
+  let analysis: AutoAnalysis;
+  try {
+    analysis = await analyzeSymbol(asset.symbol, asset.market, origin);
+  } catch (error) {
+    console.error(`Live context failed for ${asset.symbol}:`, error);
+    return null;
+  }
+  if (!Number.isFinite(analysis.current) || analysis.current <= 0) return null;
+
+  const patterns = analysis.patterns.slice(0, 2).map((p) => `${p.name} (${p.type}, ${p.confidence}%)`).join(", ") || "none";
+  const data = [
+    `Asset: ${asset.label} (${asset.symbol})`,
+    `Current price: ${analysis.current}`,
+    `Trend: ${analysis.trend} | Timeframe alignment: ${analysis.timeframeAlignment}`,
+    `RSI: ${analysis.indicators.rsi} | MACD: ${analysis.indicators.macd} | SMA: ${analysis.indicators.sma} | Volume: ${analysis.indicators.volume}`,
+    `Support: ${analysis.support} | Resistance: ${analysis.resistance}`,
+    `Recent patterns: ${patterns}`,
+    `Engine score: ${analysis.score}/100 | Verdict: ${analysis.verdict} | Risk: ${analysis.riskLevel}`,
+  ].join("\n");
+
+  if (liveAnalysisCache.size > 20) {
+    const oldest = liveAnalysisCache.keys().next().value;
+    if (oldest !== undefined) liveAnalysisCache.delete(oldest);
+  }
+  liveAnalysisCache.set(asset.symbol, { data, expires: Date.now() + LIVE_TTL_MS });
+  return data;
+}
+
+// ── MASLA 3 — signal discussion (teacher mode) ────────────────────────────────
+
+/** Teacher-mode system instructions appended when the user discusses a signal. */
+const SIGNAL_TEACHER_PROMPT = `SIGNAL DISCUSSION MODE — tum aik experienced trading teacher ho.
+User apne latest trading signal ke baare mein pooch raha hai. Neeche poora signal data JSON mein diya gaya hai.
+
+A TO Z EXPLAIN KARO (jis pe poochha jaye):
+- Pattern kya hai aur chart pe kaise bana
+- Entry kab leni chahiye (entry1 / entry2 dono ka farq)
+- SL kyun wahan rakha hai (kitna % risk hai)
+- TP1/TP2/TP3 kyun wahan hain (har target ka logic)
+- Risk kitna hai aur position size kaise nikaalein
+- Trade fail ho jaye to kya karna hai (SL hit hone pe revenge trade nahi)
+- Kab exit karna chahiye (partial profits, breakeven, trailing)
+- Kya galat ho sakta hai (honest bear case)
+
+RULES:
+- Roman Urdu + English mix — user ki language match karo.
+- HONEST raho: agar signal weak hai (score < 75, consensus 2/4 ya us se kam, indicators against) to clearly bolo aur wajah do. Kabhi force mat karo.
+- Sirf isi signal ke levels use karo; agar LIVE ENGINE DATA bhi diya ho to current price zaroor mention karo aur batao price ab entry/SL/target se kahan hai.
+- Short sawal ka chhota jawab do; "full analysis" pe detailed A→Z breakdown.
+- Educational only — not financial advice. Guarantee kabhi mat do.`;
+
+/** Keeps only discussion-relevant fields of the client's signal payload. */
+function sanitizeSignalContext(raw: unknown): Record<string, unknown> | null {
+  if (!isRecord(raw)) return null;
+  const num = (value: unknown): number | undefined =>
+    typeof value === "number" && Number.isFinite(value) ? value : undefined;
+  const str = (value: unknown): string | undefined =>
+    typeof value === "string" && value.trim() ? value.trim().slice(0, 220) : undefined;
+
+  const signal: Record<string, unknown> = {};
+  const put = (key: string, value: unknown): void => {
+    if (value !== undefined) signal[key] = value;
+  };
+
+  put("symbol", str(raw.symbol));
+  put("market", str(raw.market));
+  put("timeframe", str(raw.timeframe));
+  put("score", num(raw.score));
+  put("direction", str(raw.direction));
+  put("bias", str(raw.bias));
+  put("trend", str(raw.trend));
+  put("pattern", str(raw.pattern));
+  put("chartPattern", str(raw.chartPattern));
+  put("chartPatternNote", str(raw.chartPatternNote));
+  put("candlestick", str(raw.candlestickPattern) ?? str(raw.candlestick));
+  put("price", num(raw.price) ?? num(raw.currentPrice));
+  put("entry1", num(raw.entry1));
+  put("entry2", num(raw.entry2));
+  put("stopLoss", num(raw.stopLoss) ?? num(raw.SL));
+  put("tp1", num(raw.tp1));
+  put("tp2", num(raw.tp2));
+  put("tp3", num(raw.tp3));
+  put("support", num(raw.support));
+  put("resistance", num(raw.resistance));
+  put("consensus", str(raw.consensus));
+  put("reasoning", str(raw.reasoning) ?? str(raw.reason));
+  put("status", str(raw.status));
+  put("createdAt", num(raw.createdAt));
+
+  // 4-educator panel — role + verdict only (keeps the prompt small).
+  if (isRecord(raw.experts) && Array.isArray(raw.experts.educators)) {
+    signal.educators = (raw.experts.educators as unknown[]).slice(0, 4).flatMap((entry) => {
+      if (!isRecord(entry)) return [];
+      const role = str(entry.role) ?? str(entry.name);
+      const verdict = str(entry.verdict);
+      if (!role && !verdict) return [];
+      return [{ ...(role ? { role } : {}), ...(verdict ? { verdict } : {}) }];
+    });
+  }
+
+  // RSI / MACD / EMA / Volume confirmation rows — name + verdict only.
+  if (isRecord(raw.confirmations) && Array.isArray(raw.confirmations.indicators)) {
+    signal.indicators = (raw.confirmations.indicators as unknown[]).slice(0, 6).flatMap((entry) => {
+      if (!isRecord(entry)) return [];
+      const name = str(entry.name);
+      const signalText = str(entry.signalText) ?? str(entry.value);
+      if (!name) return [];
+      return [{ name, ...(signalText ? { signal: signalText } : {}) }];
+    });
+  }
+
+  return Object.keys(signal).length >= 2 ? signal : null;
+}
+
+/** Honest, data-driven reply used only when every AI provider failed mid-discussion. */
+function buildSignalFallbackReply(signal: Record<string, unknown>, message: string): string {
+  const str = (key: string): string | null => (typeof signal[key] === "string" ? signal[key] : null);
+  const num = (key: string): number | null =>
+    typeof signal[key] === "number" && Number.isFinite(signal[key]) ? (signal[key] as number) : null;
+
+  const symbol = str("symbol") ?? "Signal";
+  const pattern = str("chartPattern") ?? str("pattern") ?? "No clear pattern";
+  const score = num("score");
+  const consensus = str("consensus");
+  const direction = str("bias") ?? str("trend") ?? str("direction") ?? "—";
+  const price = num("price");
+  const entry1 = num("entry1");
+  const entry2 = num("entry2");
+  const sl = num("stopLoss");
+  const tp1 = num("tp1");
+  const tp2 = num("tp2");
+  const tp3 = num("tp3");
+  const support = num("support");
+  const resistance = num("resistance");
+  const status = str("status");
+
+  const fmt = (value: number | null): string =>
+    value === null ? "—" : value >= 1000 ? `$${value.toLocaleString("en-US", { maximumFractionDigits: 2 })}` : `$${value.toFixed(value >= 1 ? 2 : 4)}`;
+
+  const weak = (score !== null && score < 75) || (consensus !== null && parseInt(consensus, 10) < 3);
+  const asksRisk = /\b(risk|sl|stop|loss|fail|wrong|invalid)\b/i.test(message);
+  const asksExit = /\b(exit|target|tp|profit|close)\b/i.test(message);
+
+  const lines: string[] = [];
+  lines.push(`🎯 ${symbol} — Saved Signal Plan (engine data):`);
+  lines.push(`Direction: ${direction} | Pattern: ${pattern}${score !== null ? ` | Score: ${score}/100` : ""}${consensus ? ` | Consensus: ${consensus}` : ""}`);
+  if (price !== null) lines.push(`Price at signal: ${fmt(price)}${status ? ` | Status: ${status}` : ""}`);
+  lines.push(`Entry: ${fmt(entry1)} / ${fmt(entry2)}`);
+  lines.push(`Stop Loss: ${fmt(sl)} | Targets: ${fmt(tp1)} → ${fmt(tp2)} → ${fmt(tp3)}`);
+  if (support !== null || resistance !== null) lines.push(`Support: ${fmt(support)} | Resistance: ${fmt(resistance)}`);
+  lines.push("");
+  if (asksRisk) {
+    lines.push(weak
+      ? "⚠️ Honest risk view: ye signal weak side pe hai (score/consensus kam hai). Risk zyada hai — chhota position size ya wait behtar."
+      : "Risk plan ke hisaab se controlled hai agar SL per trade rakha jaye. 1% rule follow karein.");
+  } else if (asksExit) {
+    lines.push("Exit plan: TP1 pe partial profit, SL move to breakeven, phir TP2/TP3 trailing. SL hit ho jaye to exit — revenge trade nahi.");
+  } else {
+    lines.push(weak
+      ? "⚠️ Honest take: ye signal weak hai (score ya consensus target se neeche). Confirm hone tak wait karein."
+      : "Signal structure theek hai, lekin confirmation ka intezaar karein aur SL zaroor rakhein.");
+  }
+  lines.push("");
+  lines.push("⚠️ AI providers abhi available nahi the — ye jawab sirf saved signal data se bana hai, levels khud chart pe verify karein. Educational only, not financial advice.");
+  return lines.join("\n");
 }
 
 /** $2,340 / $1.0850 style money for the fallback reply. */
@@ -626,7 +881,10 @@ async function getRuleBasedFallback(
   }
 
   if (parts.length === 0) {
-    return `Filhaal AI service thora busy hai, lekin aap BTC, ETH, Gold, Silver ya EUR ka full analysis poochh sakte hain — ya jaise "RSI kya hai" se trading concepts samajh sakte hain. ⚠️ Educational only. Not financial advice.`;
+    // MASLA 1 — honest error instead of a generic "service busy" reply.
+    return romanUrdu
+      ? "Maazrat — saare AI providers abhi available nahi hain (API limit ya outage), is liye is sawal ka bina AI ke theek se jawab nahi de sakta. Aap koi asset analysis poochhain (misal: \"BTC analysis\", \"DOGE analysis\") — us ka real-data analysis abhi bhi milega — ya 1-2 minute baad dobara try karein. ⚠️ Educational only. Not financial advice."
+      : "Sorry — every AI provider is currently unavailable (API limit or outage), so I cannot answer this one honestly without AI. You can still ask for asset analysis (e.g. \"BTC analysis\", \"DOGE analysis\") which runs on real engine data, or try again in a minute or two. ⚠️ Educational only. Not financial advice.";
   }
 
   return parts.join(" ");

@@ -2,7 +2,9 @@
 
 // AI Assistant chat page — single window, fast, text-only replies.
 // Educational analysis only. Not financial advice.
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, Suspense } from "react";
+import { useSearchParams } from "next/navigation";
+import { loadSignalBackup, saveSignalBackup, subscribeSignals, type CloudDoc } from "@/src/lib/signalCloud";
 
 const BG = "#0B0E11";
 const CARD = "#181A20";
@@ -31,13 +33,40 @@ interface Session {
   messages: Message[];
 }
 
-const QUICK = ["BTC Analysis", "Gold", "EUR/USD", "ETH"];
+/** MASLA 3 — suggested questions shown while a signal discussion is active. */
+const SIGNAL_QUESTIONS = [
+  "Explain this pattern",
+  "What's the risk?",
+  "When to exit?",
+  "Should I take this trade?",
+  "What if it goes wrong?",
+];
 
 /** Client cache for common queries so repeat asks are instant. */
 const queryCache = new Map<string, string>();
 
 function uid(): string {
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+/** Short string field of a cloud signal doc, or null. */
+function sigStr(signal: CloudDoc, key: string): string | null {
+  const value = signal[key];
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+/** Finite number field of a cloud signal doc, or null. */
+function sigNum(signal: CloudDoc, key: string): number | null {
+  const value = signal[key];
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+/** Newest-first signal list (max 10). */
+function sortSignals(list: CloudDoc[]): CloudDoc[] {
+  return [...list]
+    .filter((signal) => typeof signal?.symbol === "string")
+    .sort((a, b) => (sigNum(b, "createdAt") ?? 0) - (sigNum(a, "createdAt") ?? 0))
+    .slice(0, 10);
 }
 
 function titleFrom(text: string): string {
@@ -78,12 +107,27 @@ function extractReply(payload: unknown): string {
 }
 
 export default function ChatPage() {
+  return (
+    <Suspense fallback={<div className="flex min-h-screen items-center justify-center" style={{ backgroundColor: BG, color: MUTED }}>Loading chat…</div>}>
+      <ChatPageInner />
+    </Suspense>
+  );
+}
+
+function ChatPageInner() {
+  const searchParams = useSearchParams();
+  const symbolParam = searchParams.get("symbol")?.trim() ?? "";
+  const handledSymbolRef = useRef<string>("");
   const [sessions, setSessions] = useState<Session[]>(() => loadSessions());
   const [activeId, setActiveId] = useState<string>(() => loadActive() ?? loadSessions()[0]?.id ?? newSession().id);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [typed, setTyped] = useState(""); // typing effect for the streaming reply
   const [showHistory, setShowHistory] = useState(false);
+  // MASLA 3 — latest signals from Firestore (or localStorage backup) + the
+  // signal currently being discussed in this chat.
+  const [signals, setSignals] = useState<CloudDoc[]>([]);
+  const [signalCtx, setSignalCtx] = useState<CloudDoc | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const abortRef = useRef<AbortController | null>(null);
   const typingTimer = useRef<number | null>(null);
@@ -92,6 +136,18 @@ export default function ChatPage() {
   useEffect(() => {
     setSessions((prev) => (prev.some((s) => s.id === activeId) ? prev : [currentOrNew(activeId), ...prev]));
   }, [activeId]);
+
+  // MASLA 3 — load the latest signal (instant restore from the localStorage
+  // backup, then live updates from the Firestore `signals` collection).
+  useEffect(() => {
+    setSignals(sortSignals(loadSignalBackup()));
+    const unsubscribe = subscribeSignals((fresh) => {
+      const sorted = sortSignals(fresh);
+      setSignals(sorted);
+      saveSignalBackup(sorted);
+    });
+    return unsubscribe;
+  }, []);
 
   const active = useMemo(
     () => sessions.find((s) => s.id === activeId) ?? currentOrNew(activeId),
@@ -157,7 +213,8 @@ export default function ChatPage() {
 
     const cacheKey = text.toLowerCase();
     // Cache hit for common queries (BTC, Gold, etc.) — instant reply.
-    const cached = queryCache.get(cacheKey);
+    // Signal discussions skip the cache: every answer is signal-specific.
+    const cached = signalCtx ? undefined : queryCache.get(cacheKey);
     if (cached) {
       runTyping(cached);
       setLoading(false);
@@ -178,12 +235,12 @@ export default function ChatPage() {
       const res = await fetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message: text, history }),
+        body: JSON.stringify({ message: text, history, signalContext: signalCtx ?? undefined }),
         signal: controller.signal,
       });
       const payload: unknown = await res.json().catch(() => null);
       const reply = extractReply(payload) || "Sorry, main abhi jawab nahi de paaya. Thodi der baad try karein.";
-      queryCache.set(cacheKey, reply);
+      if (!signalCtx) queryCache.set(cacheKey, reply);
       runTyping(reply);
       updateActive([...nextMessages, { id: uid(), role: "assistant", text: reply, time: Date.now() }]);
     } catch {
@@ -195,7 +252,7 @@ export default function ChatPage() {
       setLoading(false);
       setTyped("");
     }
-  }, [active.messages, loading, updateActive, runTyping]);
+  }, [active.messages, loading, signalCtx, updateActive, runTyping]);
 
   const newChat = () => {
     const session = newSession();
@@ -215,6 +272,49 @@ export default function ChatPage() {
     setShowHistory(false);
     try { localStorage.setItem(ACTIVE_KEY, id); } catch { /* ignore */ }
   };
+
+  const latestSignal = signals[0] ?? null;
+
+  // MASLA 3 — "Discuss this signal": load the signal context into the chat so
+  // every following question is answered against THIS signal's data. Reused by
+  // the "Discuss this signal" button and the /chat?symbol= deep-link (Feature 4).
+  const loadSignalCtx = (target: CloudDoc) => {
+    if (signalCtx) return;
+    setSignalCtx(target);
+    const symbol = sigStr(target, "symbol") ?? "Signal";
+    const pattern = sigStr(target, "chartPattern") ?? sigStr(target, "pattern") ?? "No clear pattern";
+    const score = sigNum(target, "score");
+    const bias = sigStr(target, "bias") ?? sigStr(target, "direction") ?? "";
+    const note: Message = {
+      id: uid(),
+      role: "assistant",
+      text: `🎯 Signal context load ho gaya: ${symbol}\nPattern: ${pattern}${score !== null ? ` | Score: ${score}/100` : ""}${bias ? ` | Direction: ${bias}` : ""}\n\nAb is signal ke baare mein A→Z kuch bhi poochhain — pattern, entry, SL, TP, risk, exit, position size. Neeche diye gaye sawal click karein ya apna sawal likhein.`,
+      time: Date.now(),
+    };
+    updateActive([...active.messages, note]);
+  };
+
+  const discussLatest = () => {
+    if (!latestSignal) return;
+    loadSignalCtx(latestSignal);
+  };
+
+  // Feature 4 — when arriving from /chat?symbol=BTCUSDT, auto-load that exact
+  // signal once the Firestore list has arrived (handled once per symbol).
+  useEffect(() => {
+    if (!symbolParam || signalCtx) return;
+    if (handledSymbolRef.current === symbolParam) return;
+    const match = signals.find((s) => {
+      const sym = sigStr(s, "symbol");
+      if (!sym) return false;
+      const base = sym.toUpperCase().replace(/[-=].*$/, "");
+      const want = symbolParam.toUpperCase().replace(/[-=].*$/, "");
+      return base === want || sym.toUpperCase() === symbolParam.toUpperCase();
+    });
+    if (!match) return;
+    handledSymbolRef.current = symbolParam;
+    loadSignalCtx(match);
+  }, [symbolParam, signals, signalCtx, loadSignalCtx]);
 
   const lastAssistant = active.messages[active.messages.length - 1];
   const isTyping = loading || (typed.length > 0 && lastAssistant?.role !== "assistant");
@@ -276,7 +376,7 @@ export default function ChatPage() {
       >
         {active.messages.length === 0 && !loading && (
           <p className="py-8 text-center text-sm" style={{ color: MUTED }}>
-            Salam! Poochein BTC, Gold, EUR/USD ya ETH ke baare mein. 👋
+            Salam! Kuch bhi poochhein — koi bhi coin (BTC, DOGE, SOL…), market scan, trading concepts, ya apne last signal ki A→Z discussion. 👋
           </p>
         )}
         {active.messages.map((m) => (
@@ -307,20 +407,102 @@ export default function ChatPage() {
         )}
       </div>
 
-      {/* Quick actions */}
-      <div className="mt-3 flex flex-wrap gap-2">
-        {QUICK.map((q) => (
+      {/* MASLA 3 — last-signal card (discuss A→Z in chat) */}
+      {latestSignal && (
+        <div className="mt-3 rounded-2xl border p-3" style={{ backgroundColor: CARD, borderColor: BORDER }}>
+          <div className="flex items-center justify-between gap-3">
+            <div className="min-w-0">
+              <p className="truncate text-sm font-bold" style={{ color: TEXT }}>
+                🎯 Last Signal: {sigStr(latestSignal, "symbol") ?? "—"}
+              </p>
+              <p className="truncate text-xs" style={{ color: MUTED }}>
+                Pattern: {sigStr(latestSignal, "chartPattern") ?? sigStr(latestSignal, "pattern") ?? "No clear pattern"}
+                {sigNum(latestSignal, "score") !== null ? ` | Score: ${sigNum(latestSignal, "score")}` : ""}
+                {sigStr(latestSignal, "timeframe") ? ` | ${sigStr(latestSignal, "timeframe")}` : ""}
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={discussLatest}
+              disabled={Boolean(signalCtx)}
+              className="shrink-0 rounded-full px-3 py-1.5 text-xs font-semibold disabled:opacity-50"
+              style={{ backgroundColor: GREEN, color: BG }}
+            >
+              {signalCtx ? "Discussing…" : "Discuss this signal"}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Active signal discussion banner */}
+      {signalCtx && (
+        <div className="mt-2 flex items-center gap-2 rounded-xl border px-3 py-2" style={{ backgroundColor: CARD, borderColor: GREEN }}>
+          <span className="truncate text-xs font-semibold" style={{ color: TEXT }}>
+            🎯 Discussing: {sigStr(signalCtx, "symbol") ?? "Signal"}
+          </span>
           <button
-            key={q}
             type="button"
-            onClick={() => void send(q)}
+            onClick={() => setSignalCtx(null)}
+            className="ml-auto shrink-0 rounded-full border px-2 py-0.5 text-[10px] font-semibold"
+            style={{ color: MUTED, borderColor: BORDER }}
+          >
+            ✕ End
+          </button>
+        </div>
+      )}
+
+      {/* Quick actions — dynamic, not hardcoded */}
+      <div className="mt-3 flex flex-wrap gap-2">
+        <button
+          type="button"
+          onClick={() => void send("Scan the market and show me the top high-confluence setups")}
+          className="rounded-full border px-3 py-1 text-xs font-semibold"
+          style={{ backgroundColor: CARD, color: TEXT, borderColor: BORDER }}
+        >
+          🔍 Scan Market Now
+        </button>
+        {latestSignal && !signalCtx && (
+          <button
+            type="button"
+            onClick={discussLatest}
             className="rounded-full border px-3 py-1 text-xs font-semibold"
             style={{ backgroundColor: CARD, color: TEXT, borderColor: BORDER }}
           >
-            {q}
+            🎯 Discuss My Last Signal
           </button>
-        ))}
+        )}
+        {signals.slice(0, 5).map((signal) => {
+          const symbol = sigStr(signal, "symbol") ?? "?";
+          return (
+            <button
+              key={`${symbol}-${sigNum(signal, "createdAt") ?? 0}`}
+              type="button"
+              onClick={() => void send(`${symbol} analysis`)}
+              className="rounded-full border px-3 py-1 text-xs font-semibold"
+              style={{ backgroundColor: CARD, color: TEXT, borderColor: BORDER }}
+            >
+              {symbol.replace(/[-=].*$/, "")}
+            </button>
+          );
+        })}
       </div>
+
+      {/* MASLA 3 — suggested questions while discussing a signal */}
+      {signalCtx && (
+        <div className="mt-2 flex flex-wrap gap-2">
+          {SIGNAL_QUESTIONS.map((question) => (
+            <button
+              key={question}
+              type="button"
+              onClick={() => void send(question)}
+              className="rounded-full border px-3 py-1 text-xs font-semibold"
+              style={{ backgroundColor: CARD, color: GREEN, borderColor: GREEN }}
+            >
+              {question}
+            </button>
+          ))}
+        </div>
+      )}
 
       {/* Input + Send */}
       <div className="mt-3 flex items-center gap-2">

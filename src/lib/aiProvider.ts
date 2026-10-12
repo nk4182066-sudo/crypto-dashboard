@@ -23,21 +23,25 @@ interface Provider {
   skip?: boolean;
 }
 
-/** Tried in order; first healthy key wins. Cloudflare needs account_id, so it waits. */
+/** Tried in order; first healthy key wins. Models verified live (2026) — the
+ *  old llama-3.3-70b-versatile / gemini-2.0-flash names were decommissioned,
+ *  which is what made every provider look "unavailable". Cloudflare needs
+ *  account_id, so it waits. */
 const PROVIDERS: Provider[] = [
-  { name: "groq", envKey: "GROQ_KEY_1", model: "llama-3.3-70b-versatile", endpoint: "https://api.groq.com/openai/v1/chat/completions", style: "openai" },
-  { name: "mistral", envKey: "MISTRAL_KEY", model: "mistral-small-latest", endpoint: "https://api.mistral.ai/v1/chat/completions", style: "openai" },
-  { name: "cohere", envKey: "COHERE_KEY", model: "command-r-plus-08-2024", endpoint: "https://api.cohere.com/v2/chat", style: "cohere" },
-  { name: "huggingface", envKey: "HUGGINGFACE_KEY", model: "meta-llama/Llama-3.3-70B-Instruct", endpoint: "https://api-inference.huggingface.co/models/meta-llama/Llama-3.3-70B-Instruct/v1/chat/completions", style: "openai" },
-  { name: "openrouter", envKey: "OPENROUTER_KEY_1", model: "qwen/qwen3-coder:free", endpoint: "https://openrouter.ai/api/v1/chat/completions", style: "openai" },
-  { name: "gemini", envKey: "GEMINI_KEY_1", model: "gemini-2.0-flash", endpoint: "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=KEY", style: "gemini" },
+  { name: "groq", envKey: "GROQ_KEY_1", model: "openai/gpt-oss-120b", endpoint: "https://api.groq.com/openai/v1/chat/completions", style: "openai" },
+  { name: "mistral", envKey: "MISTRAL_KEY", model: "open-mistral-nemo", endpoint: "https://api.mistral.ai/v1/chat/completions", style: "openai" },
+  { name: "gemini", envKey: "GEMINI_KEY_1", model: "gemma-4-26b-a4b-it", endpoint: "https://generativelanguage.googleapis.com/v1beta/models/gemma-4-26b-a4b-it:generateContent?key=KEY", style: "gemini" },
+  { name: "groq-qwen", envKey: "GROQ_KEY_1", model: "qwen/qwen3.8-27b", endpoint: "https://api.groq.com/openai/v1/chat/completions", style: "openai" },
+  { name: "cohere", envKey: "COHERE_KEY", model: "command-a-03-2025", endpoint: "https://api.cohere.com/v2/chat", style: "cohere" },
+  { name: "huggingface", envKey: "HUGGINGFACE_KEY", model: "meta-llama/Llama-3.3-70B-Instruct", endpoint: "https://router.huggingface.co/v1/chat/completions", style: "openai" },
+  { name: "openrouter", envKey: "OPENROUTER_KEY_1", model: "qwen/qwen3-coder", endpoint: "https://openrouter.ai/api/v1/chat/completions", style: "openai" },
   { name: "cloudflare", envKey: "CLOUDFLARE_KEY", model: "@cf/meta/llama-3.3-70b-instruct", endpoint: "https://api.cloudflare.com/client/v4/accounts/ACCOUNT_ID/ai/run/", style: "openai", skip: true },
 ];
 
 const COOLDOWN_MS = 60_000;
 const TIMEOUT_MS = 10_000;
 
-/** envKey name -> epoch ms until which the key stays blocked. */
+/** provider name -> epoch ms until which that provider stays blocked. */
 const blockedUntil = new Map<string, number>();
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -49,19 +53,19 @@ export function getAvailableKey(providerName: string): string | null {
   if (!provider || provider.skip) return null;
   const key = process.env[provider.envKey]?.trim();
   if (!key) return null;
-  const blocked = blockedUntil.get(provider.envKey) ?? 0;
+  const blocked = blockedUntil.get(providerName) ?? 0;
   return Date.now() < blocked ? null : key;
 }
 
-/** Puts a failed key on a 60 second cooldown. */
-export function markKeyFailed(envKeyName: string, error: string): void {
-  blockedUntil.set(envKeyName, Date.now() + COOLDOWN_MS);
-  console.log(`[AI] ${envKeyName} cooling down 60s: ${error.slice(0, 160)}`);
+/** Puts a failed provider on a 60 second cooldown. */
+export function markKeyFailed(providerName: string, error: string): void {
+  blockedUntil.set(providerName, Date.now() + COOLDOWN_MS);
+  console.log(`[AI] ${providerName} cooling down 60s: ${error.slice(0, 160)}`);
 }
 
 /** Clears the cooldown after a successful call. */
-export function markKeySuccess(envKeyName: string): void {
-  blockedUntil.delete(envKeyName);
+export function markKeySuccess(providerName: string): void {
+  blockedUntil.delete(providerName);
 }
 
 /** "gsk_ab...xy" — first 6 chars, ellipsis, last 2. */
@@ -154,12 +158,12 @@ export async function callAI(messages: AIMessage[]): Promise<AIResult> {
       const raw = await callProvider(provider, messages);
       const text = normalizeResponse(provider.name, raw).trim();
       if (!text) throw new Error(`${provider.name} returned empty text`);
-      markKeySuccess(provider.envKey);
+      markKeySuccess(provider.name);
       console.log(`[AI] Response from: ${provider.name}`);
       return { text, provider: provider.name };
     } catch (error) {
       const message = error instanceof Error ? error.message : "unknown error";
-      markKeyFailed(provider.envKey, message);
+      markKeyFailed(provider.name, message);
       console.log(`[AI] ${provider.name} failed: ${message}`);
     }
   }
