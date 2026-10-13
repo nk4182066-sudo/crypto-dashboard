@@ -287,14 +287,32 @@ export async function GET(request: Request) {
     .filter((item) => item.market === market)
     .sort((first, second) => second.confidence - first.confidence);
 
+  // Debug counters (?debug=1) — surface where candidates get dropped live so a
+  // 0-signal response is diagnosable instead of a silent empty array.
+  const drops = {
+    candidates: ordered.length,
+    noDetail: 0,
+    neutral: 0,
+    gateFail: 0,
+    gateNoPlan: 0,
+    frequency: 0,
+    emitted: 0,
+  };
+
   for (const item of ordered) {
     const detail = getCachedAnalysis(item.symbol, item.market);
-    if (!detail) continue;
+    if (!detail) {
+      drops.noDetail += 1;
+      continue;
+    }
 
     const direction: MarketSignal["direction"] =
       item.direction === "buy" ? "bullish" : item.direction === "sell" ? "bearish" : "neutral";
     // The gate only emits directional setups; "wait" never becomes a signal.
-    if (direction === "neutral") continue;
+    if (direction === "neutral") {
+      drops.neutral += 1;
+      continue;
+    }
 
     const candles = cacheGet<Candle[]>(`scan:candles:${item.market}:${item.symbol}`) ?? [];
     const candleHit = detectCandlestickPattern(candles);
@@ -309,10 +327,21 @@ export async function GET(request: Request) {
     });
 
     // Any failed check -> no signal (dropped entirely, not shown).
-    if (!gate.pass || !gate.plan) continue;
+    if (!gate.pass) {
+      drops.gateFail += 1;
+      continue;
+    }
+    if (!gate.plan) {
+      drops.gateNoPlan += 1;
+      continue;
+    }
 
     // Frequency caps: same symbol once per 24h, <=3 per market/day, <=10/day.
-    if (!withinFrequency(item.symbol, item.market, now)) continue;
+    if (!withinFrequency(item.symbol, item.market, now)) {
+      drops.frequency += 1;
+      continue;
+    }
+    drops.emitted += 1;
 
     const support = detail.structure.lastSwingLow?.price ?? null;
     const resistance = detail.structure.lastSwingHigh?.price ?? null;
@@ -380,8 +409,14 @@ export async function GET(request: Request) {
     await persistSignals(emitted.map((signal) => toCloudDoc(signal, "1h")));
   }
 
+  const wantsDebug = searchParams.get("debug") === "1";
   return Response.json(
-    { generatedAt: snapshot?.generatedAt ?? new Date().toISOString(), market, results: emitted },
+    {
+      generatedAt: snapshot?.generatedAt ?? new Date().toISOString(),
+      market,
+      results: emitted,
+      ...(wantsDebug ? { drops, snapshotFound: Boolean(snapshot), merged: merged.size } : {}),
+    },
     { headers: { "Cache-Control": "no-store" } }
   );
 }
