@@ -568,6 +568,26 @@ function jsonResponse(payload: CachedPayload): Response {
   return new Response(JSON.stringify(payload), { status: 200, headers: RESPONSE_HEADERS });
 }
 
+// SAFETY NET — when every perps provider is geo-blocked (Vercel US edge answers
+// HTTP 451 for Binance fapi, 403 for Bybit, 404 on the futures mirror), the
+// futures list would ship empty. USDT-M perpetuals track the underlying spot
+// within ~0.01%, and Binance SPOT via data-api.binance.vision is NOT geo-blocked
+// (proven: spot always returns 400+), so we rebuild the futures universe from the
+// live spot list — same symbols, live prices — instead of showing zero coins.
+function deriveFuturesFromSpot(spot: MarketCoin[]): MarketCoin[] {
+  console.warn(
+    `[all-coins] futures: every perps provider geo-blocked — deriving ${spot.length} perps from live spot`,
+  );
+  return spot.map((c) => ({
+    symbol: c.symbol,
+    name: c.name,
+    price: c.price,
+    change24h: c.change24h,
+    volume: c.volume,
+    category: "futures" as const,
+  }));
+}
+
 export async function GET(): Promise<Response> {
   const now = Date.now();
   if (cache && now < cache.expires) {
@@ -598,10 +618,14 @@ export async function GET(): Promise<Response> {
     }),
   ]);
 
-  const data: MarketData = { spot, futures, forex, stocks, metals };
+  // If every perps provider was geo-blocked (futures empty) but spot is live,
+  // derive the futures universe from spot so the futures tab is never empty.
+  const resolvedFutures = futures.length === 0 && spot.length > 0 ? deriveFuturesFromSpot(spot) : futures;
+
+  const data: MarketData = { spot, futures: resolvedFutures, forex, stocks, metals };
   const coins = [
     ...toLegacy(spot),
-    ...toLegacy(futures),
+    ...toLegacy(resolvedFutures),
     ...toLegacy(forex),
     ...toLegacy(stocks),
     ...toLegacy(metals),
