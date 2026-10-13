@@ -108,8 +108,13 @@ export interface MarketSignal {
 // ------------------------------------------------------------------ frequency
 // Strict quality > quantity. Cap how often signals are surfaced so we never
 // flood the user. Limits are enforced per (symbol, 24h) and per market per day.
-const MAX_SIGNALS_PER_DAY = 10;
-const MAX_SIGNALS_PER_MARKET_PER_DAY = 3;
+//
+// Raised from 10/3 after the 0-signal bug: on serverless these in-memory caps
+// reset per instance, and a warm instance whose scheduler already used the old
+// 3/market quota returned 0 to the browser. 20/day, 8/market keeps a reliable
+// 5-10 setups visible per tab (matches the "5-10 minimum" spec) with headroom.
+const MAX_SIGNALS_PER_DAY = 20;
+const MAX_SIGNALS_PER_MARKET_PER_DAY = 8;
 const SYMBOL_COOLDOWN_MS = 24 * 60 * 60 * 1000;
 
 interface EmissionRecord {

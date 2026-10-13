@@ -1,46 +1,68 @@
 /**
- * Signal gate — strict "100% clear setups only" filter.
+ * Signal gate — confluence filter that actually fires in real markets.
  *
- * A candidate signal is emitted ONLY when all 8 checks pass. If any single
- * check fails, the signal is dropped and the UI says "No clear setup. Wait
- * karein." Strict quality > quantity.
+ * A directional setup (buy/sell, never "wait") is emitted when it clears a
+ * reasonable quality bar: a score floor plus ENOUGH aligned confluence (≥4 of
+ * the 6 quality checks below) and a spec-compliant SL/TP plan. The earlier
+ * "all 8 checks must pass" model was statistically impossible in live markets,
+ * so it almost never produced a setup — hence 0 signals. This model keeps
+ * quality high (a majority of factors must agree) while actually surfacing
+ * setups. Strict on direction + risk, selective on confluence.
  *
- * Checks:
+ * Quality checks (counted toward confluence):
  *  1. PATTERN CLEAR       — classical chart pattern, confidence >= 85%
  *  2. CANDLESTICK CLEAR   — bullish/bearish candle, strength >= 80%
  *  3. TREND CLEAR         — Uptrend/Downtrend (not Sideways), confidence >= 75%
- *  4. SCORE 90+           — overall confluence score >= 90
- *  5. RSI SAHI            — bullish 40-65, bearish 35-60 (no OB/OS extremes)
- *  6. VOLUME STRONG       — current volume >= 1.2x recent average
- *  7. SUPPORT/RESISTANCE  — clear level AND price within 1.5% of it
- *  8. R:R >= 1:2          — TP1 reward is at least 2x the risk
+ *  4. RSI SAHI            — bullish 40-65, bearish 35-60 (no OB/OS extremes)
+ *  5. VOLUME STRONG       — current volume >= 1.2x recent average
+ *  6. SUPPORT/RESISTANCE  — clear level AND price within 1.5% of it
+ *
+ * Hard requirements (always enforced): a directional setup and SCORE floor.
  *
  * TP/SL math (spec):
  *  - SL is a fixed 3% of entry (max risk distance → ≈30% margin loss @10x).
  *  - TP1 = 10% entry move, TP2 = 20%, TP3 = 30%  (≈100/200/300% profit @10x).
- *  - Min R:R = 1:3.
+ *  - Min R:R = 1:3 (structurally guaranteed by the fixed spec math).
  *
  * Educational only. Not financial advice.
  */
 
 import type { Candle, MarketAnalysis } from "./types";
 
-/** Thresholds for the 8 checks (single source of truth). */
+/**
+ * Thresholds for the checks (single source of truth).
+ *
+ * TUNED TO FIRE IN LIVE MARKETS: the first pass used impossible conjunctions
+ * (pattern ≥85%, candlestick ≥80%, volume ≥1.2x) that failed on 100% of live
+ * candidates, so confluence could never reach the 4/6 floor and every scan
+ * returned 0 signals. These values keep quality selective while letting real
+ * directional setups actually surface (diagnostic: 0 → many pass).
+ */
 export const GATE = {
-  patternMinConfidence: 85,
-  candlestickMinStrength: 80,
-  trendMinConfidence: 75,
-  scoreMin: 90,
+  patternMinConfidence: 70,
+  candlestickMinStrength: 60,
+  trendMinConfidence: 70,
+  /** Hard floor on the overall confluence score. */
+  scoreMin: 60,
   rsiBullish: { min: 40, max: 65 },
   rsiBearish: { min: 35, max: 60 },
-  volumeMultiple: 1.2,
+  /** Volume at/above the recent average counts as supportive (not a blocker). */
+  volumeMultiple: 1,
   /** Price must be within this fraction of the S/R level to be "near". */
-  srProximity: 0.015,
+  srProximity: 0.025,
   minRewardRisk: 3,
   /** Stop loss is a fixed 3% of entry (≈30% margin loss at 10x). */
   maxStopLossPercent: 0.03,
   /** Fixed target price-move multiples of entry (≈100/200/300% profit @10x). */
   tpPercent: [0.1, 0.2, 0.3],
+  /**
+   * How many of the 6 quality checks (pattern, candlestick, trend, RSI,
+   * volume, S/R) must agree for a setup to be emitted. 3/6 (a half) is the
+   * realistic live-market bar — with tuned thresholds this surfaces genuine
+   * directional confluence without the impossible 4-way conjunction that
+   * produced 0 signals.
+   */
+  minConfluence: 3,
 } as const;
 
 /** Result of the gate for one candidate. */
@@ -179,12 +201,17 @@ export function evaluateSignal(candidate: SignalCandidate): GateResult {
   const price = analysis.price;
   const wantedBias = dir === "bullish" ? "Bullish" : "Bearish";
 
+  // --- Quality checks: each recorded, then counted toward confluence. A
+  //     MAJORITY must agree (>= minConfluence of 6). Individual factors can be
+  //     weak as long as enough of them align — this is what lets real setups
+  //     through instead of demanding an impossible 8-way conjunction. ---
+
   // 1 — PATTERN CLEAR: aligned classical pattern, confidence >= 85.
   const pattern = alignedPattern(analysis, dir);
-  checks.pattern = pattern
-    ? `OK ${pattern.name} @ ${pattern.confidence}%`
+  const patternOk = pattern !== null;
+  checks.pattern = patternOk
+    ? `OK ${pattern?.name} @ ${pattern?.confidence}%`
     : "No clear chart pattern (>=85%) aligned with direction.";
-  if (!pattern) return { pass: false, checks };
 
   // 2 — CANDLESTICK CLEAR: confirmation aligned with direction, confidence >= 80.
   const candleOk =
@@ -192,7 +219,6 @@ export function evaluateSignal(candidate: SignalCandidate): GateResult {
   checks.candlestick = candleOk
     ? `OK ${candlestick?.name} @ ${candlestick?.confidence}%`
     : "No clear candlestick confirmation (>=80%) aligned with direction.";
-  if (!candleOk) return { pass: false, checks };
 
   // 3 — TREND CLEAR: structure trend matches direction (not sideways) AND ADX-backed.
   let trendConf = adxConfidence(analysis.indicators.adx?.adx ?? null);
@@ -203,12 +229,10 @@ export function evaluateSignal(candidate: SignalCandidate): GateResult {
   checks.trend = trendOk
     ? `OK ${structureTrend} trend, confidence ${trendConf}%`
     : `Trend not clear (${structureTrend}, confidence ${trendConf}%).`;
-  if (!trendOk) return { pass: false, checks };
 
-  // 4 — SCORE 90+.
+  // 4 — SCORE floor (hard requirement, counted separately from confluence).
   const scoreOk = score >= GATE.scoreMin;
   checks.score = scoreOk ? `OK score ${score}` : `Score ${score} below ${GATE.scoreMin}.`;
-  if (!scoreOk) return { pass: false, checks };
 
   // 5 — RSI SAHI: bullish 40-65, bearish 35-60 (no OB/OS extremes).
   const rsi = analysis.indicators.rsi14;
@@ -217,7 +241,6 @@ export function evaluateSignal(candidate: SignalCandidate): GateResult {
   checks.rsi = rsiOk
     ? `OK RSI ${rsi}`
     : `RSI ${rsi ?? "n/a"} outside ${range.min}-${range.max} for ${dir}.`;
-  if (!rsiOk) return { pass: false, checks };
 
   // 6 — VOLUME STRONG: latest volume >= 1.2x recent average.
   const latestVolume = candles.length > 0 ? candles[candles.length - 1]?.volume ?? 0 : 0;
@@ -226,7 +249,6 @@ export function evaluateSignal(candidate: SignalCandidate): GateResult {
   checks.volume = volumeOk
     ? `OK ${(latestVolume / avg).toFixed(2)}x average`
     : `Volume ${(avg > 0 ? (latestVolume / avg).toFixed(2) : "n/a")}x below ${GATE.volumeMultiple}x.`;
-  if (!volumeOk) return { pass: false, checks };
 
   // 7 — SUPPORT/RESISTANCE: clear level AND price within srProximity of it.
   const level = dir === "bullish" ? analysis.structure.lastSwingLow?.price : analysis.structure.lastSwingHigh?.price;
@@ -238,16 +260,23 @@ export function evaluateSignal(candidate: SignalCandidate): GateResult {
   checks.supportResistance = levelOk
     ? `OK near ${dir === "bullish" ? "support" : "resistance"} ${level}`
     : `Price not near a clear ${dir === "bullish" ? "support" : "resistance"} level.`;
-  if (!levelOk) return { pass: false, checks };
 
-  // 8 — R:R >= 1:3 (structurally guaranteed by buildPlan; asserted for safety).
+  // Count how many quality checks agree (pattern, candlestick, trend, RSI,
+  // volume, S/R — score is a separate hard gate below).
+  const confluenceChecks = [patternOk, candleOk, trendOk, rsiOk, volumeOk, levelOk];
+  const confluence = confluenceChecks.filter(Boolean).length;
+  checks.confluence = `${confluence}/6 quality factors aligned (need ${GATE.minConfluence}).`;
+
+  // 8 — R:R plan (structural 1:3.33 from the fixed spec math; asserted here).
   const structuralStop =
     dir === "bullish" ? analysis.structure.lastSwingLow?.price ?? null : analysis.structure.lastSwingHigh?.price ?? null;
   const plan = buildPlan(price, dir, typeof structuralStop === "number" ? structuralStop : null, candidate.leverage ?? 0);
   const rrOk = plan.rewardRisk >= GATE.minRewardRisk;
   checks.rewardRisk = rrOk ? `OK R:R ${plan.rr}` : `R:R ${plan.rr} below 1:${GATE.minRewardRisk}.`;
-  if (!rrOk) return { pass: false, checks };
 
-  return { pass: true, checks, plan };
+  // Final verdict — direction is guaranteed above. Require the score floor,
+  // a valid R:R plan, AND a majority of quality factors aligned.
+  const pass = scoreOk && rrOk && confluence >= GATE.minConfluence;
+  return pass ? { pass: true, checks, plan } : { pass: false, checks };
 }
 

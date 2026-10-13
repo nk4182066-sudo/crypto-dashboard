@@ -236,13 +236,15 @@ export default function SignalsPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- `tick` intentionally re-triggers the TTL filter
   }, [apiSignals, cloudSignals, backupSignals, tick]);
 
-  // Feature 3 — split signals into FREE (75-84) and PREMIUM (85+). Anything
-  // below 75 is hidden (kept high-quality only). Highest score first.
+  // Feature 3 — split signals into FREE (65-84) and PREMIUM (85+). Anything
+  // below 65 is hidden (kept high-quality only). Highest score first. Floor was
+  // 75 but the gate emits from 60, so a 65 floor surfaces reliable gate-passers
+  // while the gate's own scoreMin=60 keeps junk out.
   const { premium, free } = useMemo(() => {
-    const sorted = signals.filter((s) => s.score >= 75).sort((first, second) => second.score - first.score);
+    const sorted = signals.filter((s) => s.score >= 65).sort((first, second) => second.score - first.score);
     return {
       premium: sorted.filter((s) => s.score >= 85),
-      free: sorted.filter((s) => s.score >= 75 && s.score < 85),
+      free: sorted.filter((s) => s.score >= 65 && s.score < 85),
     };
   }, [signals]);
   const visible = useMemo(() => [...premium, ...free], [premium, free]);
