@@ -412,8 +412,15 @@ export async function GET(request: Request) {
   // the Signals page survives reloads. Dedupe (same symbol+timeframe <4h →
   // skip) and the 4h auto-delete sweep live inside persistSignals(); failures
   // never break the response (localStorage backup still covers the page).
+  // Wrapped defensively: toCloudDoc() → generateFullSignal() runs here and, if
+  // it ever threw for one odd signal shape, it must not 500 the whole route —
+  // persistence is best-effort, the emitted array is what matters.
   if (emitted.length > 0) {
-    await persistSignals(emitted.map((signal) => toCloudDoc(signal, "1h")));
+    try {
+      await persistSignals(emitted.map((signal) => toCloudDoc(signal, "1h")));
+    } catch (error) {
+      console.warn("[market-signals] persist step failed (non-fatal):", error);
+    }
   }
 
   const wantsDebug = searchParams.get("debug") === "1";
