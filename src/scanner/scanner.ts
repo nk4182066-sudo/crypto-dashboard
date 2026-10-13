@@ -30,8 +30,16 @@ export interface ScanSnapshot {
 const SNAPSHOT_KEY = "scanner:snapshot";
 const SNAPSHOT_TTL_MS = 20 * 60 * 1000;
 const DETAILS_KEY = "scanner:details";
-/** How many per-symbol analyses the shared cache keeps before eviction. */
-const DETAILS_MAX_ENTRIES = 200;
+/**
+ * How many per-symbol analyses the shared cache keeps before eviction.
+ *
+ * Raised from 200: the store is a single global Map and every cacheSet()
+ * evicts it down to its own maxEntries, so a cold serverless scan of ~115
+ * symbols (x ~3 entries each: candles + details + candlestick) would evict
+ * its own per-symbol details mid-scan, leaving getCachedAnalysis() null for
+ * every candidate and 0 signals. 1000 keeps a full scan resident.
+ */
+const DETAILS_MAX_ENTRIES = 1000;
 /** Per-symbol candlestick confirmation, cached alongside the analysis detail. */
 const CANDLE_KEY = "scanner:candlestick";
 

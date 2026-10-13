@@ -265,10 +265,17 @@ export async function GET(request: Request) {
 
   // One shared, cached scan pass: concurrent requests and rapid tab switches
   // reuse the same work instead of hammering the provider.
+  //
+  // maxEntries raised from 2: cacheSet() evicts the ENTIRE global in-process
+  // store down to this number, so the old value of 2 destroyed every per-symbol
+  // analysis detail runScan() had just written — getCachedAnalysis() then
+  // returned null for all candidates and the page showed 0 signals on a cold
+  // serverless instance. Kept high enough that the scan results coexist with
+  // the detail/candlestick entries they depend on.
   const extra: ScanResult[] = missing.length
     ? await cached<ScanResult[]>(
         "signals:extra-scan",
-        { ttlMs: 5 * 60 * 1000, staleMs: 15 * 60 * 1000, maxEntries: 2 },
+        { ttlMs: 5 * 60 * 1000, staleMs: 15 * 60 * 1000, maxEntries: 1016 },
         async () => (await runScan(missing)).results
       )
     : [];
