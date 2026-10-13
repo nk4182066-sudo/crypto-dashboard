@@ -235,6 +235,54 @@ async function fetchBinance(category: Category): Promise<MarketCoin[]> {
 // STEP A helper — tradable USDT pairs only (no leveraged tokens, no COIN-M).
 // Accepts both the new "symbols at top level" payload shape and the older
 // "result.symbols" shape, so a provider change can never drop the universe.
+// ── FUTURES FALLBACK (Bybit linear) ──────────────────────────────────────────
+// Vercel's US edge answers HTTP 451 for fapi.binance.com (geo-restriction) and
+// data-api.binance.vision does NOT mirror futures, so every Binance futures
+// attempt can fail and leave the futures tab empty (futures: 0). Bybit's public
+// /v5/market/tickers?category=linear endpoint is not geo-blocked and returns the
+// full USDT-perp universe (800+ symbols) with live prices, so we fall back to it
+// whenever Binance yields nothing. Same MarketCoin shape, so callers don't change.
+async function fetchBybitFutures(): Promise<MarketCoin[]> {
+  const payload = await fetchJson("https://api.bybit.com/v5/market/tickers?category=linear", 8_000);
+  const list = (payload as { result?: { list?: unknown[] } })?.result?.list;
+  if (!Array.isArray(list)) return [];
+  const coins: MarketCoin[] = [];
+  const seen = new Set<string>();
+  for (const raw of list as Array<Record<string, unknown>>) {
+    const symbol = typeof raw.symbol === "string" ? raw.symbol : "";
+    if (!symbol.endsWith("USDT")) continue;          // USDT perps only
+    if (LEVERAGED_TOKEN.test(symbol)) continue;      // skip UP/DOWN/BULL/BEAR leveraged tokens
+    if (seen.has(symbol)) continue;
+    seen.add(symbol);
+    // Bybit: lastPrice (string), price24hPcnt (fraction e.g. 0.012 = 1.2%), turnover24h (quote vol).
+    const price = num(raw.lastPrice);
+    const change24h = num(raw.price24hPcnt) * 100;   // fraction -> percent
+    coins.push({
+      symbol,
+      name: baseName(symbol),
+      price,
+      change24h: Math.round(change24h * 100) / 100,
+      volume: num(raw.turnover24h),
+      category: "futures",
+      ...(price > 0 ? {} : { note: "price-unavailable" }),
+    });
+  }
+  return coins;
+}
+
+// Tries Binance futures first (canonical); if it returns 0 symbols (the Vercel
+// US-edge 451 case) or throws, rebuilds the futures universe from Bybit linear.
+async function fetchFuturesWithFallback(): Promise<MarketCoin[]> {
+  try {
+    const binance = await fetchBinance("futures");
+    if (binance.length > 0) return binance;
+    console.warn("[all-coins] futures: Binance returned 0 (geo-block?) - falling back to Bybit linear");
+  } catch (error) {
+    console.warn("[all-coins] futures: Binance failed - falling back to Bybit linear:", error instanceof Error ? error.message : error);
+  }
+  return fetchBybitFutures();
+}
+
 function extractExchangeSymbols(payload: unknown, isFutures: boolean): string[] {
   const container = payload as Record<string, unknown>;
   const result =
@@ -532,7 +580,7 @@ export async function GET(): Promise<Response> {
       console.error("[all-coins] spot failed:", e instanceof Error ? e.message : e);
       return [] as MarketCoin[];
     }),
-    fetchBinance("futures").catch((e) => {
+    fetchFuturesWithFallback().catch((e) => {
       console.error("[all-coins] futures failed:", e instanceof Error ? e.message : e);
       return [] as MarketCoin[];
     }),
