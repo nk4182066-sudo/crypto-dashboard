@@ -266,18 +266,17 @@ export default function SignalsPage() {
     };
   }, [signals]);
 
-  // Auto-save every 80+ setup into localStorage so the Results page can track it
-  // A→Z (entries, SL, TP1-3, support/resistance, trend, pattern, candlestick).
-  // saveSignal() de-dupes per symbol within a rolling 24h window, so the 5-min
-  // refresh just skips coins already saved today instead of piling up duplicates.
-  // Runs client-side only.
+  // Auto-save every visible 80+ setup into localStorage so the Results page can
+  // track it A→Z (entries, SL, TP1-3, support/resistance, trend, pattern,
+  // candlestick). A signal's score is authoritative here; the expert panel is
+  // cosmetic enrichment and is null whenever the candle cache is cold, so
+  // (previously) almost nothing got saved and /results stayed empty. Client-side
+  // only. De-dupes per symbol within a rolling 24h window, so the 5-min refresh
+  // just skips coins already saved today instead of piling up duplicates.
   useEffect(() => {
     if (loading) return;
     for (const signal of visible) {
       if (signal.score < MIN_SCORE) continue;
-      // Feature 3 — only save setups where at least 3 of 4 experts agree
-      // (and skip when the panel data is missing entirely).
-      if (!signal.experts || signal.experts.consensus.agreed < 3) continue;
       const full: FullSignal = generateFullSignal({
         symbol: signal.symbol,
         market: signal.market,

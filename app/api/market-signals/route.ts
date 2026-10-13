@@ -105,62 +105,17 @@ export interface MarketSignal {
   experts?: { educators: EducatorVerdict[]; consensus: Consensus } | null;
 }
 
-// ------------------------------------------------------------------ frequency
-// Strict quality > quantity. Cap how often signals are surfaced so we never
-// flood the user. Limits are enforced per (symbol, 24h) and per market per day.
+// ------------------------------------------------------------------ response cap
+// Strict quality > quantity. Return at most N setups per market on every
+// request so the list stays stable and we never flood the user.
 //
-// Raised from 10/3 after the 0-signal bug: on serverless these in-memory caps
-// reset per instance, and a warm instance whose scheduler already used the old
-// 3/market quota returned 0 to the browser. 20/day, 8/market keeps a reliable
-// 5-10 setups visible per tab (matches the "5-10 minimum" spec) with headroom.
-const MAX_SIGNALS_PER_DAY = 20;
+// This used to be an in-memory per-symbol cooldown + daily counter, but those
+// live on the serverless instance — a warm instance that had already emitted
+// returned 0 on the next request, flip-flopping the page between N and 0.
+// The response is now capped by count only; duplicate-suppression across
+// refreshes is handled by persistSignals()'s 4h per-symbol guard (which reads
+// Firestore, shared across instances), so the browser always gets a full list.
 const MAX_SIGNALS_PER_MARKET_PER_DAY = 8;
-const SYMBOL_COOLDOWN_MS = 24 * 60 * 60 * 1000;
-
-interface EmissionRecord {
-  /** market:Symbol key -> last emitted epoch ms. */
-  lastBySymbol: Map<string, number>;
-  /** market -> count of signals emitted in the current UTC day. */
-  countByMarketToday: Map<ScanMarket, number>;
-  /** UTC day string the per-market counts belong to (resets at midnight). */
-  dayStamp: string;
-}
-
-const emission: EmissionRecord = {
-  lastBySymbol: new Map(),
-  countByMarketToday: new Map(),
-  dayStamp: "",
-};
-
-/** True when emitting a signal for this symbol+market stays within the caps. */
-function withinFrequency(symbol: string, market: ScanMarket, now: number): boolean {
-  const dayStamp = new Date(now).toISOString().slice(0, 10);
-  if (emission.dayStamp !== dayStamp) {
-    // New UTC day -> reset the per-market daily counters.
-    emission.dayStamp = dayStamp;
-    emission.countByMarketToday.clear();
-  }
-
-  const key = `${market}:${symbol}`;
-  const last = emission.lastBySymbol.get(key);
-  if (last !== undefined && now - last < SYMBOL_COOLDOWN_MS) return false;
-
-  const marketCount = emission.countByMarketToday.get(market) ?? 0;
-  if (marketCount >= MAX_SIGNALS_PER_MARKET_PER_DAY) return false;
-
-  const total = [...emission.countByMarketToday.values()].reduce((a, b) => a + b, 0);
-  if (total >= MAX_SIGNALS_PER_DAY) return false;
-
-  return true;
-}
-
-/** Records that a signal was emitted (updates symbol cooldown + daily counts). */
-function recordEmission(symbol: string, market: ScanMarket, now: number): void {
-  const dayStamp = new Date(now).toISOString().slice(0, 10);
-  emission.dayStamp = dayStamp;
-  emission.lastBySymbol.set(`${market}:${symbol}`, now);
-  emission.countByMarketToday.set(market, (emission.countByMarketToday.get(market) ?? 0) + 1);
-}
 
 /**
  * Maps an all-coins symbol to the Yahoo chart symbol the scanner reads:
@@ -288,7 +243,6 @@ export async function GET(request: Request) {
   // Every candidate runs the 8-check gate. Only gate-passing, in-frequency
   // signals are emitted. Anything else is dropped — the UI then shows
   // "No clear setup. Wait karein." Strict quality > quantity.
-  const now = Date.now();
   const emitted: MarketSignal[] = [];
   const ordered = [...merged.values()]
     .filter((item) => item.market === market)
@@ -346,8 +300,12 @@ export async function GET(request: Request) {
       continue;
     }
 
-    // Frequency caps: same symbol once per 24h, <=3 per market/day, <=10/day.
-    if (!withinFrequency(item.symbol, item.market, now)) {
+    // Response cap — return up to N setups per market on EVERY request so the
+    // page always shows a stable list. (The old in-memory cooldown gated the
+    // response itself, so a warm instance returned 0 on repeat calls and the
+    // list flip-flopped 18 -> 0. Persistence dedupe now lives in
+    // persistSignals()'s own 4h per-symbol guard instead.)
+    if (emitted.length >= MAX_SIGNALS_PER_MARKET_PER_DAY) {
       drops.frequency += 1;
       continue;
     }
@@ -408,7 +366,6 @@ export async function GET(request: Request) {
       confirmations,
       experts,
     });
-    recordEmission(item.symbol, item.market, now);
   }
 
   // MASLA 2 — persist every emitted setup (Firestore `signals` collection) so
