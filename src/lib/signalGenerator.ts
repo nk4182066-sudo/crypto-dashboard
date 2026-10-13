@@ -112,6 +112,12 @@ export interface FullSignal {
   whyRomanUrdu: string;
   whyEnglish: string;
   reversalWarnings: string[];
+  /** KAAM 6 — upside scenario (what a winning continuation looks like). */
+  bullCase: string;
+  /** KAAM 6 — downside scenario (what failure looks like). */
+  bearCase: string;
+  /** KAAM 6 — the exact conditions that invalidate the setup. */
+  invalidation: string[];
   teacherNotesRomanUrdu: string;
   teacherNotesEnglish: string;
 }
@@ -292,6 +298,27 @@ export function generateFullSignal(input: FullSignalInput): FullSignal {
         `${money(resistance)} pe strong selling / volume spike → reversal ka risk.`,
       ];
 
+  // KAAM 6 — explicit bull / bear scenario + invalidation triggers.
+  const bullCase = bearish
+    ? `Bear case (short): agar ${money(resistance)} phir reject ho aur volume badhe to ${money(tp1)} → ${money(tp3)} tak move ho sakta hai.`
+    : `Bull case (long): agar breakout volume ke saath ${money(tp1)} cross kare to ${money(tp3)} tak extension ho sakti hai.`;
+
+  const bearCase = bearish
+    ? `Bear case fails: agar price ${money(resistance)} ke upar close kare → short galat, cover karein.`
+    : `Bear case: agar ${money(support)} support toot jaye to ${money(support * 0.97)} tak gir sakta hai.`;
+
+  const invalidation = bearish
+    ? [
+        `Signal invalid hoga jab: (1) 4h candle ${money(resistance)} ke UPAR close kare,`,
+        `(2) RSI 30 se neeche gir jaye (strong bounce — cover karein),`,
+        `(3) volume 50% se zyada drop ho jaye.`,
+      ]
+    : [
+        `Signal invalid hoga jab: (1) 4h candle ${money(stopLoss)} ke NEECHE close kare,`,
+        `(2) RSI 50 se upar chala jaye bina price ${money(tp1)} ki taraf move ke,`,
+        `(3) volume 50% se zyada drop ho jaye.`,
+      ];
+
   const teacherNotesRomanUrdu =
     `Ye ${dirWord.toLowerCase()} setup strong lag raha hai. Do entries use karo — ` +
     `aggressive (${money(entry1)}) ya conservative (${money(entry2)}). ` +
@@ -346,6 +373,9 @@ export function generateFullSignal(input: FullSignalInput): FullSignal {
     whyRomanUrdu,
     whyEnglish,
     reversalWarnings,
+    bullCase,
+    bearCase,
+    invalidation,
     teacherNotesRomanUrdu,
     teacherNotesEnglish,
   };

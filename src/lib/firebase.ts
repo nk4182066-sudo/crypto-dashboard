@@ -51,17 +51,20 @@ export async function signInWithFacebook(): Promise<User> {
 }
 
 /**
- * Signs the current user out and clears the onboarding flag so the story /
- * register flow reshows on next load. Throws so callers can surface the error.
+ * Professional logout. Signs out of Firebase first (removes the session), then
+ * wipes every piece of client state — localStorage + sessionStorage INCLUDING
+ * the "onboarding-complete" flag — so the next load starts at the login screen
+ * instead of the dashboard. Throws so callers can surface an error.
  */
 export async function signOutUser(): Promise<void> {
   if (auth) {
     await firebaseSignOut(auth);
   }
   try {
-    localStorage.removeItem("onboarding-complete");
+    localStorage.clear();
+    sessionStorage.clear();
   } catch {
-    /* ignore quota / private-mode failures */
+    /* private-mode — nothing to clear */
   }
 }
 

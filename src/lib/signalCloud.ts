@@ -31,8 +31,10 @@ import {
   type Firestore,
 } from "firebase/firestore";
 
-/** Signals older than this expire (4 hours — dedupe window + auto-delete). */
-export const SIGNAL_TTL_MS = 4 * 60 * 60 * 1000;
+/** Same symbol+timeframe inside this window is skipped (dedupe, not expiry). */
+export const DEDUPE_WINDOW_MS = 4 * 60 * 60 * 1000;
+/** Signals older than this expire and are auto-deleted (KAAM 9 — 30 days). */
+export const SIGNAL_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 
 /** Firestore collection. */
 export const SIGNALS_COLLECTION = "signals";
@@ -123,7 +125,7 @@ export async function persistSignals(signals: CloudDoc[]): Promise<void> {
       const existing = await getDoc(ref);
       if (existing.exists()) {
         const previous = existing.data() as { createdAt?: number };
-        if (typeof previous.createdAt === "number" && now - previous.createdAt < SIGNAL_TTL_MS) {
+        if (typeof previous.createdAt === "number" && now - previous.createdAt < DEDUPE_WINDOW_MS) {
           skipped += 1; // dedupe: same symbol+timeframe inside 4h → skip
           continue;
         }

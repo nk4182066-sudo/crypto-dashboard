@@ -11,8 +11,9 @@ import PatternLanguageTabs, { type PatternDetailLanguage } from "@/components/Pa
 import { generateFullSignal, type FullSignal } from "@/src/lib/signalGenerator";
 import { saveSignal, MIN_SCORE } from "@/src/lib/signalStorage";
 import { CandlestickVisual, ChartPatternVisual } from "@/components/PatternVisuals";
-import { TrendBadge, ConfirmationSection, ExpertPanel, GuidanceSection } from "@/components/AnalysisInsights";
+import { TrendBadge, ConfirmationSection, IndicatorPanel, ExpertPanel, GuidanceSection } from "@/components/AnalysisInsights";
 import { buildGuidance, type ConfirmationIndicator, type Consensus, type EducatorVerdict } from "@/src/lib/confirmations";
+import type { IndicatorRow } from "@/src/lib/indicatorEngine";
 import type { CloudDoc } from "@/src/lib/signalCloud";
 
 const LANG_STORAGE_KEY = "signals-language";
@@ -48,6 +49,8 @@ interface MarketSignal {
   candlestickConfidence: number;
   /** Feature 2 — real-data confirmation breakdown (null when candles are cold). */
   confirmations?: { indicators: ConfirmationIndicator[]; confirmed: number; total: number } | null;
+  /** KAAM 4 — the full 10-indicator institutional panel (null when candles are cold). */
+  indicators?: IndicatorRow[] | null;
   /** Feature 3 — expert panel + consensus (save requires agreed >= 3). */
   experts?: { educators: EducatorVerdict[]; consensus: Consensus } | null;
 }
@@ -59,10 +62,10 @@ const TABS: { key: Market; label: string }[] = [
   { key: "metals", label: "Metals" },
 ];
 
-// MASLA 2 — auto-refresh every 30s (spec); also re-runs the 4h TTL check.
+// MASLA 2 — auto-refresh every 30s (spec); also re-runs the retention check.
 const REFRESH_MS = 30 * 1000;
-/** Stored setups (cloud/backup) older than this expire — same 4h window. */
-const SIGNAL_TTL_MS = 4 * 60 * 60 * 1000;
+/** Stored setups (cloud/backup) older than this expire — 30-day retention (KAAM 9). */
+const SIGNAL_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 
 function fmtPrice(p: number | null): string {
   if (p == null || !Number.isFinite(p) || p === 0) return "—";
@@ -86,15 +89,21 @@ function directionLabel(direction: MarketSignal["direction"]): string {
 
 /** Status wording stays educational: never "Buy now"/"Signal". */
 function statusOf(signal: MarketSignal): { text: string; color: string } {
-  if (signal.score >= 85 && signal.direction !== "neutral") return { text: "Setup detected", color: GREEN };
+  if (signal.score >= MIN_SCORE && signal.direction !== "neutral")
+    return { text: "High-Confidence Setup", color: GREEN };
   return { text: "Watch zone", color: AMBER };
 }
 
-/** Score tier badge — only 80+ are shown, so every card is at least "Excellent". */
+/**
+ * MASLA 4/6 — score badge mirrors the Trade page exactly: it shows the REAL
+ * score from the shared strict engine (Trade + Signals use the same 8-condition
+ * formula, so they can never disagree). The emoji is cosmetic only — the
+ * number is authoritative. 8/8=100 PERFECT, 7/8=88 STRONG.
+ */
 function scoreTier(score: number): { emoji: string; label: string } {
-  if (score >= 90) return { emoji: "🏆", label: "Excellent" };
-  if (score >= 80) return { emoji: "⭐", label: "Strong" };
-  return { emoji: "⭐", label: "Strong" };
+  if (score >= 100) return { emoji: "🏆", label: "PERFECT — 8/8 Conditions" };
+  if (score >= 88) return { emoji: "⭐", label: "STRONG — 7/8 Conditions" };
+  return { emoji: "⭐", label: "STRONG" };
 }
 
 function timeAgo(iso: string): string {
@@ -207,8 +216,8 @@ export default function SignalsPage() {
 
   // Merge live API + cloud + backup into one list: one card per market:symbol,
   // newest analysis wins (the live API is applied last so it wins ties).
-  // Stored copies older than the 4h TTL drop out while the page is open —
-  // `tick` changes every 30s, which re-runs that freshness filter.
+  // Stored copies older than the 30-day retention drop out while the page is
+  // open — `tick` changes every 30s, which re-runs that freshness filter.
   const signals = useMemo(() => {
     const now = Date.now();
     const fresh = (signal: MarketSignal): boolean => {
@@ -229,25 +238,27 @@ export default function SignalsPage() {
         byKey.set(key, signal);
       }
     };
-    backupSignals.filter(fresh).forEach(put);
-    cloudSignals.filter(fresh).forEach(put);
-    apiSignals.forEach(put);
+    // MASLA 2 — category filter: EVERY source is filtered to the ACTIVE tab's
+    // market BEFORE merging. The cloud (Firestore) and localStorage backup hold
+    // signals from all four markets at once, so without this per-source
+    // category filter crypto coins (e.g. TRX/USD) leak into the Forex tab.
+    const inMarket = (signal: MarketSignal): boolean => signal.market === market;
+    backupSignals.filter(fresh).filter(inMarket).forEach(put);
+    cloudSignals.filter(fresh).filter(inMarket).forEach(put);
+    apiSignals.filter(inMarket).forEach(put);
     return [...byKey.values()];
     // eslint-disable-next-line react-hooks/exhaustive-deps -- `tick` intentionally re-triggers the TTL filter
-  }, [apiSignals, cloudSignals, backupSignals, tick]);
+  }, [apiSignals, cloudSignals, backupSignals, tick, market]);
 
-  // Feature 3 — split signals into FREE (65-84) and PREMIUM (85+). Anything
-  // below 65 is hidden (kept high-quality only). Highest score first. Floor was
-  // 75 but the gate emits from 60, so a 65 floor surfaces reliable gate-passers
-  // while the gate's own scoreMin=60 keeps junk out.
-  const { premium, free } = useMemo(() => {
-    const sorted = signals.filter((s) => s.score >= 65).sort((first, second) => second.score - first.score);
-    return {
-      premium: sorted.filter((s) => s.score >= 85),
-      free: sorted.filter((s) => s.score >= 65 && s.score < 85),
-    };
-  }, [signals]);
-  const visible = useMemo(() => [...premium, ...free], [premium, free]);
+  // MASLA 6 — show ONLY 88+ ("STRONG" = 7/8 conditions) setups. 6/8 conditions
+  // (75) or lower is REJECTED and hidden. Highest score first. Nothing below
+  // MIN_SCORE is ever emitted either, so this is purely an ordering step.
+  const visible = useMemo(
+    () => signals
+      .filter((s) => s.score >= MIN_SCORE)
+      .sort((first, second) => second.score - first.score),
+    [signals],
+  );
 
   // Backup layer — persist whatever is on screen so the next reload starts
   // from it (works even without Firebase / offline).
@@ -362,7 +373,7 @@ export default function SignalsPage() {
           <div className="rounded-2xl border p-6 text-center text-sm" style={{ backgroundColor: CARD, borderColor: BORDER, color: MUTED }}>
             <p>Abhi koi signal nahi.</p>
             <p className="mt-1">Market analysis chal raha hai — 30 second baad dobara check karein.</p>
-            <p className="mt-2 text-xs opacity-70">(Sirf 80+ score wale setups yahan dikhte hain.)</p>
+            <p className="mt-2 text-xs opacity-70">(Sirf 88+ score wale high-confidence setups yahan dikhte hain.)</p>
           </div>
         ) : (
           <div className="animate-pulse rounded-2xl border p-6 text-center text-sm" style={{ backgroundColor: CARD, borderColor: BORDER, color: MUTED }} role="status">
@@ -376,21 +387,17 @@ export default function SignalsPage() {
             <p className="text-center text-xs" style={{ color: MUTED }} role="status">Live scan chal raha hai…</p>
           )}
           {visible.map((signal, index) => {
-            const isPremium = signal.score >= 85;
-            // Feature 3 — show a section header at the top of each group.
-            const isFirstPremium = isPremium && index === 0;
-            const isFirstFree = !isPremium && index === premium.length;
-            const sectionHeader = isFirstPremium ? (
-              <h2 className="flex items-center gap-2 text-sm font-bold" style={{ color: AMBER }}>
-                ⭐ PREMIUM SIGNALS — Score 85+ (detailed + expert panel)
-              </h2>
-            ) : isFirstFree ? (
-              <h2 className="flex items-center gap-2 text-sm font-bold" style={{ color: MUTED }}>
-                📊 FREE SIGNALS — Score 75–84
+            // MASLA 6 — every visible card is 88+; a single header tops the list.
+            const sectionHeader = index === 0 ? (
+              <h2 className="mb-3 flex items-center gap-2 text-sm font-bold" style={{ color: AMBER }}>
+                ⭐ PREMIUM SETUPS — Score 88+ (High-Confidence)
               </h2>
             ) : null;
             const status = statusOf(signal);
             const tier = scoreTier(signal.score);
+            // KAAM 3 — derive the strict-engine condition count from the shared
+            // score so the card never overstates it: 100→8/8, 88→7/8, else 6/8.
+            const conditionsCount = signal.score >= 100 ? 8 : signal.score >= 88 ? 7 : 6;
             const full: FullSignal = generateFullSignal({
               symbol: signal.symbol,
               market: signal.market,
@@ -447,18 +454,18 @@ export default function SignalsPage() {
                 <div className="mb-2 flex items-center justify-between">
                   <span className="text-base font-bold" style={{ color: TEXT }}>{displaySymbol(signal.symbol)}</span>
                   <span className="flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-bold" style={{ color: GREEN, backgroundColor: "rgba(0,192,135,0.12)" }}>
-                    {signal.score >= 85 ? <span aria-label="Premium">⭐</span> : null}
                     {tier.emoji} Score: {signal.score}/100
                   </span>
                 </div>
 
-                {/* Feature 3 — PREMIUM ribbon for 85+ setups. */}
-                {signal.score >= 85 ? (
-                  <p className="mb-2 text-xs font-bold" style={{ color: AMBER }}>
-                    ⭐ PREMIUM — High-confluence setup ({signal.confirmations ? `${signal.confirmations.confirmed}/8 conditions` : "detailed analysis"})
-                  </p>
-                ) : null}
-
+                {/* KAAM 4/6 — every visible card is 88+ (7-8/8 conditions), so the
+                    ribbon always shows. Conditions are the shared strict-engine
+                    count (score 100=8/8, 88=7/8); experts is the live X/4 panel. */}
+                <p className="mb-2 text-xs font-bold" style={{ color: AMBER }}>
+                  ⭐ Premium Setup — Institutional-Grade Analysis
+                  {` · ${conditionsCount}/8 Conditions`}
+                  {signal.experts ? ` · ${signal.experts.consensus.agreed}/4 Experts Confirmed` : ""}
+                </p>
                 {/* Feature 1 — full-width trend badge at the top of the card. */}
                 <TrendBadge direction={signal.direction} score={signal.score} />
 
@@ -547,12 +554,29 @@ export default function SignalsPage() {
                   ))}
                 </ul>
 
+                {/* KAAM 6 — explicit bull / bear scenario. */}
+                <Section title="🐂 Bull Case" />
+                <p className="text-xs leading-relaxed" style={{ color: GREEN }}>{full.bullCase}</p>
+                <Section title="🐻 Bear Case" />
+                <p className="text-xs leading-relaxed" style={{ color: RED }}>{full.bearCase}</p>
+
+                {/* KAAM 6 — exact invalidation triggers. */}
+                <Section title="🚫 Invalidation" />
+                <ul className="ml-4 list-disc space-y-0.5 text-xs" style={{ color: RED }}>
+                  {full.invalidation.map((w) => (
+                    <li key={w}>{w}</li>
+                  ))}
+                </ul>
+
                 {/* Teacher notes */}
                 <Section title={lang === "urdu" ? "🎓 Teacher Notes (Roman Urdu)" : "🎓 Teacher Notes (English)"} />
                 <p className="text-xs leading-relaxed" style={{ color: MUTED }}>{teacher}</p>
 
-                {/* Features 2-3 — confirmation indicators + expert panel. */}
+                {/* Features 2-4 — confirmation indicators, 10-indicator panel + expert panel. */}
                 {signal.confirmations ? <ConfirmationSection report={signal.confirmations} /> : null}
+                {signal.indicators && signal.indicators.length > 0 ? (
+                  <IndicatorPanel indicators={signal.indicators} />
+                ) : null}
                 {signal.experts ? (
                   <ExpertPanel educators={signal.experts.educators} consensus={signal.experts.consensus} />
                 ) : null}

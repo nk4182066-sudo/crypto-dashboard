@@ -292,15 +292,13 @@ export default function TradingChart({ data, chartKey = "", signals = [], candle
           style: 2,
         },
       },
-      rightPriceScale: {
-        borderColor: '#2b3139',
-      },
       handleScale: {
         axisPressedMouseMove: true,
         mouseWheel: true,
         pinch: true,
       },
       handleScroll: {
+        // MASLA 3 — wheel zooms, pressed-drag moves the chart horizontally.
         mouseWheel: true,
         pressedMouseMove: true,
         horzTouchDrag: true,
@@ -311,6 +309,20 @@ export default function TradingChart({ data, chartKey = "", signals = [], candle
         timeVisible: true,
         secondsVisible: false,
         rightOffset: 6,
+        // MASLA 3 — autoScale ON: the price axis always fits the full visible
+        // range (upper + lower), so support/resistance lines stay on screen.
+        // Drag moves the view, wheel zooms (handleScroll below).
+        rightBarStaysOnScroll: true,
+      },
+      leftPriceScale: {
+        visible: true,
+        borderColor: '#2b3139',
+      },
+      rightPriceScale: {
+        borderColor: '#2b3139',
+        // MASLA 3 — autoScale ON by default: scales the price axis to the visible
+        // candles so upper + lower extremes and S/R lines are always shown.
+        autoScale: true,
       },
     });
 
@@ -556,11 +568,10 @@ export default function TradingChart({ data, chartKey = "", signals = [], candle
     }
 
     if (data.length > 0 && chartRef.current && (isNewChart || !previous?.data.length || !visibleRange)) {
-      if (data.length > 140) {
-        chartRef.current.timeScale().setVisibleLogicalRange({ from: data.length - 140, to: data.length - 1 });
-      } else {
-        chartRef.current.timeScale().fitContent();
-      }
+      // MASLA 3 — show the FULL range (upper + lower) on a new chart so support/
+      // resistance levels and every candle are visible; autoScale stays on so the
+      // price axis fits all data. Drag = move, wheel = zoom (chart options below).
+      chartRef.current.timeScale().fitContent();
       interactedRef.current = false;
     } else if (prependedCount > 0 && visibleRange && chartRef.current) {
       chartRef.current.timeScale().setVisibleLogicalRange({

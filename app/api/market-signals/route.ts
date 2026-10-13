@@ -6,6 +6,7 @@ import type { Candle } from "@/src/analysis/types";
 import { detectCandlestickPattern, generateFullSignal } from "@/src/lib/signalGenerator";
 import { evaluateSignal, type TradePlan } from "@/src/analysis/signalGate";
 import { buildConfirmations, buildEducators, type ConfirmationIndicator, type Consensus, type EducatorVerdict } from "@/src/lib/confirmations";
+import { calculateIndicators, type IndicatorRow } from "@/src/lib/indicatorEngine";
 import { persistSignals, type CloudDoc } from "@/src/lib/signalCloud";
 
 export const dynamic = "force-dynamic";
@@ -101,6 +102,8 @@ export interface MarketSignal {
   gateReason?: string | null;
   /** Feature 2 — real-data confirmation breakdown (RSI/MACD/EMA/Volume). */
   confirmations?: { indicators: ConfirmationIndicator[]; confirmed: number; total: number } | null;
+  /** KAAM 4 — the full 10-indicator institutional panel (value/status/side each). */
+  indicators?: IndicatorRow[] | null;
   /** Feature 3 — the 4-educator panel + consensus (agreed >= 3 = delivery-grade). */
   experts?: { educators: EducatorVerdict[]; consensus: Consensus } | null;
 }
@@ -332,6 +335,7 @@ export async function GET(request: Request) {
     };
     let confirmations: MarketSignal["confirmations"] = null;
     let experts: MarketSignal["experts"] = null;
+    let indicatorRows: IndicatorRow[] | null = null;
     if (candles.length >= 30) {
       try {
         const report = buildConfirmations(insightInput);
@@ -340,6 +344,18 @@ export async function GET(request: Request) {
         experts = { educators: built.educators, consensus: built.consensus };
       } catch (error) {
         console.warn("[market-signals] confirmation build failed:", error);
+      }
+    }
+
+    // KAAM 4 — the 10-indicator institutional panel, judged against the
+    // setup direction. Pure + synchronous; degrades to null when the candle
+    // cache is cold. indicatorsAgreed() feeds the honest X/10 display chip.
+    if (candles.length >= 20) {
+      try {
+        indicatorRows = calculateIndicators({ candles, direction });
+      } catch (error) {
+        console.warn("[market-signals] indicator build failed:", error);
+        indicatorRows = null;
       }
     }
 
@@ -364,6 +380,7 @@ export async function GET(request: Request) {
       plan: gate.plan,
       gateReason: null,
       confirmations,
+      indicators: indicatorRows,
       experts,
     });
   }

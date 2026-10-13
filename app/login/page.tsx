@@ -7,7 +7,7 @@
 // then routes into the dashboard. Educational app — not financial advice.
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { auth, NOT_CONFIGURED, onAuthStateChanged } from "@/src/lib/firebase";
+import { auth, NOT_CONFIGURED } from "@/src/lib/firebase";
 import { saveUser } from "@/src/lib/userAuth";
 import {
   GoogleAuthProvider,
@@ -54,18 +54,6 @@ export default function LoginPage() {
     setConfigured(auth !== null);
   }, []);
 
-  // If already signed in (Firebase session), skip straight to the dashboard.
-  useEffect(() => {
-    if (!auth) return;
-    const unsub = onAuthStateChanged(auth, (user: User | null) => {
-      if (user && !redirecting.current) {
-        redirecting.current = true;
-        router.replace("/");
-      }
-    });
-    return () => unsub();
-  }, [router]);
-
   /** Marks onboarding complete + persists the signed-in user, then routes in. */
   function completeLogin(user: User, provider: "google" | "facebook") {
     try {
@@ -103,6 +91,8 @@ export default function LoginPage() {
       const provider = new FacebookAuthProvider();
       provider.addScope("email");
       provider.addScope("public_profile");
+      // Force the Facebook login page (reauthenticate) even if already authed.
+      provider.setCustomParameters({ auth_type: "reauthenticate" });
       const result = await signInWithPopup(auth, provider);
       completeLogin(result.user, "facebook");
     } catch (err) {

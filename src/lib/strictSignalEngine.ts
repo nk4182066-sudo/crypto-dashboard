@@ -338,9 +338,12 @@ export interface StrictPattern {
 }
 
 export function scoreFromConditions(conditionsMet: number): { score: number; quality: Quality | null } {
-  if (conditionsMet >= 8) return { score: 95, quality: "PERFECT" };
+  // MASLA 4/6 — score is a clean linear function of conditions passed:
+  //   8/8 = 100 (PERFECT), 7/8 = 88 (STRONG), 6/8 = 75 (REJECT floor).
+  // Anything below 6/8 is not deliverable (score 0 -> hidden by callers).
+  if (conditionsMet >= 8) return { score: 100, quality: "PERFECT" };
   if (conditionsMet === 7) return { score: 88, quality: "STRONG" };
-  if (conditionsMet === 6) return { score: 78, quality: "GOOD" };
+  if (conditionsMet === 6) return { score: 75, quality: "GOOD" };
   return { score: 0, quality: null };
 }
 

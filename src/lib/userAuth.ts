@@ -81,9 +81,9 @@ export async function facebookSignIn(): Promise<AppUser> {
 }
 
 /**
- * Signs out. Clears the Firebase session (when configured) and the stored user,
- * but deliberately keeps "onboarding-complete" so the story/register flow does
- * NOT reshow after logout.
+ * Signs out. Clears the Firebase session (when configured) and every piece of
+ * client state (localStorage + sessionStorage, including the onboarding flag)
+ * so the next load lands on the login screen — not the dashboard.
  */
 export async function signOutFlow(): Promise<void> {
   try {
@@ -91,5 +91,10 @@ export async function signOutFlow(): Promise<void> {
   } catch (error) {
     console.warn("[auth] Firebase sign-out failed:", error);
   }
-  clearUser();
+  try {
+    localStorage.clear();
+    sessionStorage.clear();
+  } catch {
+    /* private-mode — nothing to clear */
+  }
 }

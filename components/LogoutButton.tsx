@@ -2,9 +2,8 @@
 
 // Header logout button. Signs out of Firebase first (session), then wipes ALL
 // client storage per spec — localStorage.clear() + sessionStorage.clear() —
-// shows a "Logout successful" toast, then reloads to the app root where
-// OnboardingGate serves the login / welcome flow (this app has no /login
-// route — the gate IS the login screen). Self-contained toast (no external
+// shows a "Logout successful" toast, then redirects to /login (NOT the
+// dashboard) so the next login starts clean. Self-contained toast (no external
 // lib). Educational only.
 import { useState } from "react";
 import { signOutUser } from "@/src/lib/firebase";
@@ -18,27 +17,27 @@ export default function LogoutButton() {
     if (busy) return;
     setBusy(true);
     try {
-      // 1) Firebase sign-out (signOutUser wraps firebase signOut + clears the
-      //    onboarding flag). No-op when Firebase is not configured.
+      // 1) Firebase sign-out (signOutUser wraps firebase signOut + clears ALL
+      //    localStorage + sessionStorage, including the onboarding flag, so the
+      //    dashboard does NOT reopen). No-op when Firebase is not configured.
       await signOutUser();
     } catch (error) {
       console.warn("[auth] sign-out failed:", error);
     }
     try {
-      // 2) Full client wipe per spec: stored user, chat sessions, cached
-      //    signals, language prefs … + sessionStorage. Runs AFTER signOut so
-      //    Firebase's own auth persistence is removed cleanly.
+      // 2) Belt-and-braces wipe: stored user + any session leftovers. Runs
+      //    AFTER signOut so Firebase's own auth persistence is removed cleanly.
       clearUser();
       localStorage.clear();
       sessionStorage.clear();
     } catch (error) {
       console.warn("[auth] storage clear failed:", error);
     }
-    // 3) Toast, then reload to the root where OnboardingGate reshows the
-    //    login / welcome flow (no /login route exists in this app).
+    // 3) Toast, then hard-navigate to /login so the login screen appears —
+    //    never the dashboard (full reload drops all in-memory app state too).
     setToast(true);
     window.setTimeout(() => {
-      window.location.assign("/");
+      window.location.assign("/login");
     }, 1200);
   }
 

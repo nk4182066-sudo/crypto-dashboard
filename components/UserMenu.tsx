@@ -43,8 +43,8 @@ export default function UserMenu() {
   async function handleLogout() {
     setOpen(false);
     await signOutFlow();
-    // Reload to reset client state. onboarding-complete stays true -> no reshow.
-    window.location.reload();
+    // Full navigation to /login (fresh login screen), never back to dashboard.
+    window.location.assign("/login");
   }
 
   return (

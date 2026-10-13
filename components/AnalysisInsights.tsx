@@ -16,6 +16,7 @@ import type {
   GuidanceQuote,
   SignalSide,
 } from "@/src/lib/confirmations";
+import { indicatorsAgreed, type IndicatorRow } from "@/src/lib/indicatorEngine";
 
 const GREEN = "#00C087";
 const RED = "#F6465D";
@@ -101,6 +102,44 @@ export function ConfirmationSection({
       <p className="mt-2 text-[11px]" style={{ color: MUTED }}>
         {report.confirmed}/{report.total} indicators confirm the setup direction — 3/4+ is delivery-grade.
       </p>
+    </div>
+  );
+}
+
+/* ── KAAM 4 — the 10-indicator institutional panel ───────────────────────── */
+export function IndicatorPanel({ indicators }: { indicators: IndicatorRow[] }) {
+  if (indicators.length === 0) return null;
+  const agreed = indicatorsAgreed(indicators);
+  const total = indicators.length;
+  const ratioColor = agreed >= total * 0.75 ? GREEN : agreed >= total * 0.5 ? YELLOW : MUTED;
+  return (
+    <div className="mt-3 rounded-xl border p-3" style={{ backgroundColor: "#0F131A", borderColor: BORDER }}>
+      <div className="mb-2 flex items-center justify-between">
+        <span className="text-xs font-bold" style={{ color: TEXT }}>
+          📈 INDICATORS ({total})
+        </span>
+        <span
+          className="rounded-full px-2 py-0.5 text-xs font-bold"
+          style={{ color: ratioColor, backgroundColor: `${ratioColor}1F` }}
+        >
+          {agreed}/{total} Agree
+        </span>
+      </div>
+      <div className="flex flex-col gap-1.5">
+        {indicators.map((indicator) => (
+          <div key={indicator.id} className="flex items-start justify-between gap-2 text-xs">
+            <span className="shrink-0 font-semibold" style={{ color: MUTED }}>
+              {iconGlyph(indicator.icon)} {indicator.name}
+            </span>
+            <span className="text-right">
+              <span className="font-mono" style={{ color: TEXT }}>{indicator.value}</span>
+              <span className="ml-2 font-semibold" style={{ color: sideColor(indicator.side) }}>
+                {indicator.status}
+              </span>
+            </span>
+          </div>
+        ))}
+      </div>
     </div>
   );
 }

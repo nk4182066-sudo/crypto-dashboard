@@ -11,6 +11,7 @@ import { buildLeverageLevels } from "@/src/lib/signalGenerator";
 import { scanChartPatterns } from "@/src/lib/chart/chartPatterns";
 import { zigZag } from "@/src/analysis/structure";
 import { getChartAnalysis, type ChartAnalysis } from "@/src/lib/autoChartAnalysis";
+import { analyzeCoin, type AnalyzeResult } from "@/src/lib/analyzeCoin";
 import { normalizeSymbol } from "@/src/lib/chart/symbol";
 import { recordHighConfluenceSetup } from "@/src/lib/signalHistory";
 import { buildConfirmations, buildEducators, buildGuidance } from "@/src/lib/confirmations";
@@ -212,6 +213,15 @@ function TradeChart() {
     () => (candles.length >= 40 ? scanChartPatterns(candles) : []),
     [candles]
   );
+
+  // MASLA 4 — SINGLE shared score. analyseCoin runs the strict 8-condition
+  // engine (the SAME one the Signals page scores from) on the chart candles, so
+  // the Trade page ALGO score can NEVER disagree with the Signals page ALGO.
+  // score = (conditions_passed / 8) * 100 → 8/8=100, 7/8=88, 6/8=75, <6 hidden.
+  const coinAnalysis: AnalyzeResult | null = useMemo(
+    () => (candles.length >= 20 ? analyzeCoin({ symbol, market: dataMarket, primary: candles }) : null),
+    [candles, symbol, dataMarket],
+  );
   const patternOutlines = useMemo(() => {
     const top = [...patternHits].sort((a, b) => b.confidence - a.confidence)[0];
     if (!top) return [];
@@ -302,7 +312,11 @@ function TradeChart() {
 
   // ---- AI Analysis box data -----------------------------------------------
   const topPattern = patternHits[0]?.pattern ?? analysis?.patterns[0]?.name ?? "No clear pattern";
-  const score = analysis?.score ?? 0;
+  // MASLA 4 — the authoritative score is the shared analyseCoin result (same as
+  // Signals). Falls back to the chart heuristic only when there are no candles.
+  const score = coinAnalysis?.score ?? analysis?.score ?? 0;
+  const conditionsPassed = coinAnalysis?.conditionsPassed ?? 0;
+  const conditionsTotal = coinAnalysis?.conditionsTotal ?? 8;
   const trendLabel = analysis?.direction === "bullish" ? "Bullish" : analysis?.direction === "bearish" ? "Bearish" : "Sideways";
   const support = analysis?.support ?? 0;
   const resistance = analysis?.resistance ?? 0;
@@ -417,7 +431,7 @@ function TradeChart() {
             "relative w-full overflow-hidden rounded-2xl border " +
             (isFullscreen
               ? "min-h-0 flex-1"
-              : "h-[300px] p-2 md:h-[350px] md:p-4 lg:h-[400px]")
+              : "h-[60vh] p-2 md:h-[500px] md:p-4")
           }
           style={{ backgroundColor: BG, borderColor: BORDER }}
         >
@@ -500,11 +514,13 @@ function TradeChart() {
       {/* AI Analysis box below the chart */}
       <section aria-label="AI analysis" className="mt-4 rounded-2xl border p-4" style={{ backgroundColor: CARD, borderColor: BORDER }}>
         <h2 className="mb-3 text-sm font-bold" style={{ color: TEXT }}>📊 AI ANALYSIS</h2>
-        {/* Feature 1 — full-width trend badge (BULLISH / BEARISH / NEUTRAL). */}
-        {analysis ? <TrendBadge direction={analysis.direction} score={analysis.score} /> : null}
+        {/* MASLA 4/11 — trend badge + score come from the SHARED analyseCoin
+            engine, so this ALGO score always equals the Signals page ALGO. */}
+        {coinAnalysis ? <TrendBadge direction={coinAnalysis.direction} score={coinAnalysis.score} /> : (analysis ? <TrendBadge direction={analysis.direction} score={analysis.score} /> : null)}
         <div className="flex flex-col gap-2 text-sm">
           <Row label="Pattern" value={topPattern} />
           <Row label="Score" value={`${score}/100`} />
+          {coinAnalysis ? <Row label="Conditions" value={`${conditionsPassed}/${conditionsTotal} Passed`} valueColor={conditionsPassed === conditionsTotal ? GREEN : conditionsPassed >= 7 ? "#f0b90b" : MUTED} /> : null}
           <Row label="Trend" value={trendLabel} valueColor={trendLabel === "Bullish" ? GREEN : trendLabel === "Bearish" ? RED : MUTED} />
           <Row label="Support" value={support > 0 ? `$${fmtPrice(support)}` : "—"} valueColor={GREEN} />
           <Row label="Resistance" value={resistance > 0 ? `$${fmtPrice(resistance)}` : "—"} valueColor={RED} />
