@@ -67,30 +67,39 @@ interface YahooChartPayload {
 
 async function fetchCandles(symbol: string, market: ScanTarget["market"]): Promise<Candle[]> {
   const providerSymbol = toProviderSymbol(symbol);
-  const url = new URL(`https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(providerSymbol)}`);
-  url.searchParams.set("interval", "1h");
-  url.searchParams.set("range", "1mo");
 
-  // Feature 2 — the scheduler and on-demand reads share this cached fetch.
-  const payload = await cached<YahooChartPayload>(`scan:candles:${market}:${providerSymbol}`, { ttlMs: 5 * 60 * 1000, staleMs: 30 * 60 * 1000 }, async () => {
-    const response = await fetch(url, { headers: { "User-Agent": "Mozilla/5.0" }, cache: "no-store" });
-    if (!response.ok) throw new Error(`Provider returned ${response.status} for ${providerSymbol}`);
-    return response.json() as Promise<YahooChartPayload>;
-  });
+  // Cache the CONVERTED Candle[] array (not the raw Yahoo payload) under this
+  // key. The market-signals route reads `scan:candles:...` and calls
+  // candles.slice() on it; caching the raw JSON object here made that throw
+  // "candles.slice is not a function" once the per-symbol details survived.
+  // The scheduler and on-demand reads still share this one cached fetch.
+  return cached<Candle[]>(
+    `scan:candles:${market}:${providerSymbol}`,
+    { ttlMs: 5 * 60 * 1000, staleMs: 30 * 60 * 1000 },
+    async () => {
+      const url = new URL(`https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(providerSymbol)}`);
+      url.searchParams.set("interval", "1h");
+      url.searchParams.set("range", "1mo");
 
-  const result = payload.chart?.result?.[0];
-  const timestamps = result?.timestamp ?? [];
-  const quote = result?.indicators?.quote?.[0];
-  if (!quote) return [];
+      const response = await fetch(url, { headers: { "User-Agent": "Mozilla/5.0" }, cache: "no-store" });
+      if (!response.ok) throw new Error(`Provider returned ${response.status} for ${providerSymbol}`);
+      const payload = (await response.json()) as YahooChartPayload;
 
-  return timestamps.flatMap((time, index): Candle[] => {
-    const open = quote.open?.[index];
-    const high = quote.high?.[index];
-    const low = quote.low?.[index];
-    const close = quote.close?.[index];
-    if (open == null || high == null || low == null || close == null) return [];
-    return [{ time, open, high, low, close, volume: quote.volume?.[index] ?? 0 }];
-  });
+      const result = payload.chart?.result?.[0];
+      const timestamps = result?.timestamp ?? [];
+      const quote = result?.indicators?.quote?.[0];
+      if (!quote) return [];
+
+      return timestamps.flatMap((time, index): Candle[] => {
+        const open = quote.open?.[index];
+        const high = quote.high?.[index];
+        const low = quote.low?.[index];
+        const close = quote.close?.[index];
+        if (open == null || high == null || low == null || close == null) return [];
+        return [{ time, open, high, low, close, volume: quote.volume?.[index] ?? 0 }];
+      });
+    }
+  );
 }
 /** Feature 10 — ranks a symbol by its setup quality, not by hope. */
 function toScanResult(target: ScanTarget, analysis: MarketAnalysis): ScanResult {

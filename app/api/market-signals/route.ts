@@ -321,7 +321,10 @@ export async function GET(request: Request) {
       continue;
     }
 
-    const candles = cacheGet<Candle[]>(`scan:candles:${item.market}:${item.symbol}`) ?? [];
+    // Defensive: only trust an array here — a stale/legacy non-array cache value
+    // would otherwise crash the gate (candles.slice is not a function).
+    const cachedCandles = cacheGet<Candle[]>(`scan:candles:${item.market}:${item.symbol}`);
+    const candles: Candle[] = Array.isArray(cachedCandles) ? cachedCandles : [];
     const candleHit = detectCandlestickPattern(candles);
 
     const gate = evaluateSignal({
