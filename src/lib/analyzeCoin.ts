@@ -133,13 +133,20 @@ export function analyzeCoin(input: AnalyzeCoinInput): AnalyzeResult {
     return { timeframe, ...assessTrend(src) };
   });
 
-  // Direction: unanimous across non-sideways trends; else neutral.
-  const usableTrends = trends.filter((t) => t.bias !== "Sideways");
-  let direction: AnalyzeResult["direction"] = "neutral";
-  if (usableTrends.length > 0) {
-    const set = new Set(usableTrends.map((t) => t.direction));
-    direction = set.size === 1 ? (usableTrends[0].direction === "bullish" ? "bullish" : "bearish") : "neutral";
-  }
+  // Direction is anchored on the PRIMARY timeframe (the exact candles the Trade
+  // chart draws), so an emitted signal ALWAYS agrees with the chart the user is
+  // looking at — chart and trend match by construction. Multi-timeframe
+  // agreement is scored separately as the `trend` condition below: a higher TF
+  // that disagrees costs one condition point instead of silently forcing the
+  // whole signal to "neutral". The old unanimous-across-1h/4h/1d rule dropped
+  // ~70% of coins and emitted 0 signals on live markets.
+  const primaryTrend = trends[0];
+  let direction: AnalyzeResult["direction"] =
+    primaryTrend.bias === "Sideways"
+      ? "neutral"
+      : primaryTrend.direction === "bullish"
+      ? "bullish"
+      : "bearish";
 
   const chartHit = detectChartPattern(input.h4 ?? candles, 200);
   const candleHit = detectCandlePatternLast3(candles);

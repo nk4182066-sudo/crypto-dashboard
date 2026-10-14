@@ -401,14 +401,14 @@ export async function GET(request: Request) {
       full.score = Math.round((7 / 8) * 100);
     }
 
-    // ── MASLA 2 / deep gate — the Signals page shows only 88+ setups (≥7/8
-    // conditions passed). One remaining condition (≤6/8, i.e. ≤75) is a
-    // watch-zone signal, never delivery-grade, so it is dropped here. Direction
-    // is guaranteed by the preceding neutral skip; the full-analysis fields
-    // (confirmations, educators, indicators) are filled in below and are NOT
-    // a hard emission blocker — that 4-way conjunction is what produced 0
-    // signals in live markets.
-    if (full.conditionsPassed < 7) {
+    // ── Emission gate — show GOOD setups (≥6/8 = 75). The multi-TF direction is
+    // now anchored on the primary chart TF (see analyzeCoin), so chart + trend
+    // always match; the honest condition count still prices in a disagreeing
+    // higher TF via the `trend` condition. 7/8 alone emitted 0 signals on live
+    // choppy markets, so GOOD (6/8) is the delivery floor. The no-pattern
+    // invariant above still caps a pattern-less signal at 7/8, so a 6/8 with no
+    // chart pattern is labelled honestly and never masquerades as PERFECT.
+    if (full.conditionsPassed < 6) {
       drops.conditions += 1;
       continue;
     }
