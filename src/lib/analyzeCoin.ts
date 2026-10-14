@@ -164,10 +164,21 @@ export function analyzeCoin(input: AnalyzeCoinInput): AnalyzeResult {
       return { pass: agree, detail: trends.map((t) => `${t.timeframe}=${t.bias}`).join(" / ") };
     })(),
     rsi: (() => {
+      // Direction-confirming RSI — NOT the opposite extreme. The other 7
+      // conditions are trend-following (1h/4h/1d aligned + MACD crossover +
+      // EMA stack in `direction`). Such a setup ALWAYS has RSI momentum on the
+      // SAME side (uptrend RSI 50-70, downtrend 30-50). The old "<35 for long /
+      // >65 for short" rule demanded the OPPOSITE extreme, which contradicted
+      // every aligned-trend condition and made 7/8 unreachable → 0 signals.
+      // RSI must AGREE with the trend; the <80/>20 band just rejects exhaustion.
       const rsi = indicators.rsi;
       if (rsi == null) return { pass: false, detail: "No RSI data" };
-      if (direction === "bullish") return { pass: rsi < 35, detail: `RSI ${rsi.toFixed(1)} (needs <35 for long)` };
-      if (direction === "bearish") return { pass: rsi > 65, detail: `RSI ${rsi.toFixed(1)} (needs >65 for short)` };
+      if (direction === "bullish") {
+        return { pass: rsi > 50 && rsi < 80, detail: `RSI ${rsi.toFixed(1)} confirms uptrend (>50, not exhausted <80)` };
+      }
+      if (direction === "bearish") {
+        return { pass: rsi < 50 && rsi > 20, detail: `RSI ${rsi.toFixed(1)} confirms downtrend (<50, not exhausted >20)` };
+      }
       return { pass: false, detail: `RSI ${rsi.toFixed(1)} (direction unknown)` };
     })(),
     macd: (() => {
