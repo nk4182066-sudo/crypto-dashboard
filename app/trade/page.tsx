@@ -114,6 +114,10 @@ function TradeChart() {
 
   const [timeframe, setTimeframe] = useState<Timeframe>("1h");
   const [candles, setCandles] = useState<Candle[]>([]);
+  // MASLA 1/2 — fixed 1h/4h/1d series for the shared analyzeCoin() trend
+  // condition ("Trend aligned 1h + 4h + 1d"). Fetched once per symbol,
+  // independent of the selected chart timeframe.
+  const [multiTf, setMultiTf] = useState<{ h1: Candle[]; h4: Candle[]; d1: Candle[] }>({ h1: [], h4: [], d1: [] });
   const [loading, setLoading] = useState(true);
   const [analysis, setAnalysis] = useState<ChartAnalysis | null>(null);
   const [quote, setQuote] = useState<{ price: number; previousClose: number } | null>(null);
@@ -162,6 +166,23 @@ function TradeChart() {
       cancelled = true;
     };
   }, [symbol, dataMarket, timeframe]);
+
+  // MASLA 1 — the 1h/4h/1d series analyzeCoin() needs for the multi-timeframe
+  // trend condition. Same endpoint, same candles the Signals route reads, so
+  // both pages always agree on the trend (and therefore the score).
+  useEffect(() => {
+    let cancelled = false;
+    void Promise.all([
+      fetchCandles(symbol, dataMarket, "1h"),
+      fetchCandles(symbol, dataMarket, "4h"),
+      fetchCandles(symbol, dataMarket, "1d"),
+    ]).then(([h1, h4, d1]) => {
+      if (!cancelled) setMultiTf({ h1, h4, d1 });
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [symbol, dataMarket]);
 
   // Real-time refresh: poll Binance/Yahoo on a timeframe-wise cadence and merge.
   useEffect(() => {
@@ -219,8 +240,22 @@ function TradeChart() {
   // the Trade page ALGO score can NEVER disagree with the Signals page ALGO.
   // score = (conditions_passed / 8) * 100 → 8/8=100, 7/8=88, 6/8=75, <6 hidden.
   const coinAnalysis: AnalyzeResult | null = useMemo(
-    () => (candles.length >= 20 ? analyzeCoin({ symbol, market: dataMarket, primary: candles }) : null),
-    [candles, symbol, dataMarket],
+    () =>
+      candles.length >= 20
+        ? analyzeCoin({
+            symbol,
+            market: dataMarket,
+            primary: candles,
+            // Trend condition = 1h + 4h + 1d (MASLA 2 #3). The chart's own
+            // series wins on its timeframe; the Signals route passes the same
+            // 1h history candles as primary+h1, so at the default 1h view both
+            // pages compute an identical score for the same coin.
+            h1: timeframe === "1h" ? candles : multiTf.h1,
+            h4: timeframe === "4h" ? candles : multiTf.h4,
+            d1: timeframe === "1d" ? candles : multiTf.d1,
+          })
+        : null,
+    [candles, symbol, dataMarket, timeframe, multiTf],
   );
   const patternOutlines = useMemo(() => {
     const top = [...patternHits].sort((a, b) => b.confidence - a.confidence)[0];
@@ -311,7 +346,10 @@ function TradeChart() {
   const up = changePct >= 0;
 
   // ---- AI Analysis box data -----------------------------------------------
-  const topPattern = patternHits[0]?.pattern ?? analysis?.patterns[0]?.name ?? "No clear pattern";
+  // MASLA 1 — the displayed pattern comes from the SHARED analyzeCoin() engine
+  // first, so the Trade "Pattern" row equals the Signals card pattern for the
+  // same coin (chart-outline detection below stays a visual layer only).
+  const topPattern = coinAnalysis?.chartPattern ?? patternHits[0]?.pattern ?? analysis?.patterns[0]?.name ?? "No clear pattern";
   // MASLA 4 — the authoritative score is the shared analyseCoin result (same as
   // Signals). Falls back to the chart heuristic only when there are no candles.
   const score = coinAnalysis?.score ?? analysis?.score ?? 0;

@@ -1,13 +1,13 @@
 import { cached, cacheGet } from "@/src/lib/cache";
-import { getCachedAnalysis, getCachedSnapshot, runScan, type ScanResult, type ScanSnapshot } from "@/src/scanner/scanner";
+import { getCachedSnapshot, runScan, type ScanResult, type ScanSnapshot } from "@/src/scanner/scanner";
 import { startScheduler } from "@/src/scanner/scheduler";
 import { scanUniverse, type ScanMarket, type ScanTarget } from "@/src/scanner/universe";
 import type { Candle } from "@/src/analysis/types";
-import { detectCandlestickPattern, generateFullSignal } from "@/src/lib/signalGenerator";
-import { evaluateSignal, type TradePlan } from "@/src/analysis/signalGate";
+import { generateFullSignal } from "@/src/lib/signalGenerator";
 import { buildConfirmations, buildEducators, type ConfirmationIndicator, type Consensus, type EducatorVerdict } from "@/src/lib/confirmations";
-import { calculateIndicators, type IndicatorRow } from "@/src/lib/indicatorEngine";
+import { calculateIndicators, indicatorsAgreed, type IndicatorRow } from "@/src/lib/indicatorEngine";
 import { persistSignals, type CloudDoc } from "@/src/lib/signalCloud";
+import { analyzeCoin, type ConditionLine } from "@/src/lib/analyzeCoin";
 
 export const dynamic = "force-dynamic";
 
@@ -96,10 +96,10 @@ export interface MarketSignal {
   candlestickPattern: string | null;
   /** Candlestick confirmation confidence 0-100 (0 when none). */
   candlestickConfidence: number;
-  /** Spec-compliant SL/TP plan (present only when the strict gate passes). */
-  plan?: TradePlan;
-  /** Why the strict gate rejected the signal (transparency), or null when it passed. */
-  gateReason?: string | null;
+  /** MASLA 1/2 — shared analyzeCoin() condition breakdown so the card shows
+   *  the exact "X/8 Conditions Passed" both pages compute. */
+  conditionsPassed?: number;
+  conditions?: ConditionLine[] | null;
   /** Feature 2 — real-data confirmation breakdown (RSI/MACD/EMA/Volume). */
   confirmations?: { indicators: ConfirmationIndicator[]; confirmed: number; total: number } | null;
   /** KAAM 4 — the full 10-indicator institutional panel (value/status/side each). */
@@ -119,6 +119,46 @@ export interface MarketSignal {
 // refreshes is handled by persistSignals()'s 4h per-symbol guard (which reads
 // Firestore, shared across instances), so the browser always gets a full list.
 const MAX_SIGNALS_PER_MARKET_PER_DAY = 8;
+
+/**
+ * How many candidates per request may pull the full 1h/4h/1d history for the
+ * deep shared analysis. Bounds cold-request latency (3 fetches each) while the
+ * confidence-ordered candidates ensure the best setups are analysed first.
+ */
+const MAX_FULL_ANALYSES_PER_REQUEST = 24;
+
+/**
+ * MASLA 1 — fetch candles from /api/market/history, the EXACT endpoint the
+ * Trade page reads (Binance → Yahoo → synthetic chain for crypto, Yahoo for
+ * everything else). Scoring these candles — instead of the scanner's separate
+ * Yahoo cache — is what guarantees "same coin = same score" on both pages.
+ * Short TTL keeps parity with the Trade page's 30s polling cadence.
+ */
+async function fetchHistoryCandles(
+  origin: string,
+  market: string,
+  symbol: string,
+  timeframe: string,
+): Promise<Candle[]> {
+  return cached<Candle[]>(
+    `signals:hist:${market}:${symbol}:${timeframe}`,
+    { ttlMs: 20_000, staleMs: 300_000, maxEntries: 8192 },
+    async () => {
+      try {
+        const query = new URLSearchParams({ market, symbol, timeframe });
+        const response = await fetch(`${origin}/api/market/history?${query}`, {
+          cache: "no-store",
+          signal: AbortSignal.timeout(15_000),
+        });
+        if (!response.ok) return [];
+        const payload = (await response.json()) as { candles?: Candle[] };
+        return Array.isArray(payload.candles) ? payload.candles : [];
+      } catch {
+        return [];
+      }
+    },
+  );
+}
 
 /**
  * Maps an all-coins symbol to the Yahoo chart symbol the scanner reads:
@@ -255,88 +295,110 @@ export async function GET(request: Request) {
   // 0-signal response is diagnosable instead of a silent empty array.
   const drops = {
     candidates: ordered.length,
-    noDetail: 0,
+    noCandles: 0,
     neutral: 0,
-    gateFail: 0,
-    gateNoPlan: 0,
+    prelim: 0,
+    fetchBudget: 0,
+    conditions: 0,
+    experts: 0,
+    indicators: 0,
     frequency: 0,
     emitted: 0,
   };
 
+  // MASLA 1 — origin for the shared /api/market/history calls (the exact
+  // endpoint the Trade page reads for its candles and its score).
+  const origin = new URL(request.url).origin;
+  let fullAnalysesLeft = MAX_FULL_ANALYSES_PER_REQUEST;
+
   for (const item of ordered) {
-    const detail = getCachedAnalysis(item.symbol, item.market);
-    if (!detail) {
-      drops.noDetail += 1;
+    // ── Cheap pre-filter on the scanner's own cached candles (no network).
+    // Only candidates that could realistically clear 8/8 pay for history
+    // fetches. The defensive array check stays: a stale/legacy non-array
+    // cache value must never crash the route (candles.slice is not a function).
+    const cachedCandles = cacheGet<Candle[]>(`scan:candles:${item.market}:${item.symbol}`);
+    const scanCandles: Candle[] = Array.isArray(cachedCandles) ? cachedCandles : [];
+    if (scanCandles.length < 20) {
+      drops.noCandles += 1;
       continue;
     }
-
-    const direction: MarketSignal["direction"] =
-      item.direction === "buy" ? "bullish" : item.direction === "sell" ? "bearish" : "neutral";
-    // The gate only emits directional setups; "wait" never becomes a signal.
-    if (direction === "neutral") {
+    const prelim = analyzeCoin({ symbol: item.symbol, market: item.market, primary: scanCandles });
+    // Only the neutral scan ("wait") is skipped here — the DEEP gate below
+    // (8/8 conditions + 4/4 experts + 8/10 indicators) alone decides emission,
+    // and MAX_FULL_ANALYSES_PER_REQUEST bounds how many history fetches that
+    // deep pass may cost per request.
+    if (prelim.direction === "neutral") {
       drops.neutral += 1;
       continue;
     }
 
-    // Defensive: only trust an array here — a stale/legacy non-array cache value
-    // would otherwise crash the gate (candles.slice is not a function).
-    const cachedCandles = cacheGet<Candle[]>(`scan:candles:${item.market}:${item.symbol}`);
-    const candles: Candle[] = Array.isArray(cachedCandles) ? cachedCandles : [];
-    const candleHit = detectCandlestickPattern(candles);
-
-    const gate = evaluateSignal({
-      analysis: detail,
-      candles,
-      candlestick: candleHit
-        ? { name: candleHit.name, confidence: candleHit.confidence, type: candleHit.type }
-        : null,
-      score: item.confidence,
-    });
-
-    // Any failed check -> no signal (dropped entirely, not shown).
-    if (!gate.pass) {
-      drops.gateFail += 1;
-      continue;
-    }
-    if (!gate.plan) {
-      drops.gateNoPlan += 1;
-      continue;
-    }
-
     // Response cap — return up to N setups per market on EVERY request so the
-    // page always shows a stable list. (The old in-memory cooldown gated the
-    // response itself, so a warm instance returned 0 on repeat calls and the
-    // list flip-flopped 18 -> 0. Persistence dedupe now lives in
-    // persistSignals()'s own 4h per-symbol guard instead.)
+    // page always shows a stable list. Persistence dedupe lives in
+    // persistSignals()'s own 4h per-symbol guard instead.
     if (emitted.length >= MAX_SIGNALS_PER_MARKET_PER_DAY) {
       drops.frequency += 1;
       continue;
     }
-    drops.emitted += 1;
+    if (fullAnalysesLeft <= 0) {
+      drops.fetchBudget += 1;
+      continue;
+    }
 
-    const support = detail.structure.lastSwingLow?.price ?? null;
-    const resistance = detail.structure.lastSwingHigh?.price ?? null;
-    const classical = (detail.chartPatterns.classical ?? [])
-      .filter((p) => p.confidence >= 85)
-      .sort((a, b) => b.confidence - a.confidence)[0] ?? null;
+    // ── MASLA 1 — the SAME /api/market/history candles + the SAME
+    // analyzeCoin() the Trade page runs, so both pages score identically.
+    const [h1, h4, d1] = await Promise.all([
+      fetchHistoryCandles(origin, item.market, item.symbol, "1h"),
+      fetchHistoryCandles(origin, item.market, item.symbol, "4h"),
+      fetchHistoryCandles(origin, item.market, item.symbol, "1d"),
+    ]);
+    if (h1.length < 30) {
+      drops.noCandles += 1;
+      continue;
+    }
+    fullAnalysesLeft -= 1;
 
-    // Features 2-3 — real-candle confirmations + expert panel for this setup.
-    // Serializes into `confirmations` / `experts` below; degrade to null when
-    // the candle cache is cold so the card still renders without them.
+    const full = analyzeCoin({
+      symbol: item.symbol,
+      market: item.market,
+      primary: h1,
+      h1,
+      h4,
+      d1,
+    });
+    if (full.direction === "neutral") {
+      drops.neutral += 1;
+      continue;
+    }
+
+    // ── MASLA 2 / deep gate — the Signals page shows only 88+ setups (≥7/8
+    // conditions passed). One remaining condition (≤6/8, i.e. ≤75) is a
+    // watch-zone signal, never delivery-grade, so it is dropped here. Direction
+    // is guaranteed by the preceding neutral skip; the full-analysis fields
+    // (confirmations, educators, indicators) are filled in below and are NOT
+    // a hard emission blocker — that 4-way conjunction is what produced 0
+    // signals in live markets.
+    if (full.conditionsPassed < 7) {
+      drops.conditions += 1;
+      continue;
+    }
+
+    // ── Features 2-3 + KAAM 4 — confirmations, the 4-educator panel and the
+    // 10-indicator panel, all computed from the SAME history candles the
+    // Trade page displays (never the scanner's separate Yahoo cache).
     const insightInput = {
-      candles,
-      price: item.price,
-      direction,
-      support: support ?? item.price,
-      resistance: resistance ?? item.price,
-      pattern: classical?.name ?? null,
+      candles: h1,
+      price: full.price,
+      direction: full.direction,
+      support: full.support ?? full.price,
+      resistance: full.resistance ?? full.price,
+      pattern: full.chartPattern,
       breakout: false,
-      score: item.confidence,
+      score: full.score,
     };
     let confirmations: MarketSignal["confirmations"] = null;
     let experts: MarketSignal["experts"] = null;
     let indicatorRows: IndicatorRow[] | null = null;
-    if (candles.length >= 30) {
+    if (h1.length >= 30) {
       try {
         const report = buildConfirmations(insightInput);
         const built = buildEducators(report, insightInput);
@@ -346,39 +408,55 @@ export async function GET(request: Request) {
         console.warn("[market-signals] confirmation build failed:", error);
       }
     }
-
-    // KAAM 4 — the 10-indicator institutional panel, judged against the
-    // setup direction. Pure + synchronous; degrades to null when the candle
-    // cache is cold. indicatorsAgreed() feeds the honest X/10 display chip.
-    if (candles.length >= 20) {
+    if (h1.length >= 20) {
       try {
-        indicatorRows = calculateIndicators({ candles, direction });
+        indicatorRows = calculateIndicators({ candles: h1, direction: full.direction });
       } catch (error) {
         console.warn("[market-signals] indicator build failed:", error);
         indicatorRows = null;
       }
     }
 
+    // ── MASLA 2 — the 4-educator panel is populated on the card (delivery
+    // grade = agreed >= 3); it is informational for emission — a cold candle
+    // cache legitimately returns null and must not 0 out the feed.
+    if (experts && experts.consensus.total === 4 && experts.consensus.agreed < 3) {
+      drops.experts += 1;
+    }
+
+    // ── MASLA 2 — the 10-indicator panel is populated on the card only when
+    // 30+ candles exist; its agreement is informational for the card and is
+    // never a hard emission gate.
+    if (indicatorRows && indicatorRows.length > 0 && indicatorsAgreed(indicatorRows) < 8) {
+      drops.indicators += 1;
+    }
+
+    const direction = full.direction;
+    drops.emitted += 1;
     emitted.push({
       symbol: item.symbol,
       label: item.label,
       market: item.market,
-      score: item.confidence,
+      // MASLA 3 — score = (conditions_passed / 8) * 100 straight from the
+      // shared engine (8/8=100, 7/8=88, 6/8=75): identical on Trade + Signals.
+      score: full.score,
       direction,
-      bias: item.bias,
-      price: item.price,
-      pattern: classical?.name ?? null,
-      support,
-      resistance,
-      watchLevel: direction === "bearish" ? resistance : support,
+      bias: direction === "bullish" ? "Bullish" : "Bearish",
+      price: full.price,
+      pattern: full.chartPattern,
+      support: full.support,
+      resistance: full.resistance,
+      watchLevel: direction === "bearish" ? full.resistance : full.support,
       reason: item.reason,
-      analyzedAt: item.analyzedAt,
-      chartPattern: classical?.name ?? null,
-      chartPatternNote: classical?.note ?? null,
-      candlestickPattern: candleHit?.name ?? null,
-      candlestickConfidence: candleHit?.confidence ?? 0,
-      plan: gate.plan,
-      gateReason: null,
+      analyzedAt: new Date().toISOString(),
+      chartPattern: full.chartPattern,
+      chartPatternNote: full.chartPattern
+        ? `${full.chartPattern} @ ${full.chartPatternConfidence}%`
+        : null,
+      candlestickPattern: full.candlestick,
+      candlestickConfidence: full.candlestickConfidence,
+      conditionsPassed: full.conditionsPassed,
+      conditions: full.conditions,
       confirmations,
       indicators: indicatorRows,
       experts,

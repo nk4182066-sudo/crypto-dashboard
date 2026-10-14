@@ -186,9 +186,13 @@ function resolveDirectionalBias(hits: ChartPatternHit[]): Direction | null {
 
 export function detectCandlePatternLast3(candles: Candle[]): PatternHit | null {
   if (candles.length < 3) return null;
-  const c1 = candles[0];
-  const c2 = candles[1];
-  const c3 = candles[2];
+  // Candles are chronological (oldest -> newest), so the SETUP candles are the
+  // LAST three. Reading candles[0..2] inspected the oldest bars in the series —
+  // the condition then judged ancient data instead of the current pattern.
+  const recent = candles.slice(-3);
+  const c1 = recent[0];
+  const c2 = recent[1];
+  const c3 = recent[2];
   const candidates: PatternHit[] = [];
 
   if (!isRed(c2) && isGreen(c3) && c3.close >= Math.min(c2.open, c2.close) && c3.open <= Math.max(c2.open, c2.close)) {
@@ -262,7 +266,8 @@ export const CONDITION_IDS = [
   "chartPattern",
   "candlestick",
   "trend",
-  "supportResistance",
+  // MASLA 2 #8 — R:R 1:3+ (SL max 3%) replaces the old S/R-proximity check.
+  "riskReward",
   "rsi",
   "macd",
   "emaAlignment",

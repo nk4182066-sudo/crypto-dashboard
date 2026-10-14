@@ -9,12 +9,35 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import PatternLanguageTabs, { type PatternDetailLanguage } from "@/components/PatternLanguageTabs";
 import { generateFullSignal, type FullSignal } from "@/src/lib/signalGenerator";
+import { analyzeCoin } from "@/src/lib/analyzeCoin";
 import { saveSignal, MIN_SCORE } from "@/src/lib/signalStorage";
 import { CandlestickVisual, ChartPatternVisual } from "@/components/PatternVisuals";
 import { TrendBadge, ConfirmationSection, IndicatorPanel, ExpertPanel, GuidanceSection } from "@/components/AnalysisInsights";
 import { buildGuidance, type ConfirmationIndicator, type Consensus, type EducatorVerdict } from "@/src/lib/confirmations";
 import type { IndicatorRow } from "@/src/lib/indicatorEngine";
 import type { CloudDoc } from "@/src/lib/signalCloud";
+
+interface Candle {
+  time: number;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  volume: number;
+}
+
+/** Pulls one timeframe of candles; [] on any failure. */
+async function fetchCandles(market: string, symbol: string, timeframe: string): Promise<Candle[]> {
+  try {
+    const query = new URLSearchParams({ market, symbol, timeframe });
+    const response = await fetch(`/api/market/history?${query}`, { cache: "no-store" });
+    if (!response.ok) return [];
+    const payload = (await response.json()) as { candles?: Candle[] };
+    return Array.isArray(payload.candles) ? payload.candles : [];
+  } catch {
+    return [];
+  }
+}
 
 const LANG_STORAGE_KEY = "signals-language";
 
@@ -38,6 +61,7 @@ interface MarketSignal {
   bias: "Bullish" | "Bearish" | "Sideways";
   price: number;
   pattern: string | null;
+  conditionsPassed?: number;
   support: number | null;
   resistance: number | null;
   watchLevel: number | null;
@@ -253,12 +277,75 @@ export default function SignalsPage() {
   // MASLA 6 — show ONLY 88+ ("STRONG" = 7/8 conditions) setups. 6/8 conditions
   // (75) or lower is REJECTED and hidden. Highest score first. Nothing below
   // MIN_SCORE is ever emitted either, so this is purely an ordering step.
-  const visible = useMemo(
+  const displayed = useMemo(
     () => signals
       .filter((s) => s.score >= MIN_SCORE)
       .sort((first, second) => second.score - first.score),
     [signals],
   );
+
+  // MASLA 1 — stored setups (Firestore + localStorage backup) carried OLD
+  // confidence-style scores. Re-run the SHARED analyzeCoin() on the SAME
+  // /api/market/history candles the Trade page uses, so every card's score,
+  // conditions count, direction, pattern and support/resistance EQUALs the
+  // Trade page for that same coin. Fresh API signals already ship
+  // conditionsPassed and are skipped; a failure keeps the original value.
+  const [rescoring, setRescoring] = useState<Record<string, Partial<MarketSignal>>>({});
+  useEffect(() => {
+    const targets = displayed.filter((s) => s.conditionsPassed == null);
+    if (targets.length === 0) return;
+    let cancelled = false;
+    void (async () => {
+      const entries: Array<[string, Partial<MarketSignal>] | null> = [];
+      for (const target of targets) {
+        if (cancelled) break;
+        try {
+          const [h1] = await Promise.all([
+            fetchCandles(target.market, target.symbol, "1h"),
+            fetchCandles(target.market, target.symbol, "4h"),
+            fetchCandles(target.market, target.symbol, "1d"),
+          ]);
+          if (h1.length < 30) continue;
+          const full = analyzeCoin({
+            symbol: target.symbol,
+            market: target.market,
+            primary: h1,
+            h1,
+            h4: h1,
+            d1: h1,
+          });
+          entries.push([
+            `${target.market}:${target.symbol}`,
+            {
+              score: full.score,
+              conditionsPassed: full.conditionsPassed,
+              direction: full.direction,
+              price: full.price,
+              support: full.support,
+              resistance: full.resistance,
+              pattern: full.chartPattern,
+              chartPattern: full.chartPattern,
+              chartPatternNote: full.chartPattern
+                ? `${full.chartPattern} @ ${full.chartPatternConfidence}%`
+                : null,
+              candlestickPattern: full.candlestick,
+              candlestickConfidence: full.candlestickConfidence,
+            },
+          ]);
+        } catch {
+          /* keep the original value (partial payload, no 1h candles, etc.) */
+        }
+      }
+      if (!cancelled) {
+        setRescoring(
+          Object.fromEntries(entries.filter(Boolean) as [string, Partial<MarketSignal>][]),
+        );
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [displayed]);
 
   // Backup layer — persist whatever is on screen so the next reload starts
   // from it (works even without Firebase / offline).
@@ -286,7 +373,7 @@ export default function SignalsPage() {
   // just skips coins already saved today instead of piling up duplicates.
   useEffect(() => {
     if (loading) return;
-    for (const signal of visible) {
+    for (const signal of displayed) {
       if (signal.score < MIN_SCORE) continue;
       const full: FullSignal = generateFullSignal({
         symbol: signal.symbol,
@@ -326,7 +413,7 @@ export default function SignalsPage() {
         currentPrice: signal.price,
       });
     }
-  }, [visible, loading]);
+  }, [displayed, loading]);
 
   return (
     <main className="mx-auto max-w-3xl px-4 py-4">
@@ -334,7 +421,7 @@ export default function SignalsPage() {
       <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
         <div className="flex items-center gap-3">
           <h1 className="text-2xl font-bold" style={{ color: TEXT }}>💎 AI Setups</h1>
-          <span className="text-xs" style={{ color: MUTED }}>{visible.length} setups</span>
+          <span className="text-xs" style={{ color: MUTED }}>{displayed.length} setups</span>
           {updatedAt && (
             <span className="text-xs" style={{ color: MUTED }}>Updated {timeAgo(updatedAt)}</span>
           )}
@@ -364,11 +451,11 @@ export default function SignalsPage() {
       </div>
 
       {/* Cards — stored setups (Firestore + localStorage backup) survive reloads. */}
-      {error && visible.length === 0 ? (
+      {error && displayed.length === 0 ? (
         <div className="rounded-2xl border p-6 text-center text-sm" style={{ backgroundColor: CARD, borderColor: BORDER, color: RED }}>
           {error}
         </div>
-      ) : visible.length === 0 ? (
+      ) : displayed.length === 0 ? (
         fiveSecDone && !loading ? (
           <div className="rounded-2xl border p-6 text-center text-sm" style={{ backgroundColor: CARD, borderColor: BORDER, color: MUTED }}>
             <p>Abhi koi signal nahi.</p>
@@ -386,7 +473,7 @@ export default function SignalsPage() {
           {loading && (
             <p className="text-center text-xs" style={{ color: MUTED }} role="status">Live scan chal raha hai…</p>
           )}
-          {visible.map((signal, index) => {
+          {displayed.map((signal, index) => {
             // MASLA 6 — every visible card is 88+; a single header tops the list.
             const sectionHeader = index === 0 ? (
               <h2 className="mb-3 flex items-center gap-2 text-sm font-bold" style={{ color: AMBER }}>

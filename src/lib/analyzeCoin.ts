@@ -22,7 +22,7 @@ import {
   type StrictTrend,
 } from "@/src/lib/strictSignalEngine";
 
-/** The 8 mandatory conditions, in the order MASLA 8 lists them. */
+/** The 8 mandatory conditions, in the order MASLA 2 lists them. */
 export const CONDITION_ORDER: ConditionId[] = [
   "chartPattern",
   "candlestick",
@@ -31,8 +31,16 @@ export const CONDITION_ORDER: ConditionId[] = [
   "macd",
   "emaAlignment",
   "volume",
-  "supportResistance",
+  "riskReward",
 ];
+
+/**
+ * Plan geometry constants — MUST mirror signalGenerator's buildLeverageLevels()
+ * (SL = 3% price move, TP1 = 10% price move → R:R 1:3.33). Condition 8 verifies
+ * the exact plan both pages display: R:R >= 1:3 and SL <= 3% of price.
+ */
+const PLAN_SL_PCT = 0.03;
+const PLAN_TP1_PCT = 0.1;
 
 /** Human-readable label per condition id. */
 export const CONDITION_LABELS: Record<ConditionId, string> = {
@@ -43,7 +51,7 @@ export const CONDITION_LABELS: Record<ConditionId, string> = {
   macd: "MACD crossover confirmed",
   emaAlignment: "EMA 20/50/200 aligned",
   volume: "Volume 150%+ above average",
-  supportResistance: "Price at S/R zone (1.5x ATR)",
+  riskReward: "R:R 1:3+ (SL max 3%)",
 };
 
 /** Per-condition pass/fail + detail line for the UI. */
@@ -70,27 +78,19 @@ export interface AnalyzeResult {
   indicators: StrictIndicators;
   conditions: ConditionLine[];
   chartPattern: string | null;
+  /** Confidence (0-100) of the chart pattern above (0 when none). */
+  chartPatternConfidence: number;
   candlestick: string | null;
+  /** Confidence (0-100) of the candlestick confirmation above (0 when none). */
+  candlestickConfidence: number;
+  /** Latest swing support below price from the primary candles (null when none). */
+  support: number | null;
+  /** Latest swing resistance above price from the primary candles (null when none). */
+  resistance: number | null;
   /** Multi-timeframe trend reads (1h/4h/1d) when supplied. */
   trends: StrictTrend[];
   /** Current price (last close of the primary candles). */
   price: number;
-}
-
-/** R:R geometry so both pages show identical SL/TP (MASLA 8 #8: 1:3, SL 1.5x ATR). */
-export function rewardRisk(
-  price: number,
-  direction: AnalyzeResult["direction"],
-  atr: number | null,
-): { stopLoss: number; takeProfit: number; ratio: number } {
-  if (direction === "neutral" || !(atr && atr > 0) || !(price > 0)) {
-    return { stopLoss: 0, takeProfit: 0, ratio: 0 };
-  }
-  const stopDistance = atr * 1.5;
-  const targetDistance = stopDistance * 3;
-  const stopLoss = direction === "bullish" ? price - stopDistance : price + stopDistance;
-  const takeProfit = direction === "bullish" ? price + targetDistance : price - targetDistance;
-  return { stopLoss, takeProfit, ratio: 3 };
 }
 
 export interface AnalyzeCoinInput {
@@ -143,7 +143,7 @@ export function analyzeCoin(input: AnalyzeCoinInput): AnalyzeResult {
   const chartHit = detectChartPattern(input.h4 ?? candles, 200);
   const candleHit = detectCandlePatternLast3(candles);
 
-  const passes: Record<Exclude<ConditionId, "supportResistance">, { pass: boolean; detail: string }> = {
+  const passes: Record<ConditionId, { pass: boolean; detail: string }> = {
     chartPattern: chartHit
       ? { pass: direction !== "neutral" && chartHit.type === direction && chartHit.confidence >= 70, detail: `${chartHit.name} @ ${chartHit.confidence}%` }
       : { pass: false, detail: "No directional chart pattern" },
@@ -178,13 +178,31 @@ export function analyzeCoin(input: AnalyzeCoinInput): AnalyzeResult {
       const ratio = indicators.volumeRatio;
       return { pass: ratio > 1.5, detail: `Volume ${ratio.toFixed(2)}x 20-bar avg (needs >1.5x)` };
     })(),
+    riskReward: (() => {
+      // Condition 8 — verify the EXACT plan both pages display (SL 3% of
+      // price, TP1 10% → R:R 1:3.33). Structural: generateFullSignal() and
+      // buildLeverageLevels() build this plan, so any future plan-math change
+      // that breaks R:R 1:3 or the 3% SL cap fails here instead of shipping.
+      if (!(price > 0)) return { pass: false, detail: "No price for the plan" };
+      const slPct = PLAN_SL_PCT * 100;
+      const ratio = PLAN_TP1_PCT / PLAN_SL_PCT;
+      return {
+        pass: ratio >= 3 && slPct <= 3,
+        detail: `Plan SL ${slPct.toFixed(1)}% (max 3%) - TP1 ${(PLAN_TP1_PCT * 100).toFixed(0)}% - R:R 1:${ratio.toFixed(2)}`,
+      };
+    })(),
   };
 
-  // Condition 8 — S/R proximity (mirrors the strict engine's own geometry).
-  const srPass = conditionSupportResistanceFor(candles, indicators, direction);
+  // Latest swing levels from the SAME candles both pages read — the Signals
+  // card and the Trade chart can never show different support/resistance.
+  const pivots = zigZag(candles, 3);
+  const lastLow = [...pivots].reverse().find((p) => p.kind === "low")?.price ?? null;
+  const lastHigh = [...pivots].reverse().find((p) => p.kind === "high")?.price ?? null;
+  const support = lastLow != null && lastLow < price ? lastLow : null;
+  const resistance = lastHigh != null && lastHigh > price ? lastHigh : null;
 
   const conditions: ConditionLine[] = CONDITION_ORDER.map((id) => {
-    const result = id === "supportResistance" ? srPass : passes[id];
+    const result = passes[id];
     return { id, label: CONDITION_LABELS[id], pass: result.pass, detail: result.detail };
   });
 
@@ -202,32 +220,13 @@ export function analyzeCoin(input: AnalyzeCoinInput): AnalyzeResult {
     indicators,
     conditions,
     chartPattern: chartHit?.name ?? null,
+    chartPatternConfidence: chartHit?.confidence ?? 0,
     candlestick: candleHit?.name ?? null,
+    candlestickConfidence: candleHit?.confidence ?? 0,
+    support,
+    resistance,
     trends,
     price,
   };
-}
-
-/** Local copy of the engine's S/R proximity rule (mirrors strictSignalEngine). */
-function conditionSupportResistanceFor(candles: Candle[], indicators: StrictIndicators, direction: AnalyzeResult["direction"]): { pass: boolean; detail: string } {
-  if (direction === "neutral") return { pass: false, detail: "Direction unknown" };
-  if (candles.length < 20) return { pass: false, detail: "Not enough candles for S/R levels" };
-  const pivots = zigZag(candles, 3);
-  const lows = pivots.filter((p) => p.kind === "low").map((p) => p.price);
-  const highs = pivots.filter((p) => p.kind === "high").map((p) => p.price);
-  if (lows.length === 0 || highs.length === 0) return { pass: false, detail: "No swing levels found" };
-  const atr = indicators.atr14 ?? 0;
-  const proximity = 1.5 * atr;
-  const close = candles[candles.length - 1].close;
-  if (direction === "bullish") {
-    const support = Math.min(...lows);
-    if (support <= 0) return { pass: false, detail: "No valid support" };
-    const distance = close - support;
-    return { pass: distance >= 0 && distance <= proximity, detail: `${distance.toFixed(0)} above support ${support.toFixed(0)} (within 1.5x ATR)` };
-  }
-  const resistance = Math.max(...highs);
-  if (resistance <= 0) return { pass: false, detail: "No valid resistance" };
-  const distance = resistance - close;
-  return { pass: distance >= 0 && distance <= proximity, detail: `${distance.toFixed(0)} below resistance ${resistance.toFixed(0)} (within 1.5x ATR)` };
 }
 
