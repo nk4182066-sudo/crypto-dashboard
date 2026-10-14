@@ -15,7 +15,7 @@
  * Educational analysis only Ã¢â‚¬â€ not financial advice.
  */
 
-export type SignalStatus = "PENDING" | "SUCCESS" | "FAILED";
+export type SignalStatus = "PENDING" | "SUCCESS" | "FAILED" | "EXPIRED";
 /** Which level resolved the trade (TP1/TP2/TP3 = success, SL = failure). */
 export type HitTarget = "TP1" | "TP2" | "TP3" | "SL" | null;
 export type SignalDirection = "bullish" | "bearish" | "neutral";
@@ -29,6 +29,8 @@ export const LEGACY_SIGNAL_KEY = "signal-history";
 export const MIN_SCORE = 88;
 /** Max records kept; oldest are dropped when this is exceeded. */
 export const MAX_SIGNALS = 30;
+/** 30 days — a setup that resolves nothing in this window is EXPIRED (MASLA 5). */
+export const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
 /** Results page re-check interval (30 seconds, per spec). */
 export const REFRESH_MS = 30 * 1000;
 
@@ -148,6 +150,17 @@ export function buildWhy(record: StoredSignal): { urdu: string; english: string 
     };
   }
 
+  if (record.status === "EXPIRED") {
+    return {
+      urdu:
+        `${headUrdu} 30 din guzar gaye magar na target hit hua na stop loss - setup EXPIRED ho gaya. ` +
+        `Aakhri price ${money(record.currentPrice)} tha. Time-bound setups wahin band karna chahiye.`,
+      english:
+        `${headEnglish} 30 days passed without the target or the stop loss being hit - the setup EXPIRED. ` +
+        `The last price was ${money(record.currentPrice)}. Time-bound setups should be closed at that point.`,
+    };
+  }
+
   if (record.status === "FAILED") {
     const reasonUrdu =
       record.direction === "bearish"
@@ -197,6 +210,17 @@ export function buildLesson(
       english:
         `${pattern} + ${candle} confirmation = a strong setup. Two entries (Entry 1 + Entry 2) reduce risk. ` +
         `Book partial profit at TP1 and trail the rest toward TP2/TP3.`,
+    };
+  }
+
+  if (status === "EXPIRED") {
+    return {
+      urdu:
+        `Har setup ko time-bound rakhein. Agar 30 din mein na TP na SL touch ho to setup expire ho jata hai - ` +
+        `ghabra kar plan nahi badalna chahiye, balke naya setup dhoondhna chahiye.`,
+      english:
+        `Keep every setup time-bound. If neither the TP nor the SL is touched within 30 days the setup expires - ` +
+        `do not panic-change the plan; look for a fresh setup instead.`,
     };
   }
 
@@ -305,7 +329,10 @@ export function clearSignals(): void {
 
 /** Fill defaults for any field an older/partial record is missing. */
 function normalize(raw: StoredSignal): StoredSignal {
-  const status: SignalStatus = raw.status === "SUCCESS" || raw.status === "FAILED" ? raw.status : "PENDING";
+  const status: SignalStatus =
+    raw.status === "SUCCESS" || raw.status === "FAILED" || raw.status === "EXPIRED"
+      ? raw.status
+      : "PENDING";
   const hitTarget: HitTarget =
     raw.hitTarget === "TP1" || raw.hitTarget === "TP2" || raw.hitTarget === "TP3" || raw.hitTarget === "SL"
       ? raw.hitTarget
@@ -523,6 +550,22 @@ function highestHit(record: StoredSignal, price: number, bearish: boolean): Excl
  */
 export function evaluateSignal(record: StoredSignal, currentPrice: number): StoredSignal {
   const price = Number.isFinite(currentPrice) && currentPrice > 0 ? currentPrice : 0;
+
+  // 30-day expiry (mirrors the server cron): a PENDING setup that resolves
+  // nothing in 30 days becomes EXPIRED instead of staying pending forever.
+  if (record.status === "PENDING" && record.createdAt > 0 && Date.now() - record.createdAt > THIRTY_DAYS_MS) {
+    const expired: StoredSignal = { ...record, status: "EXPIRED", ...(price ? { currentPrice: price } : {}) };
+    const why = buildWhy(expired);
+    const lesson = buildLesson(expired.status, expired.pattern, expired.candlestick);
+    return {
+      ...expired,
+      whyUrdu: why.urdu,
+      whyEnglish: why.english,
+      lessonUrdu: lesson.urdu,
+      lessonEnglish: lesson.english,
+    };
+  }
+
   if (record.status !== "PENDING" || !price) {
     return price && price !== record.currentPrice ? { ...record, currentPrice: price } : record;
   }
@@ -546,6 +589,60 @@ export function evaluateSignal(record: StoredSignal, currentPrice: number): Stor
   if (status === "PENDING") return next;
 
   // Regenerate both narratives so they describe the final outcome.
+  const why = buildWhy(next);
+  const lesson = buildLesson(next.status, next.pattern, next.candlestick);
+  return {
+    ...next,
+    whyUrdu: why.urdu,
+    whyEnglish: why.english,
+    lessonUrdu: lesson.urdu,
+    lessonEnglish: lesson.english,
+  };
+}
+
+/**
+ * Map a server/Firestore status ("WIN" | "LOSS" | "EXPIRED" | "PENDING") to the
+ * local SignalStatus. Returns null for PENDING/unknown so the local evaluation
+ * (or a not-yet-resolved state) is preserved.
+ */
+export function cloudStatusToLocal(cloud: string): SignalStatus | null {
+  if (cloud === "WIN") return "SUCCESS";
+  if (cloud === "LOSS") return "FAILED";
+  if (cloud === "EXPIRED") return "EXPIRED";
+  return null;
+}
+
+/** Choose the hit-target label from the cron value, else infer it from the plan. */
+function pickHitTarget(raw: string | undefined, status: SignalStatus): HitTarget {
+  if (raw === "TP1" || raw === "TP2" || raw === "TP3" || raw === "SL") return raw;
+  if (status === "SUCCESS") return "TP1";
+  if (status === "FAILED") return "SL";
+  return null;
+}
+
+/**
+ * Overlay a server-cron outcome onto a local record so the Results page shows
+ * the SAME WIN/LOSS/EXPIRED the Firestore cron wrote — on every device, even
+ * setups that resolved while this browser was closed. Only overrides records
+ * still PENDING locally (never un-resolves a local win/loss). Regenerates both
+ * narratives so the card explains the outcome.
+ */
+export function applyCloudOutcome(
+  record: StoredSignal,
+  cloud: { status: string; currentPrice?: number; hitTarget?: string }
+): StoredSignal {
+  const price =
+    typeof cloud.currentPrice === "number" && cloud.currentPrice > 0 ? cloud.currentPrice : record.currentPrice;
+  const local = cloudStatusToLocal(String(cloud.status));
+  if (!local || record.status !== "PENDING") {
+    return price !== record.currentPrice ? { ...record, currentPrice: price } : record;
+  }
+  const next: StoredSignal = {
+    ...record,
+    status: local,
+    hitTarget: pickHitTarget(cloud.hitTarget, local),
+    currentPrice: price,
+  };
   const why = buildWhy(next);
   const lesson = buildLesson(next.status, next.pattern, next.candlestick);
   return {

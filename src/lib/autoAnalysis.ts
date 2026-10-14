@@ -67,16 +67,32 @@ function trendOf(candles: Candle[]): TrendDirection {
   return "neutral";
 }
 
-/** Support = highest recent swing low; resistance = lowest recent swing high. */
-function keyLevels(candles: Candle[]): { support: number; resistance: number } {
+/**
+ * Price-anchored key levels (fixes the inverted "Support $116 above price" bug).
+ *   - Support    = highest recent swing LOW that sits BELOW the current price
+ *                  (the nearest floor under price).
+ *   - Resistance = lowest recent swing HIGH that sits ABOVE the current price
+ *                  (the nearest ceiling over price).
+ * This GUARANTEES support < price < resistance, so a green "Support" line can
+ * never be drawn above price or a red "Resistance" line below it. Falls back to
+ * the extremes of the candle range when the market is at an all-time high/low
+ * of the window (no swing on one side).
+ */
+function keyLevels(candles: Candle[], currentPrice: number): { support: number; resistance: number } {
   if (candles.length === 0) return { support: 0, resistance: 0 };
   const { highs, lows } = findSwings(candles, 3);
-  const support = lows.length > 0
-    ? Math.max(...lows.slice(-5).map((point) => point.price))
+  const lowsBelow = lows.map((point) => point.price).filter((price) => price < currentPrice);
+  const highsAbove = highs.map((point) => point.price).filter((price) => price > currentPrice);
+
+  // Support: the highest low still below price (closest floor under price).
+  const support = lowsBelow.length > 0
+    ? Math.max(...lowsBelow)
     : Math.min(...candles.map((candle) => candle.low));
-  const resistance = highs.length > 0
-    ? Math.min(...highs.slice(-5).map((point) => point.price))
+  // Resistance: the lowest high above price (closest ceiling over price).
+  const resistance = highsAbove.length > 0
+    ? Math.min(...highsAbove)
     : Math.max(...candles.map((candle) => candle.high));
+
   return { support, resistance };
 }
 
@@ -113,8 +129,9 @@ export async function analyzeSymbol(symbol: string, market: string, origin?: str
   const levelSeries = d1.length > 10 ? d1 : primary;
   const current = primary[primary.length - 1]?.close ?? 0;
 
-  // Check 2 — key level from swing points (20 pts when near support).
-  const { support, resistance } = keyLevels(levelSeries);
+  // Check 2 — price-anchored key levels: support is the nearest swing low below
+  // price, resistance the nearest swing high above price (never inverted).
+  const { support, resistance } = keyLevels(levelSeries, current);
   const range = resistance - support;
   const position = range > 0 ? (current - support) / range : 0.5;
   const nearSupport = position <= 0.33;

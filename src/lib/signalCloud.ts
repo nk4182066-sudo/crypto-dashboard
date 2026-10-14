@@ -211,3 +211,42 @@ export function saveSignalBackup(signals: CloudDoc[]): void {
     /* quota / private-mode — backup optional */
   }
 }
+
+/**
+ * Server-side read of every stored signal — used by the /api/track-signals
+ * cron (MASLA 5) to resolve PENDING setups even when no browser is open.
+ * Each document is returned with its Firestore id attached. Empty array when
+ * Firestore is not configured or the read fails — never throws.
+ */
+export async function readAllSignals(): Promise<Array<CloudDoc & { id: string }>> {
+  const db = getCloudDb();
+  if (!db) {
+    console.info(`[signalCloud] readAllSignals off (${initReason}).`);
+    return [];
+  }
+  try {
+    const snapshot = await getDocs(collection(db, SIGNALS_COLLECTION));
+    return snapshot.docs.map((entry) => ({ id: entry.id, ...(entry.data() as CloudDoc) }));
+  } catch (error) {
+    console.warn("[signalCloud] readAllSignals failed:", error instanceof Error ? error.message : error);
+    return [];
+  }
+}
+
+/**
+ * Merge-patch one stored signal — used by the tracking cron to write the
+ * resolved `status` ("WIN" | "LOSS" | "EXPIRED" | "PENDING") and the
+ * `currentPrice` it evaluated at. Merge so all trade-plan fields are kept.
+ * Returns true on success — never throws.
+ */
+export async function updateSignal(id: string, patch: Record<string, unknown>): Promise<boolean> {
+  const db = getCloudDb();
+  if (!db) return false;
+  try {
+    await setDoc(doc(db, SIGNALS_COLLECTION, id), patch, { merge: true });
+    return true;
+  } catch (error) {
+    console.warn(`[signalCloud] updateSignal failed (${id}):`, error instanceof Error ? error.message : error);
+    return false;
+  }
+}

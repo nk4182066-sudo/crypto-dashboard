@@ -11,11 +11,13 @@ import {
   clearSignals,
   saveSignals,
   evaluateSignal,
+  applyCloudOutcome,
   money,
   REFRESH_MS,
   type StoredSignal,
   type SignalStatus,
 } from "@/src/lib/signalStorage";
+import { subscribeSignals, type CloudDoc } from "@/src/lib/signalCloud";
 
 const GREEN = "#00C087";
 const CARD = "#181A20";
@@ -61,6 +63,7 @@ const statusMeta: Record<SignalStatus, { emoji: string; label: string; color: st
   SUCCESS: { emoji: "✅", label: "SUCCESS", color: GREEN },
   FAILED: { emoji: "❌", label: "FAILED", color: RED },
   PENDING: { emoji: "⏳", label: "PENDING", color: AMBER },
+  EXPIRED: { emoji: "⌛", label: "EXPIRED", color: MUTED },
 };
 
 export default function ResultsPage() {
@@ -76,6 +79,55 @@ export default function ResultsPage() {
   useEffect(() => {
     setRecords(cleanDuplicates());
     setLoading(false);
+  }, []);
+
+  // MASLA 5/6 — Firestore cross-device sync. The server cron (/api/track-signals,
+  // every 5 min) writes WIN/LOSS/EXPIRED into Firestore even while no browser is
+  // open. This real-time listener overlays that authoritative outcome onto the
+  // matching local record (by symbol), so a setup resolved on ANY device — or by
+  // the cron itself — shows the same result here. Only PENDING locals are
+  // upgraded; a local win/loss is never downgraded.
+  useEffect(() => {
+    let cancelled = false;
+
+    function mergeCloud(docs: CloudDoc[]) {
+      if (cancelled || docs.length === 0) return;
+      setRecords((prev) => {
+        if (prev.length === 0) return prev;
+        // Index cloud docs by normalized symbol → most recent outcome wins.
+        const bySymbol = new Map<string, CloudDoc>();
+        for (const doc of docs) {
+          if (typeof doc?.symbol !== "string") continue;
+          const key = baseKey(doc.symbol);
+          const existing = bySymbol.get(key);
+          const ts = typeof doc.createdAt === "number" ? doc.createdAt : 0;
+          if (!existing || ts > (typeof existing.createdAt === "number" ? existing.createdAt : 0)) {
+            bySymbol.set(key, doc);
+          }
+        }
+        let changed = false;
+        const merged = prev.map((r) => {
+          if (r.status !== "PENDING") return r;
+          const doc = bySymbol.get(baseKey(r.symbol));
+          if (!doc) return r;
+          const next = applyCloudOutcome(r, {
+            status: String(doc.status ?? ""),
+            currentPrice: typeof doc.currentPrice === "number" ? doc.currentPrice : undefined,
+            hitTarget: typeof doc.hitTarget === "string" ? doc.hitTarget : undefined,
+          });
+          if (next !== r && next.status !== r.status) changed = true;
+          return next;
+        });
+        if (changed) saveSignals(merged);
+        return changed ? merged : prev;
+      });
+    }
+
+    const unsubscribe = subscribeSignals(mergeCloud);
+    return () => {
+      cancelled = true;
+      unsubscribe();
+    };
   }, []);
 
   // Auto-evaluation: fetch live quotes, resolve PENDING records (TP → SUCCESS,
@@ -129,6 +181,7 @@ export default function ResultsPage() {
     const total = records.length;
     const wins = records.filter((r) => r.status === "SUCCESS").length;
     const losses = records.filter((r) => r.status === "FAILED").length;
+    const expired = records.filter((r) => r.status === "EXPIRED").length;
     const pending = records.filter((r) => r.status === "PENDING").length;
     const resolved = wins + losses;
     const pct = (n: number) => (total ? Math.round((n / total) * 100) : 0);
@@ -136,9 +189,11 @@ export default function ResultsPage() {
       total,
       wins,
       losses,
+      expired,
       pending,
       winPct: pct(wins),
       lossPct: pct(losses),
+      expiredPct: pct(expired),
       pendingPct: pct(pending),
       resolved,
       winRate: resolved ? Math.round((wins / resolved) * 100) : 0,
@@ -197,11 +252,12 @@ export default function ResultsPage() {
         <p className="text-xs font-bold uppercase tracking-wide" style={{ color: GREEN }}>
           📈 STATISTICS / HISAAB
         </p>
-        <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
+        <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-5">
           {[
             { label: "Total", urdu: "Kul", value: stats.total, pct: 100, color: TEXT },
             { label: "Win", urdu: "Jeet", value: stats.wins, pct: stats.winPct, color: GREEN },
             { label: "Loss", urdu: "Haar", value: stats.losses, pct: stats.lossPct, color: RED },
+            { label: "Expired", urdu: "Muddat khatam", value: stats.expired, pct: stats.expiredPct, color: MUTED },
             { label: "Pending", urdu: "Zer-e-ghaur", value: stats.pending, pct: stats.pendingPct, color: AMBER },
           ].map((s) => (
             <div key={s.label} className="rounded-xl p-3 text-center" style={{ backgroundColor: "rgba(255,255,255,0.04)" }}>
@@ -227,7 +283,7 @@ export default function ResultsPage() {
 
       {/* Filters — status + time */}
       <div className="mt-4 flex flex-wrap items-center gap-2">
-        {(["all", "SUCCESS", "FAILED", "PENDING"] as StatusFilter[]).map((f) => (
+        {(["all", "SUCCESS", "FAILED", "EXPIRED", "PENDING"] as StatusFilter[]).map((f) => (
           <button
             key={f}
             onClick={() => setStatus(f)}

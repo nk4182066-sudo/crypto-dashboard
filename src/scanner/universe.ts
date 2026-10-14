@@ -50,6 +50,10 @@ export const scanUniverse: ScanTarget[] = [
   { symbol: "LDO-USD", market: "crypto", label: "Lido DAO" },
   { symbol: "MANA-USD", market: "crypto", label: "Decentraland" },
   { symbol: "ICP-USD", market: "crypto", label: "Internet Computer" },
+  // MASLA 8 — top-50 coins the chat must resolve by name (SUI was missing).
+  { symbol: "SUI-USD", market: "crypto", label: "Sui" },
+  { symbol: "APT-USD", market: "crypto", label: "Aptos" },
+  { symbol: "PEPE-USD", market: "crypto", label: "Pepe" },
   // Forex (16)
   { symbol: "EURUSD=X", market: "forex", label: "EUR/USD" },
   { symbol: "GBPUSD=X", market: "forex", label: "GBP/USD" },
