@@ -207,7 +207,20 @@ export function analyzeCoin(input: AnalyzeCoinInput): AnalyzeResult {
     return { id, label: CONDITION_LABELS[id], pass: result.pass, detail: result.detail };
   });
 
-  const conditionsPassed = conditions.filter((c) => c.pass).length;
+  let conditionsPassed = conditions.filter((c) => c.pass).length;
+
+  // ── INVARIANT GUARD ──────────────────────────────────────────────────────
+  // Rule #5: a detected pattern is a hard prerequisite for 8/8. No directional
+  // chart pattern OR a contradicting candlestick type caps the score at 7/8
+  // (88). This is the single scoring authority — both the Trade page and the
+  // Signals API read this value, so they can never disagree. This guard is
+  // defensive: even if a future edit flips a condition flag incorrectly, a
+  // "No clear pattern" signal can never display 100 (which is exactly the live
+  // XLM/TRX "score 100 + pattern null" contradiction).
+  if (!chartHit || (candleHit && candleHit.type !== direction)) {
+    conditionsPassed = Math.min(conditionsPassed, 7);
+  }
+
   const { score, quality } = scoreFromConditions(conditionsPassed);
 
   return {
