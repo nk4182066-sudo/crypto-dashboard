@@ -47,10 +47,10 @@ export const CONDITION_LABELS: Record<ConditionId, string> = {
   chartPattern: "Chart pattern (70%+ reliability)",
   candlestick: "Candlestick confirmation (65%+)",
   trend: "Trend aligned 1h+4h+1d",
-  rsi: "RSI extreme (<35 / >65)",
+  rsi: "RSI momentum aligned with trend",
   macd: "MACD crossover confirmed",
   emaAlignment: "EMA 20/50/200 aligned",
-  volume: "Volume 150%+ above average",
+  volume: "Volume 120%+ above average",
   riskReward: "R:R 1:3+ (SL max 3%)",
 };
 
@@ -195,7 +195,10 @@ export function analyzeCoin(input: AnalyzeCoinInput): AnalyzeResult {
     })(),
     volume: (() => {
       const ratio = indicators.volumeRatio;
-      return { pass: ratio > 1.5, detail: `Volume ${ratio.toFixed(2)}x 20-bar avg (needs >1.5x)` };
+      // 1.2x keeps this a real participation filter (volume must back the move)
+      // while being reachable in normal markets. The old 1.5x rejected nearly
+      // every live candle and helped push real setups below 7/8.
+      return { pass: ratio >= 1.2, detail: `Volume ${ratio.toFixed(2)}x 20-bar avg (needs >=1.2x)` };
     })(),
     riskReward: (() => {
       // Condition 8 — verify the EXACT plan both pages display (SL 3% of
