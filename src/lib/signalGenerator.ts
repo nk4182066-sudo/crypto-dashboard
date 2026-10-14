@@ -220,6 +220,7 @@ export function buildLeverageLevels(price: number, direction: "bullish" | "beari
 export function generateFullSignal(input: FullSignalInput): FullSignal {
   const { symbol, market, direction, pattern = null, score = 0, bias, reason } = input;
   const price = Number.isFinite(input.price) && input.price > 0 ? input.price : 0;
+  if (price <= 0) throw new Error(`[signalGenerator] REJECT: price ${input.price} <= 0 for ${symbol}`);
 
   // Resolve chart + candlestick patterns (Rule 1: pattern should not be empty;
   // we always return a value or a clear fallback string).

@@ -37,26 +37,33 @@ interface AllCoinsCoin {
  * and the 4 educators — plus the full MarketSignal payload so the Signals page
  * can rebuild the exact card from the cloud document.
  */
-function toCloudDoc(signal: MarketSignal, timeframe: string): CloudDoc {
-  const full = generateFullSignal({
-    symbol: signal.symbol,
-    market: signal.market,
-    price: signal.price,
-    direction: signal.direction,
-    support: signal.support,
-    resistance: signal.resistance,
-    pattern: signal.pattern,
-    score: signal.score,
-    bias: signal.bias,
-    reason: signal.reason,
-    chartPattern: signal.chartPattern,
-    chartPatternNote: signal.chartPatternNote,
-    candlestick: signal.candlestickPattern
-      ? { name: signal.candlestickPattern, confidence: signal.candlestickConfidence, type: signal.direction }
-      : null,
-  });
+function toCloudDoc(signal: MarketSignal, timeframe: string): CloudDoc | null {
+  let full: ReturnType<typeof generateFullSignal>;
+  try {
+    full = generateFullSignal({
+      symbol: signal.symbol,
+      market: signal.market,
+      price: signal.price,
+      direction: signal.direction,
+      support: signal.support,
+      resistance: signal.resistance,
+      pattern: signal.pattern,
+      score: signal.score,
+      bias: signal.bias,
+      reason: signal.reason,
+      chartPattern: signal.chartPattern,
+      chartPatternNote: signal.chartPatternNote,
+      candlestick: signal.candlestick
+        ? { name: signal.candlestickPattern!, confidence: signal.candlestickConfidence, type: signal.candlestickType ?? signal.direction }
+        : null,
+    });
+  } catch (error) {
+    console.warn(`[toCloudDoc] REJECT signal ${signal.symbol}:`, error);
+    return null;
+  }
   const agreed = signal.experts?.consensus.agreed ?? null;
   const total = signal.experts?.consensus.total ?? 4;
+  if (!full) return null;
   return {
     ...signal,
     timeframe,
@@ -71,6 +78,7 @@ function toCloudDoc(signal: MarketSignal, timeframe: string): CloudDoc {
     consensus: agreed === null ? null : `${agreed}/${total}`,
     createdAt: Date.now(),
   };
+  return null;
 }
 
 /** One enriched analysis card for the Signals page. Educational only. */
@@ -94,6 +102,9 @@ export interface MarketSignal {
   chartPatternNote: string | null;
   /** Detected candlestick confirmation name (e.g. "Hammer"), or null. */
   candlestickPattern: string | null;
+  candlestickType: "bullish" | "bearish" | "neutral" | null;
+  /** Detected candlestick confirmation object (name/type/confidence together). */
+  candlestick?: { name: string | null; type: "bullish" | "bearish" | "neutral"; confidence: number } | null;
   /** Candlestick confirmation confidence 0-100 (0 when none). */
   candlestickConfidence: number;
   /** MASLA 1/2 — shared analyzeCoin() condition breakdown so the card shows
@@ -365,6 +376,11 @@ export async function GET(request: Request) {
       h4,
       d1,
     });
+    // ZERO PRICE GUARD — never persist signals with $0 prices (SHIB fetch bug fix)
+    if (full.price <= 0) {
+      console.warn(`[market-signals] REJECT ${item.symbol}: price ${full.price} <= 0`);
+      continue;
+    }
     if (full.direction === "neutral") {
       drops.neutral += 1;
       continue;
@@ -454,7 +470,11 @@ export async function GET(request: Request) {
         ? `${full.chartPattern} @ ${full.chartPatternConfidence}%`
         : null,
       candlestickPattern: full.candlestick,
+      candlestickType: full.candlestickType,
       candlestickConfidence: full.candlestickConfidence,
+      candlestick: full.candlestick
+        ? { name: full.candlestick, type: full.candlestickType!, confidence: full.candlestickConfidence }
+        : null,
       conditionsPassed: full.conditionsPassed,
       conditions: full.conditions,
       confirmations,
@@ -470,9 +490,10 @@ export async function GET(request: Request) {
   // Wrapped defensively: toCloudDoc() → generateFullSignal() runs here and, if
   // it ever threw for one odd signal shape, it must not 500 the whole route —
   // persistence is best-effort, the emitted array is what matters.
-  if (emitted.length > 0) {
+  const cloudDocs = emitted.map((signal) => toCloudDoc(signal, "1h")).filter((doc): doc is CloudDoc => doc !== null);
+  if (cloudDocs.length > 0) {
     try {
-      await persistSignals(emitted.map((signal) => toCloudDoc(signal, "1h")));
+      await persistSignals(cloudDocs);
     } catch (error) {
       console.warn("[market-signals] persist step failed (non-fatal):", error);
     }

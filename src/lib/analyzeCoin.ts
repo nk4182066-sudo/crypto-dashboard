@@ -81,6 +81,7 @@ export interface AnalyzeResult {
   /** Confidence (0-100) of the chart pattern above (0 when none). */
   chartPatternConfidence: number;
   candlestick: string | null;
+  candlestickType: "bullish" | "bearish" | "neutral" | null;
   /** Confidence (0-100) of the candlestick confirmation above (0 when none). */
   candlestickConfidence: number;
   /** Latest swing support below price from the primary candles (null when none). */
@@ -222,6 +223,7 @@ export function analyzeCoin(input: AnalyzeCoinInput): AnalyzeResult {
     chartPattern: chartHit?.name ?? null,
     chartPatternConfidence: chartHit?.confidence ?? 0,
     candlestick: candleHit?.name ?? null,
+    candlestickType: candleHit?.type ?? null,
     candlestickConfidence: candleHit?.confidence ?? 0,
     support,
     resistance,

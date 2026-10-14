@@ -272,8 +272,8 @@ function TradeChart() {
   const srLevels: ChartLevel[] = useMemo(() => {
     if (!analysis) return [];
     const levels: ChartLevel[] = [];
-    if (analysis.support > 0) levels.push({ kind: "support", price: analysis.support, label: `Support $${fmtPrice(analysis.support)}`, lineStyle: "dashed" });
-    if (analysis.resistance > 0) levels.push({ kind: "resistance", price: analysis.resistance, label: `Resistance $${fmtPrice(analysis.resistance)}`, lineStyle: "dashed" });
+    if (analysis.support != null && analysis.support > 0) levels.push({ kind: "support", price: analysis.support, label: `Support $${fmtPrice(analysis.support)}`, lineStyle: "dashed" });
+    if (analysis.resistance != null && analysis.resistance > 0) levels.push({ kind: "resistance", price: analysis.resistance, label: `Resistance $${fmtPrice(analysis.resistance)}`, lineStyle: "dashed" });
     return levels;
   }, [analysis]);
 

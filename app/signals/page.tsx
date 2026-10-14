@@ -311,8 +311,8 @@ export default function SignalsPage() {
             market: target.market,
             primary: h1,
             h1,
-            h4: h1,
-            d1: h1,
+            h4: await fetchCandles(target.market, target.symbol, "4h"),
+            d1: await fetchCandles(target.market, target.symbol, "1d"),
           });
           entries.push([
             `${target.market}:${target.symbol}`,
