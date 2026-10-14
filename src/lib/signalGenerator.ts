@@ -13,6 +13,8 @@
 
 import type { Candle } from "@/src/analysis/types";
 import { scanCandlestickPatterns } from "@/src/lib/chart/candlestickPatterns";
+// MASLA 5 — single shared price formatter/rounder (fixes SHIB $0.0000 + BTC cents).
+import { roundPrice, formatPrice as money } from "@/src/lib/formatPrice";
 
 export type SignalDirection = "bullish" | "bearish" | "neutral";
 
@@ -122,20 +124,8 @@ export interface FullSignal {
   teacherNotesEnglish: string;
 }
 
-/** Round a price to a sensible number of decimals for its magnitude. */
-function roundPrice(value: number): number {
-  if (!Number.isFinite(value)) return 0;
-  if (value >= 1000) return Math.round(value * 100) / 100;
-  if (value >= 1) return Math.round(value * 1000) / 1000;
-  return Math.round(value * 100000) / 100000;
-}
+// roundPrice + money (formatPrice) are imported from @/src/lib/formatPrice above.
 
-function money(value: number): string {
-  if (!Number.isFinite(value)) return "—";
-  if (value >= 1000) return `$${value.toLocaleString("en-US", { maximumFractionDigits: 2 })}`;
-  if (value >= 1) return `$${value.toFixed(2)}`;
-  return `$${value.toFixed(4)}`;
-}
 
 function trendOf(direction: SignalDirection, bias?: string | null): string {
   const b = (bias ?? "").toLowerCase();

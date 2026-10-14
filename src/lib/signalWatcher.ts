@@ -2,6 +2,7 @@
 // raises a local notification for any NEW 90+ score setup. Educational only.
 
 import { alertsEnabled, showNotification } from "@/src/lib/notifications";
+import { formatPrice } from "@/src/lib/formatPrice";
 
 /** Only setups at or above this score raise an alert (Rule: 90+ only). */
 export const ALERT_MIN_SCORE = 90;
@@ -49,10 +50,7 @@ function saveNotified(ids: string[]): void {
 }
 
 function money(value: number | null): string {
-  if (value === null || !Number.isFinite(value) || value <= 0) return "—";
-  if (value >= 1000) return `$${value.toLocaleString("en-US", { maximumFractionDigits: 2 })}`;
-  if (value >= 1) return `$${value.toFixed(2)}`;
-  return `$${value.toFixed(4)}`;
+  return value == null ? "—" : formatPrice(value);
 }
 
 /**

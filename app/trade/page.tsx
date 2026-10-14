@@ -53,9 +53,10 @@ interface Candle {
 
 function fmtPrice(p: number): string {
   if (!Number.isFinite(p) || p === 0) return "—";
-  if (p >= 1000) return p.toLocaleString("en-US", { maximumFractionDigits: 0 });
+  if (p >= 1000) return p.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   if (p >= 1) return p.toFixed(2);
-  return p.toFixed(4);
+  if (p >= 0.0001) return p.toFixed(6);
+  return p.toFixed(8);
 }
 
 /** Pulls one timeframe of candles; empty array on any failure. */

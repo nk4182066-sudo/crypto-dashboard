@@ -1,9 +1,9 @@
-/**
- * lib/signalStorage.ts Ã¢â‚¬â€ localStorage persistence for the /signals Ã¢â€ â€™ /results pipeline.
+﻿/**
+ * lib/signalStorage.ts ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â localStorage persistence for the /signals ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ /results pipeline.
  *
  * The Signals page calls `saveSignal()` for every setup scoring 88+ (see MIN_SCORE).
  * The Results page loads them with `getSignals()`, re-evaluates every PENDING record
- * against live price (`evaluateSignal`) and renders the full AÃ¢â€ â€™Z bilingual breakdown.
+ * against live price (`evaluateSignal`) and renders the full AÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢Z bilingual breakdown.
  *
  * Every record carries the complete trade plan (entries, stop loss, three targets,
  * support/resistance, trend, pattern, candlestick confirmation) plus a Roman Urdu +
@@ -12,8 +12,10 @@
  * Legacy records written by the older `signalHistory` module are migrated in-place on
  * read, so nothing a user already tracked is lost.
  *
- * Educational analysis only Ã¢â‚¬â€ not financial advice.
+ * Educational analysis only ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â not financial advice.
  */
+
+import { formatPrice } from "@/src/lib/formatPrice";
 
 export type SignalStatus = "PENDING" | "SUCCESS" | "FAILED" | "EXPIRED";
 /** Which level resolved the trade (TP1/TP2/TP3 = success, SL = failure). */
@@ -22,14 +24,14 @@ export type SignalDirection = "bullish" | "bearish" | "neutral";
 
 /** localStorage key for the new store. */
 export const SIGNAL_STORAGE_KEY = "signal-storage";
-/** Older key written by src/lib/signalHistory.ts Ã¢â‚¬â€ read once for migration. */
+/** Older key written by src/lib/signalHistory.ts ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â read once for migration. */
 export const LEGACY_SIGNAL_KEY = "signal-history";
 
 /** Minimum score a setup must reach to be saved, tracked and displayed (MASLA 6). */
 export const MIN_SCORE = 88;
 /** Max records kept; oldest are dropped when this is exceeded. */
 export const MAX_SIGNALS = 30;
-/** 30 days — a setup that resolves nothing in this window is EXPIRED (MASLA 5). */
+/** 30 days â€” a setup that resolves nothing in this window is EXPIRED (MASLA 5). */
 export const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
 /** Results page re-check interval (30 seconds, per spec). */
 export const REFRESH_MS = 30 * 1000;
@@ -70,7 +72,7 @@ export interface StoredSignal {
   lessonEnglish: string;
 }
 
-/** Input accepted by saveSignal() Ã¢â‚¬â€ exactly the trade-plan fields the Signals page has. */
+/** Input accepted by saveSignal() ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â exactly the trade-plan fields the Signals page has. */
 export interface SignalSaveInput {
   symbol: string;
   market: string;
@@ -90,16 +92,13 @@ export interface SignalSaveInput {
   currentPrice: number;
 }
 
-// Ã¢â€â‚¬Ã¢â€â‚¬ Formatting helpers Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
+// ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ Formatting helpers ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
 
 export function money(value: number): string {
-  if (!Number.isFinite(value) || value <= 0) return "Ã¢â‚¬â€";
-  if (value >= 1000) return `$${value.toLocaleString("en-US", { maximumFractionDigits: 2 })}`;
-  if (value >= 1) return `$${value.toFixed(2)}`;
-  return `$${value.toFixed(4)}`;
+  return formatPrice(value);
 }
 
-/** Candlestick cell stored like "Hammer (Bullish, 85%)" Ã¢â€ â€™ "Hammer". */
+/** Candlestick cell stored like "Hammer (Bullish, 85%)" ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ "Hammer". */
 function candleName(candlestick: string): string {
   const trimmed = (candlestick || "").trim();
   if (!trimmed || /^neutral/i.test(trimmed)) return "No candlestick";
@@ -107,7 +106,7 @@ function candleName(candlestick: string): string {
   return cut > 0 ? trimmed.slice(0, cut) : trimmed;
 }
 
-/** "Uptrend (Ã¢â‚¬Â¦)" Ã¢â€ â€™ "uptrend (Ã¢â‚¬Â¦)". */
+/** "Uptrend (ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦)" ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ "uptrend (ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦)". */
 function lowerFirst(value: string): string {
   return value ? value.charAt(0).toLowerCase() + value.slice(1) : value;
 }
@@ -119,7 +118,7 @@ function trendKind(trend: string): "up" | "down" | "side" {
   return "side";
 }
 
-// Ã¢â€â‚¬Ã¢â€â‚¬ Narratives (Roman Urdu first, English second) Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
+// ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ Narratives (Roman Urdu first, English second) ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
 
 /** "WHY IT SUCCEEDED / WHY IT FAILED / WHY IT IS PENDING" block. */
 export function buildWhy(record: StoredSignal): { urdu: string; english: string } {
@@ -143,7 +142,7 @@ export function buildWhy(record: StoredSignal): { urdu: string; english: string 
     return {
       urdu:
         `${headUrdu} Score ${record.score}/100 tha. ` +
-        `Target ${target} (${money(value)}) hit ho gaya Ã¢â‚¬â€ current price ${money(record.currentPrice)}. Setup kaam kar gaya.`,
+        `Target ${target} (${money(value)}) hit ho gaya ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â current price ${money(record.currentPrice)}. Setup kaam kar gaya.`,
       english:
         `${headEnglish} Score was ${record.score}/100. ` +
         `Target ${target} (${money(value)}) was hit at a current price of ${money(record.currentPrice)}. The setup worked.`,
@@ -176,7 +175,7 @@ export function buildWhy(record: StoredSignal): { urdu: string; english: string 
           : `But the market moved against the plan.`;
     return {
       urdu:
-        `${headUrdu} ${reasonUrdu} Stop loss ${money(record.stopLoss)} hit ho gaya Ã¢â‚¬â€ current price ${money(record.currentPrice)}. ` +
+        `${headUrdu} ${reasonUrdu} Stop loss ${money(record.stopLoss)} hit ho gaya ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â current price ${money(record.currentPrice)}. ` +
         `Setup fail ho gaya (technical analysis is baar kaam nahi aayi).`,
       english:
         `${headEnglish} ${reasonEnglish} Stop loss ${money(record.stopLoss)} was hit at a current price of ${money(record.currentPrice)}. ` +
@@ -186,15 +185,15 @@ export function buildWhy(record: StoredSignal): { urdu: string; english: string 
 
   return {
     urdu:
-      `${headUrdu} Abhi na target hit hua hai na stop loss. Current price ${money(record.currentPrice)} hai Ã¢â‚¬â€ ` +
+      `${headUrdu} Abhi na target hit hua hai na stop loss. Current price ${money(record.currentPrice)} hai ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â ` +
       `setup PENDING hai aur live price par nazar rakhi ja rahi hai.`,
     english:
-      `${headEnglish} Neither the target nor the stop loss has been hit yet. Current price is ${money(record.currentPrice)} Ã¢â‚¬â€ ` +
+      `${headEnglish} Neither the target nor the stop loss has been hit yet. Current price is ${money(record.currentPrice)} ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â ` +
       `the setup is PENDING and the live price is being watched.`,
   };
 }
 
-/** "LESSON / SABAQ" block Ã¢â‚¬â€ same lesson in both languages, outcome aware. */
+/** "LESSON / SABAQ" block ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â same lesson in both languages, outcome aware. */
 export function buildLesson(
   status: SignalStatus,
   pattern: string,
@@ -227,20 +226,20 @@ export function buildLesson(
   if (status === "FAILED") {
     return {
       urdu:
-        `Stop loss zaroori hai Ã¢â‚¬â€ wo hi capital ko bachata hai. Support/resistance break hone pe trade reverse karein. ` +
+        `Stop loss zaroori hai ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â wo hi capital ko bachata hai. Support/resistance break hone pe trade reverse karein. ` +
         `News events aur volume hamesha dekhein. Ek trade pe 1-2% se zyada risk na lein.`,
       english:
-        `A stop loss is mandatory Ã¢â‚¬â€ it protects capital. Reverse the trade when support/resistance breaks. ` +
+        `A stop loss is mandatory ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â it protects capital. Reverse the trade when support/resistance breaks. ` +
         `Always watch news events and volume. Never risk more than 1-2% on a single trade.`,
     };
   }
 
   return {
     urdu:
-      `Abhi target ya stop loss nahi hit hua. Plan mat badlein Ã¢â‚¬â€ sabar se live price ka intezaar karein. ` +
+      `Abhi target ya stop loss nahi hit hua. Plan mat badlein ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â sabar se live price ka intezaar karein. ` +
       `Natija aane ke baad hi asli seekh milti hai.`,
     english:
-      `Neither the target nor the stop loss has been hit yet. Do not change the plan Ã¢â‚¬â€ wait patiently for the live price. ` +
+      `Neither the target nor the stop loss has been hit yet. Do not change the plan ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â wait patiently for the live price. ` +
       `The real lesson only comes after the result.`,
   };
 }
@@ -267,7 +266,7 @@ function levelClause(record: Pick<StoredSignal, "direction" | "support" | "resis
   };
 }
 
-// Ã¢â€â‚¬Ã¢â€â‚¬ Persistence Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
+// ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ Persistence ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
 
 /** Reads the stored list (newest first). Returns [] on any problem. */
 export function getSignals(): StoredSignal[] {
@@ -355,7 +354,7 @@ function normalize(raw: StoredSignal): StoredSignal {
     currentPrice: Number(raw.currentPrice) || 0,
     score: Number(raw.score) || 0,
   };
-  // Narratives were added later Ã¢â‚¬â€ build them when absent.
+  // Narratives were added later ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â build them when absent.
   if (!record.whyUrdu || !record.whyEnglish) {
     const why = buildWhy(record);
     record.whyUrdu = why.urdu;
@@ -459,11 +458,11 @@ function mergeLegacy(current: StoredSignal[]): StoredSignal[] {
   return merged;
 }
 
-// Ã¢â€â‚¬Ã¢â€â‚¬ Writing Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
+// ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ Writing ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
 
 /**
  * Save an 80+ score setup. STRONG de-dupe: at most one record per symbol in a
- * rolling 24h window, regardless of status Ã¢â‚¬â€ a coin saved today is skipped on the
+ * rolling 24h window, regardless of status ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â a coin saved today is skipped on the
  * next refresh instead of piling up duplicates. Older same-symbol records are
  * dropped when a fresh one is added. No-op below MIN_SCORE.
  */
@@ -473,12 +472,12 @@ export function saveSignal(input: SignalSaveInput): StoredSignal | null {
 
   const existing = getSignals();
 
-  // STRONG duplicate guard Ã¢â‚¬â€ one record per symbol per rolling 24h window,
+  // STRONG duplicate guard ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â one record per symbol per rolling 24h window,
   // regardless of status. Stops the same coin piling up (e.g. XRP saved 6x).
   const oneDayAgo = Date.now() - 24 * 60 * 60 * 1000;
   const key = input.symbol.toUpperCase().trim();
   if (existing.some((r) => r.symbol.toUpperCase().trim() === key && r.createdAt > oneDayAgo)) {
-    return null; // Same symbol already saved within 24 hours Ã¢â‚¬â€ skip.
+    return null; // Same symbol already saved within 24 hours ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â skip.
   }
 
   // No record for this symbol within 24h, so add a fresh one and drop any older
@@ -526,7 +525,7 @@ export function saveSignal(input: SignalSaveInput): StoredSignal | null {
   return record;
 }
 
-// Ã¢â€â‚¬Ã¢â€â‚¬ Evaluation Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
+// ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ Evaluation ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
 
 function highestHit(record: StoredSignal, price: number, bearish: boolean): Exclude<HitTarget, "SL"> {
   const targets: Array<[Exclude<HitTarget, "SL" | null>, number]> = [
@@ -543,9 +542,9 @@ function highestHit(record: StoredSignal, price: number, bearish: boolean): Excl
 
 /**
  * Re-evaluate a PENDING record against the current price:
- *  - TP1/TP2/TP3 hit Ã¢â€ â€™ SUCCESS (records which target was hit)
- *  - Stop loss hit   Ã¢â€ â€™ FAILED (hitTarget = SL)
- *  - Otherwise       Ã¢â€ â€™ still PENDING
+ *  - TP1/TP2/TP3 hit ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ SUCCESS (records which target was hit)
+ *  - Stop loss hit   ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ FAILED (hitTarget = SL)
+ *  - Otherwise       ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ still PENDING
  * Resolved records keep their status; currentPrice is always refreshed.
  */
 export function evaluateSignal(record: StoredSignal, currentPrice: number): StoredSignal {
@@ -622,7 +621,7 @@ function pickHitTarget(raw: string | undefined, status: SignalStatus): HitTarget
 
 /**
  * Overlay a server-cron outcome onto a local record so the Results page shows
- * the SAME WIN/LOSS/EXPIRED the Firestore cron wrote — on every device, even
+ * the SAME WIN/LOSS/EXPIRED the Firestore cron wrote â€” on every device, even
  * setups that resolved while this browser was closed. Only overrides records
  * still PENDING locally (never un-resolves a local win/loss). Regenerates both
  * narratives so the card explains the outcome.
