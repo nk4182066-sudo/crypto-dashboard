@@ -195,10 +195,9 @@ export function analyzeCoin(input: AnalyzeCoinInput): AnalyzeResult {
     })(),
     volume: (() => {
       const ratio = indicators.volumeRatio;
-      // 1.2x keeps this a real participation filter (volume must back the move)
-      // while being reachable in normal markets. The old 1.5x rejected nearly
-      // every live candle and helped push real setups below 7/8.
-      return { pass: ratio >= 1.2, detail: `Volume ${ratio.toFixed(2)}x 20-bar avg (needs >=1.2x)` };
+      // 1.5x average volume REQUIRED per spec ("Volume 150%+ above average,
+      // kam volume = condition FAIL"). Do not relax this.
+      return { pass: ratio >= 1.5, detail: `Volume ${ratio.toFixed(2)}x 20-bar avg (needs >=1.5x)` };
     })(),
     riskReward: (() => {
       // Condition 8 — verify the EXACT plan both pages display (SL 3% of
