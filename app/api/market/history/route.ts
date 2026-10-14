@@ -69,6 +69,87 @@ function aggregateFourHourCandles(candles: Candle[]): Candle[] {
   return [...grouped.values()].sort((a, b) => a.time - b.time);
 }
 
+// ── Bybit OHLCV (primary crypto feed — geo-safe on Vercel, carries real volume) ──
+// MASLA 12: Binance is geo-blocked on Vercel's edge, which silently drops crypto
+// volume to 0 (the "Volume 0.00x" bug that capped every signal at 7/8). Bybit's
+// public /v5/market/kline is not blocked and returns the same OHLCV WITH volume,
+// so condition 7 (volume 1.5x) can finally pass and 8/8 = 100 becomes reachable.
+interface BybitHistoryResponse {
+  retCode: number;
+  result?: { list?: string[][] };
+}
+
+function bybitInterval(timeframe: string): string | null {
+  switch (timeframe) {
+    case "1m": return "1";
+    case "5m": return "5";
+    case "15m": return "15";
+    case "1h": return "60";
+    case "4h": return "240";
+    case "1d":
+    case "max": return "D";
+    default: return null;
+  }
+}
+
+async function fetchBybitHistory(
+  symbol: string,
+  timeframe: string,
+  quoteOnly: boolean,
+  now: number
+) {
+  const baseSymbol = symbol.replace(/-USD$/, "").replace(/USDT$/, "");
+  const interval = bybitInterval(timeframe);
+  if (!/^[A-Z0-9]{1,15}$/.test(baseSymbol) || !interval) return null;
+  const pair = `${baseSymbol}USDT`;
+
+  const url = new URL("https://api.bybit.com/v5/market/kline");
+  url.searchParams.set("category", "linear");
+  url.searchParams.set("symbol", pair);
+  url.searchParams.set("interval", interval);
+  url.searchParams.set("limit", quoteOnly ? "1" : "500");
+
+  let payload: BybitHistoryResponse | null = null;
+  try {
+    const response = await fetch(url, { cache: "no-store", signal: AbortSignal.timeout(10000) });
+    if (!response.ok) return null;
+    payload = (await response.json()) as BybitHistoryResponse;
+  } catch {
+    return null;
+  }
+  if (!payload || payload.retCode !== 0) return null;
+
+  const rows = payload.result?.list ?? [];
+  // Bybit returns newest-first; reverse to chronological and map to our Candle.
+  const candles: Candle[] = rows
+    .map((row): Candle | null => {
+      if (!Array.isArray(row) || row.length < 6) return null;
+      const values = [row[0], row[1], row[2], row[3], row[4], row[5]].map(Number);
+      if (!values.every(Number.isFinite)) return null;
+      return {
+        time: Math.floor(values[0] / 1000),
+        open: values[1], high: values[2], low: values[3],
+        close: values[4], volume: values[5],
+      };
+    })
+    .filter((c): c is Candle => c !== null)
+    .reverse();
+
+  if (candles.length === 0) return null;
+  const latest = candles[candles.length - 1];
+  return {
+    candles: quoteOnly ? [] : candles,
+    hasMore: false,
+    quote: {
+      price: latest.close,
+      previousClose: null,
+      timestamp: latest.time,
+      currency: "USDT",
+    },
+    source: "Bybit",
+  };
+}
+
 async function fetchBinanceHistory(
   symbol: string,
   timeframe: string,
@@ -296,8 +377,13 @@ export async function GET(request: Request) {
   };
 
   if (market === "crypto") {
-    // Binance first: free, no API key, and far more reliable than Yahoo,
-    // which rate-limits unauthenticated calls.
+    // Bybit first: geo-safe on Vercel and returns REAL volume (MASLA 12).
+    // Binance is geo-blocked on Vercel's edge and silently yields 0 volume,
+    // which capped every signal at 7/8. Binance stays as a local-dev fallback.
+    const bybit = await fetchBybitHistory(symbol, timeframe, quoteOnly, now);
+    if (bybit && (quoteOnly || bybit.candles.length > 0)) {
+      return Response.json(bybit, { headers: { "Cache-Control": "no-store, max-age=0" } });
+    }
     const binance = await fetchBinanceHistory(symbol, timeframe, before, quoteOnly, now);
     if (binance && (quoteOnly || binance.candles.length > 0)) {
       return Response.json(binance, { headers: { "Cache-Control": "no-store, max-age=0" } });
