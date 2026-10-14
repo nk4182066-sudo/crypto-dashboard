@@ -386,6 +386,21 @@ export async function GET(request: Request) {
       continue;
     }
 
+    // ── INVARIANT GUARD (masla 3 / no-pattern contradiction) ──
+    // The chart-pattern condition is condition #1 of 8. A signal that failed it
+    // (no directional chart pattern) can never legitimately pass 8/8; its ceiling
+    // is 7/8. score is derived from conditionsPassed in analyzeCoin(), so this is
+    // normally unreachable — but a stale/legacy build that inflated the score must
+    // not surface on the page as "8/8 with No pattern". Recompute score from the
+    // authoritative count and drop anything still implying a pattern it lacks.
+    if (!full.chartPattern && full.conditionsPassed > 7) {
+      full.conditionsPassed = 7;
+      full.score = Math.round((7 / 8) * 100);
+    }
+    if (!full.chartPattern && full.score > 87) {
+      full.score = Math.round((7 / 8) * 100);
+    }
+
     // ── MASLA 2 / deep gate — the Signals page shows only 88+ setups (≥7/8
     // conditions passed). One remaining condition (≤6/8, i.e. ≤75) is a
     // watch-zone signal, never delivery-grade, so it is dropped here. Direction
@@ -433,11 +448,14 @@ export async function GET(request: Request) {
       }
     }
 
-    // ── MASLA 2 — the 4-educator panel is populated on the card (delivery
-    // grade = agreed >= 3); it is informational for emission — a cold candle
-    // cache legitimately returns null and must not 0 out the feed.
-    if (experts && experts.consensus.total === 4 && experts.consensus.agreed < 3) {
+    // ── MASLA 4 — 4/4 experts required. When the educator panel is present
+    // (total === 4) every educator must agree; a 0–3/4 "AVOID/WEAK" signal is
+    // rejected so the page never shows "2/4 experts" beside a premium score.
+    // experts is null ONLY when the confirmation build threw / candles < 30 — a
+    // provider hiccup must not silently 0 out the feed, so null stays allowed.
+    if (experts && experts.consensus.total === 4 && experts.consensus.agreed < 4) {
       drops.experts += 1;
+      continue;
     }
 
     // ── MASLA 2 — the 10-indicator panel is populated on the card only when
