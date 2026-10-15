@@ -69,11 +69,13 @@ function aggregateFourHourCandles(candles: Candle[]): Candle[] {
   return [...grouped.values()].sort((a, b) => a.time - b.time);
 }
 
-// ── Bybit OHLCV (primary crypto feed — geo-safe on Vercel, carries real volume) ──
-// MASLA 12: Binance is geo-blocked on Vercel's edge, which silently drops crypto
-// volume to 0 (the "Volume 0.00x" bug that capped every signal at 7/8). Bybit's
-// public /v5/market/kline is not blocked and returns the same OHLCV WITH volume,
-// so condition 7 (volume 1.5x) can finally pass and 8/8 = 100 becomes reachable.
+// ── Bybit OHLCV (secondary crypto feed — real volume, kept as fallback) ──
+// MASLA 12: Binance's api.binance.com answers HTTP 451 on Vercel's US edge, which
+// silently dropped crypto volume to 0 (the "Volume 0.00x" bug that capped every
+// signal at 7/8). The route now calls Binance through the geo-safe
+// data-api.binance.vision spot mirror first; Bybit stays in the chain as another
+// real-volume source (observed 403/slow-fail from Vercel's US region, so its
+// timeout is capped low to keep the route snappy).
 interface BybitHistoryResponse {
   retCode: number;
   result?: { list?: string[][] };
@@ -111,7 +113,8 @@ async function fetchBybitHistory(
 
   let payload: BybitHistoryResponse | null = null;
   try {
-    const response = await fetch(url, { cache: "no-store", signal: AbortSignal.timeout(10000) });
+    // 5s cap: healthy Bybit answers in <1s; a US-side 403/drop must not stall the route.
+    const response = await fetch(url, { cache: "no-store", signal: AbortSignal.timeout(5000) });
     if (!response.ok) return null;
     payload = (await response.json()) as BybitHistoryResponse;
   } catch {
@@ -171,8 +174,13 @@ async function fetchBinanceHistory(
   let endTime = before === null ? now * 1000 : before * 1000 - 1;
   const pageCount = timeframe === "max" && !quoteOnly && before === null ? 40 : 1;
 
+  // data-api.binance.vision = Binance's official public SPOT mirror. Unlike
+  // api.binance.com (HTTP 451 from Vercel's US edge) it is not geo-blocked, and
+  // it serves the exact same /api/v3/klines payload — proven in all-coins.
+  const klineHost = "https://data-api.binance.vision";
+
   for (let page = 0; page < pageCount; page += 1) {
-    const url = new URL("https://api.binance.com/api/v3/klines");
+    const url = new URL(`${klineHost}/api/v3/klines`);
     url.searchParams.set("symbol", pair);
     url.searchParams.set("interval", interval);
     url.searchParams.set("limit", quoteOnly ? "1" : "1000");
@@ -354,7 +362,7 @@ export async function GET(request: Request) {
   const now = Math.floor(Date.now() / 1000);
 
   // ---- Source chain -------------------------------------------------------
-  // crypto : Binance (primary, no key)   -> Yahoo -> generated
+  // crypto : Binance vision mirror (no key, geo-safe) -> Bybit -> Yahoo -> generated
   // forex  : Frankfurter (daily, no key) -> Yahoo -> generated
   // stocks : Yahoo -> generated           (metals share this path)
   // A valid symbol never gets an empty or error body, which is what keeps the
@@ -377,16 +385,18 @@ export async function GET(request: Request) {
   };
 
   if (market === "crypto") {
-    // Bybit first: geo-safe on Vercel and returns REAL volume (MASLA 12).
-    // Binance is geo-blocked on Vercel's edge and silently yields 0 volume,
-    // which capped every signal at 7/8. Binance stays as a local-dev fallback.
-    const bybit = await fetchBybitHistory(symbol, timeframe, quoteOnly, now);
-    if (bybit && (quoteOnly || bybit.candles.length > 0)) {
-      return Response.json(bybit, { headers: { "Cache-Control": "no-store, max-age=0" } });
-    }
+    // Binance first — reached through the geo-safe data-api.binance.vision spot
+    // mirror (api.binance.com answers HTTP 451 on Vercel's US edge; the Bybit
+    // path can 403/slow-fail there too, which left the chain on Yahoo Finance
+    // whose 1h candles carry volume=0 — the "Volume 0.00x" bug, MASLA 12).
     const binance = await fetchBinanceHistory(symbol, timeframe, before, quoteOnly, now);
     if (binance && (quoteOnly || binance.candles.length > 0)) {
       return Response.json(binance, { headers: { "Cache-Control": "no-store, max-age=0" } });
+    }
+    // Bybit stays in the chain as a second real-volume feed (fast from local/Asia).
+    const bybit = await fetchBybitHistory(symbol, timeframe, quoteOnly, now);
+    if (bybit && (quoteOnly || bybit.candles.length > 0)) {
+      return Response.json(bybit, { headers: { "Cache-Control": "no-store, max-age=0" } });
     }
   } else if (market === "forex" && (timeframe === "1d" || timeframe === "max")) {
     // Frankfurter publishes once per day, so it only answers daily series.
