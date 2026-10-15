@@ -115,7 +115,7 @@ export interface SymbolEntry {
   base: string;
   pair: string;
   name: string;
-  market: "crypto" | "forex" | "metals";
+  market: "crypto" | "forex" | "metals" | "stocks";
   words: string[];
 }
 
@@ -145,17 +145,59 @@ const SYMBOLS: SymbolEntry[] = [
   { base: "EURUSD", pair: "EURUSD", name: "EUR/USD", market: "forex", words: ["eurusd", "eur", "euro"] },
   { base: "GBPUSD", pair: "GBPUSD", name: "GBP/USD", market: "forex", words: ["gbpusd", "gbp", "pound"] },
   { base: "USDJPY", pair: "USDJPY", name: "USD/JPY", market: "forex", words: ["usdjpy", "jpy", "yen"] },
+  // Stocks — chat must answer "AAPL price" / "TSLA" like every other market.
+  { base: "AAPL", pair: "AAPL", name: "Apple", market: "stocks", words: ["aapl", "apple"] },
+  { base: "TSLA", pair: "TSLA", name: "Tesla", market: "stocks", words: ["tsla", "tesla"] },
+  { base: "MSFT", pair: "MSFT", name: "Microsoft", market: "stocks", words: ["msft", "microsoft"] },
+  { base: "NVDA", pair: "NVDA", name: "Nvidia", market: "stocks", words: ["nvda", "nvidia"] },
+  { base: "AMZN", pair: "AMZN", name: "Amazon", market: "stocks", words: ["amzn", "amazon"] },
+  { base: "GOOGL", pair: "GOOGL", name: "Google", market: "stocks", words: ["googl", "google"] },
 ];
 
-/** Live Binance spot price for a pair like "BTCUSDT". Null on any failure. */
+/** Live spot price for a pair like "BTCUSDT". Null on any failure.
+ *  Hosts (in order): data-api.binance.vision (US-safe mirror — api.binance.com
+ *  answers HTTP 451 from Vercel's US edge), api.binance.com (local/Asia), then
+ *  Bybit tickers as the last crypto feed. */
 export async function fetchLivePrice(pair: string): Promise<number | null> {
+  const urls = [
+    `https://data-api.binance.vision/api/v3/ticker/price?symbol=${pair}`,
+    `https://api.binance.com/api/v3/ticker/price?symbol=${pair}`,
+    `https://api.bybit.com/v5/market/tickers?symbol=${pair}`,
+  ];
+  for (const url of urls) {
+    try {
+      const res = await fetch(url, { signal: AbortSignal.timeout(4000) });
+      if (!res.ok) continue;
+      const json = (await res.json()) as { price?: string; result?: { list?: Array<{ lastPrice?: string }> } };
+      const price = Number(json.price) || Number(json.result?.list?.[0]?.lastPrice);
+      if (Number.isFinite(price) && price > 0) return price;
+    } catch {
+      // try the next host
+    }
+  }
+  return null;
+}
+
+/** Maps a localAI symbol entry to the /api/market/history symbol format. */
+function historySymbolFor(entry: SymbolEntry): string {
+  if (entry.market === "metals") return `${entry.pair.slice(0, 3)}-${entry.pair.slice(3)}`; // XAUUSD -> XAU-USD
+  if (entry.market === "forex") return `${entry.pair}=X`;                                    // EURUSD -> EURUSD=X
+  if (entry.market === "crypto") return `${entry.pair.replace(/USDT$/, "")}-USD`;            // BTCUSDT -> BTC-USD
+  return entry.pair;                                                                          // stocks: AAPL
+}
+
+/** Live quote for ANY market through the geo-safe history route (quoteOnly). */
+async function fetchQuoteFromHistory(entry: SymbolEntry, origin?: string): Promise<number | null> {
+  if (!origin) return null;
   try {
-    const res = await fetch(`https://api.binance.com/api/v3/ticker/price?symbol=${pair}`, {
-      signal: AbortSignal.timeout(4000),
+    const query = new URLSearchParams({ market: entry.market, symbol: historySymbolFor(entry), timeframe: "1h", quoteOnly: "1" });
+    const res = await fetch(`${origin}/api/market/history?${query}`, {
+      cache: "no-store",
+      signal: AbortSignal.timeout(8000),
     });
     if (!res.ok) return null;
-    const json = (await res.json()) as { price?: string };
-    const price = Number(json.price);
+    const json = (await res.json()) as { quote?: { price?: number | null } };
+    const price = Number(json.quote?.price);
     return Number.isFinite(price) && price > 0 ? price : null;
   } catch {
     return null;
@@ -440,8 +482,8 @@ export function riskHelp(romanUrdu: boolean): string {
 
 // ── Live price & analysis replies ─────────────────────────────────────────────
 
-/** COIN_PRICE — fetch the live Binance spot price and reply instantly. */
-async function coinPriceReply(message: string): Promise<string> {
+/** COIN_PRICE — live rate for every supported market, replying instantly. */
+async function coinPriceReply(message: string, origin?: string): Promise<string> {
   const symbol = extractSymbol(message);
   const ur = isRomanUrdu(message);
   if (!symbol) {
@@ -449,12 +491,17 @@ async function coinPriceReply(message: string): Promise<string> {
       ? `Kisi coin ka naam likhein — jaise "BTC", "ETH", "gold" — main uska live rate bata dunga. 💰\n${DISCLAIMER}`
       : `Name a coin — like "BTC", "ETH", "gold" — and I'll fetch its live rate. 💰\n${DISCLAIMER}`;
   }
-  const price = symbol.market === "crypto" ? await fetchLivePrice(symbol.pair) : null;
+  // Crypto: Binance vision mirror (US-safe) → Binance → Bybit, then the shared
+  // history route as a final net. Non-crypto (GOLD/SILVER/EUR/USD/AAPL…): the
+  // history route's quoteOnly path, which works for every market on the app.
+  const price =
+    symbol.market === "crypto"
+      ? (await fetchLivePrice(symbol.pair)) ?? (await fetchQuoteFromHistory(symbol, origin))
+      : await fetchQuoteFromHistory(symbol, origin);
   if (price == null) {
-    // Forex/metals don't have a Binance spot feed — be honest, don't invent.
     return ur
-      ? `${symbol.name} (${symbol.pair}) ka live rate abhi fetch nahi ho pa raha. Thori der baad dobara try karein, ya kisi crypto coin (BTC, ETH, SOL…) ka rate poochh lein. 💰\n${DISCLAIMER}`
-      : `I couldn't fetch a live rate for ${symbol.name} (${symbol.pair}) right now. Try again shortly, or ask for a crypto coin (BTC, ETH, SOL…). 💰\n${DISCLAIMER}`;
+      ? `${symbol.name} (${symbol.pair}) ka live rate abhi fetch nahi ho pa raha. Thori der baad dobara try karein. 💰\n${DISCLAIMER}`
+      : `I couldn't fetch a live rate for ${symbol.name} (${symbol.pair}) right now. Please try again shortly. 💰\n${DISCLAIMER}`;
   }
   return ur
     ? `💰 ${symbol.name} (${symbol.pair}) ka live rate ${localMoney(price)} hai.\n${DISCLAIMER}`
@@ -691,7 +738,7 @@ export async function generateResponse(
             DISCLAIMER,
           ].join("\n");
     case "COIN_PRICE":
-      return coinPriceReply(message);
+      return coinPriceReply(message, context.origin);
     case "SIGNAL_DISCUSSION":
       return signalDiscussionReply(message, context.signal ?? null);
     case "SIGNAL_QUERY":

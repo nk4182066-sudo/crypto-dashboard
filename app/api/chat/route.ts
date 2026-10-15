@@ -360,6 +360,9 @@ export async function POST(request: Request) {
     if (LOCAL_FIRST.includes(localIntent)) {
       const localReply = await generateResponse(String(message), localIntent, {
         signal: (signalData as DiscussionSignal | null) ?? null,
+        // coinPriceReply needs the origin to reach /api/market/history (quoteOnly)
+        // for forex/metals/stocks rates — a bare relative fetch has no base here.
+        origin: new URL(request.url).origin,
       });
       return Response.json({ reply: localReply, provider: "local" });
     }
@@ -463,7 +466,11 @@ export async function POST(request: Request) {
         if (greetingFallback) return Response.json({ reply: greetingFallback });
         const fallback = signalData
           ? buildSignalFallbackReply(signalData, String(message))
-          : await getRuleBasedFallback(userMessage, tier, marketContext, riskReward, new URL(request.url).origin);
+          // ORIGINAL message, not the enriched userMessage: userMessage carries
+          // the injected "LIVE ENGINE DATA (RSI: …)" block, which made
+          // generalKnowledgeReply() misfire on "RSI" and answer BTC/GOLD asset
+          // questions with the RSI explainer on live (no-AI-key) deployments.
+          : await getRuleBasedFallback(String(message), tier, marketContext, riskReward, new URL(request.url).origin);
         if (!signalData) setCachedReply(normalizedMessage, fallback);
         return Response.json({ reply: fallback });
       }

@@ -356,7 +356,13 @@ function TradeChart() {
   const score = coinAnalysis?.score ?? analysis?.score ?? 0;
   const conditionsPassed = coinAnalysis?.conditionsPassed ?? 0;
   const conditionsTotal = coinAnalysis?.conditionsTotal ?? 8;
-  const trendLabel = analysis?.direction === "bullish" ? "Bullish" : analysis?.direction === "bearish" ? "Bearish" : "Sideways";
+  // Panel direction — ONE source for the trend label and the expert/indicator
+  // panels: the shared engine's verdict when it ran (it always has at this
+  // point: insights gate on candles >= 30), else the chart heuristic. The old
+  // mix (heuristic direction + engine score) produced "0/100 BEARISH" headers
+  // whose panels argued about a different direction.
+  const panelDirection = coinAnalysis?.direction ?? analysis?.direction ?? "neutral";
+  const trendLabel = panelDirection === "bullish" ? "Bullish" : panelDirection === "bearish" ? "Bearish" : "Sideways";
   const support = analysis?.support ?? 0;
   const resistance = analysis?.resistance ?? 0;
   // Breakout watch level: an intermediate price between current and the target.
@@ -381,18 +387,22 @@ function TradeChart() {
     const input = {
       candles,
       price: analysis.currentPrice || candles[candles.length - 1].close,
-      direction: analysis.direction,
+      // SAME direction + SAME score as the displayed engine verdict, so the
+      // consensus/confirmed panels can never contradict the score header
+      // (the old `score: analysis.score` fed the heuristic score here while
+      // the page displayed coinAnalysis.score — the "0/100 vs 4/4" bug).
+      direction: panelDirection,
       support: analysis.support,
       resistance: analysis.resistance,
       pattern: topPattern === "No clear pattern" ? null : topPattern,
       breakout: breakout > 0,
-      score: analysis.score,
+      score,
     };
     const report = buildConfirmations(input);
     const { educators, consensus } = buildEducators(report, input);
     const guidance = buildGuidance({ confirmed: report.confirmed, consensus }, input);
     return { report: { ...report, educators, consensus }, educators, consensus, guidance };
-  }, [analysis, candles, topPattern, breakout, score]);
+  }, [analysis, candles, topPattern, breakout, score, panelDirection]);
 
   return (
     <main className="mx-auto max-w-3xl px-4 py-4">

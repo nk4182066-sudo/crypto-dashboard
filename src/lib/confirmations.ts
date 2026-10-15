@@ -276,6 +276,21 @@ export function buildEducators(report: ConfirmationReport, input: ConfirmationIn
   };
 
   const educators = [tech, risk, patternGuru, trend];
+  // Engine-consensus cap — the panel can never claim more expert agreement than
+  // the shared 8-condition score supports (fixes the Trade page showing
+  // "0/100 · 4/4 Consensus STRONG" together). 75+ (= the 6/8 emission floor)
+  // still allows a full 4/4; lower scores demote the weakest confirms (Trend
+  // Trader first — its verdict already quotes the score) so the header badge,
+  // the individual ticks and the score always tell ONE story.
+  const cap = score >= 75 ? 4 : score >= 62 ? 3 : score >= 50 ? 2 : score >= 37 ? 1 : 0;
+  let excess = educators.filter((entry) => entry.confirms).length - cap;
+  for (const entry of [trend, patternGuru, risk, tech]) {
+    if (excess <= 0) break;
+    if (entry.confirms) {
+      entry.confirms = false;
+      excess -= 1;
+    }
+  }
   return { educators, consensus: consensusOf(educators) };
 }
 

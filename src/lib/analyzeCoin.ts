@@ -194,6 +194,11 @@ export function analyzeCoin(input: AnalyzeCoinInput): AnalyzeResult {
       return { pass: aligned, detail: `EMA20 ${ema20.toFixed(1)} / EMA50 ${ema50.toFixed(1)} / EMA200 ${ema200.toFixed(1)}` };
     })(),
     volume: (() => {
+      // FX feeds (Yahoo/Frankfurter) carry NO volume data — live forex candles
+      // are literally 0/1000 volume — so the 1.5x gate is marked n/a (pass) for
+      // FOREX ONLY. Crypto (Binance mirror), stocks and metals keep the strict
+      // 1.5x requirement below; this is a data-reality exemption, not a gate cut.
+      if (market === "forex") return { pass: true, detail: "n/a — FX feeds publish no volume (1.5x gate applied on other markets)" };
       const ratio = indicators.volumeRatio;
       // 1.5x average volume REQUIRED per spec ("Volume 150%+ above average,
       // kam volume = condition FAIL"). Do not relax this.

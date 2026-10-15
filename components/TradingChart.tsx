@@ -135,6 +135,11 @@ export default function TradingChart({ data, chartKey = "", signals = [], candle
   const overlaySeriesRef = useRef<{ id: IndicatorOverlay["id"]; series: ISeriesApi<'Line', Time> }[]>([]);
   const markersRef = useRef<ISeriesMarkersPluginApi<Time> | null>(null);
   const priceLinesRef = useRef<IPriceLine[]>([]);
+  // MASLA 3 — every S/R/entry/SL/TP price currently on the chart. The series'
+  // autoscaleInfoProvider reads this to fold them into the auto price range
+  // (lightweight-charts autoScale intentionally IGNORES createPriceLine levels —
+  // tradingview/lightweight-charts#1587 — which cut TP/SL lines off the axis).
+  const autoscalePricesRef = useRef<number[]>([]);
   const previousDataRef = useRef<{ chartKey: string; data: CandleData[] } | null>(null);
   const loadOlderRef = useRef(onLoadOlderData);
   const historyStateRef = useRef({ hasMoreHistory, loadingOlder });
@@ -335,6 +340,19 @@ export default function TradingChart({ data, chartKey = "", signals = [], candle
       wickUpColor: '#26a69a',
       wickDownColor: '#ef5350',
       priceLineVisible: true,
+      // MASLA 3 — autoScale by default only covers the candle range; expand it
+      // with every level price so S/R/entry/SL/TP lines are never cut off at
+      // the top or bottom of the axis (zoom/pan keep recalculating via this
+      // provider; a manual vertical drag still overrides, as users expect).
+      autoscaleInfoProvider: (original: () => { priceRange: { minValue: number; maxValue: number } } | null) => {
+        const res = original();
+        if (!res) return res;
+        for (const price of autoscalePricesRef.current) {
+          if (price < res.priceRange.minValue) res.priceRange.minValue = price;
+          if (price > res.priceRange.maxValue) res.priceRange.maxValue = price;
+        }
+        return res;
+      },
     });
 
     candlestickSeriesRef.current = candlestickSeries;
@@ -450,6 +468,12 @@ export default function TradingChart({ data, chartKey = "", signals = [], candle
     const trendlineSeries = trendlineSeriesRef.current;
     const patternSeries = patternSeriesRef.current;
     if (!candlestickSeries || !trendlineSeries || !patternSeries) return;
+
+    // MASLA 3 — capture the level prices BEFORE setData so the very first
+    // autoscale run (and every later one) includes S/R + entry/SL/TP levels.
+    autoscalePricesRef.current = levels
+      .map((level) => level.price)
+      .filter((price) => Number.isFinite(price) && price > 0);
 
     const trendColor = trendDirection === "Bullish" ? "#22c55e" : trendDirection === "Bearish" ? "#ef4444" : "#a1a1aa";
     trendlineSeries.applyOptions({ color: trendColor, title: `${trendDirection} trend line` });

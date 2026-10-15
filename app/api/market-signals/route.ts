@@ -302,6 +302,61 @@ export async function GET(request: Request) {
     .filter((item) => item.market === market)
     .sort((first, second) => second.confidence - first.confidence);
 
+  type Candidate = (typeof ordered)[number];
+
+  /** Relaxation buffer (spec): strict-gate near misses, flushed only when the
+   *  market's strict pass ends with zero emissions. */
+  const nearMisses: Array<{
+    item: Candidate;
+    full: ReturnType<typeof analyzeCoin>;
+    confirmations: MarketSignal["confirmations"];
+    indicatorRows: IndicatorRow[] | null;
+    experts: MarketSignal["experts"];
+  }> = [];
+
+  /** One emitted card — shared by the strict path and the relaxation flush. */
+  function emitSignal(
+    item: Candidate,
+    full: ReturnType<typeof analyzeCoin>,
+    confirmations: MarketSignal["confirmations"],
+    indicatorRows: IndicatorRow[] | null,
+    experts: MarketSignal["experts"],
+  ): MarketSignal {
+    const direction = full.direction;
+    return {
+      symbol: item.symbol,
+      label: item.label,
+      market: item.market,
+      // MASLA 3 — score = (conditions_passed / 8) * 100 straight from the
+      // shared engine (8/8=100, 7/8=88, 6/8=75): identical on Trade + Signals.
+      score: full.score,
+      direction,
+      bias: direction === "bullish" ? "Bullish" : "Bearish",
+      price: full.price,
+      pattern: full.chartPattern,
+      support: full.support,
+      resistance: full.resistance,
+      watchLevel: direction === "bearish" ? full.resistance : full.support,
+      reason: item.reason,
+      analyzedAt: new Date().toISOString(),
+      chartPattern: full.chartPattern,
+      chartPatternNote: full.chartPattern
+        ? `${full.chartPattern} @ ${full.chartPatternConfidence}%`
+        : null,
+      candlestickPattern: full.candlestick,
+      candlestickType: full.candlestickType,
+      candlestickConfidence: full.candlestickConfidence,
+      candlestick: full.candlestick
+        ? { name: full.candlestick, type: full.candlestickType!, confidence: full.candlestickConfidence }
+        : null,
+      conditionsPassed: full.conditionsPassed,
+      conditions: full.conditions,
+      confirmations,
+      indicators: indicatorRows,
+      experts,
+    };
+  }
+
   // Debug counters (?debug=1) — surface where candidates get dropped live so a
   // 0-signal response is diagnosable instead of a silent empty array.
   const drops = {
@@ -315,6 +370,8 @@ export async function GET(request: Request) {
     indicators: 0,
     frequency: 0,
     emitted: 0,
+    relaxed: 0,
+    conditionDetails: [] as Array<{ symbol: string; conditionsPassed: number; failed: string[] }>,
   };
 
   // MASLA 1 — origin for the shared /api/market/history calls (the exact
@@ -408,10 +465,10 @@ export async function GET(request: Request) {
     // choppy markets, so GOOD (6/8) is the delivery floor. The no-pattern
     // invariant above still caps a pattern-less signal at 7/8, so a 6/8 with no
     // chart pattern is labelled honestly and never masquerades as PERFECT.
-    if (full.conditionsPassed < 6) {
-      drops.conditions += 1;
-      continue;
-    }
+    // Strict floor (spec primary gate): >=6/8 conditions — recorded as a flag
+    // only; the actual gate runs AFTER the insight build below so 5/8 near
+    // misses still carry experts/indicators for the relaxation pass.
+    const conditionsOk = full.conditionsPassed >= 6;
 
     // ── Features 2-3 + KAAM 4 — confirmations, the 4-educator panel and the
     // 10-indicator panel, all computed from the SAME history candles the
@@ -448,57 +505,51 @@ export async function GET(request: Request) {
       }
     }
 
-    // ── MASLA 4 — 4/4 experts required. When the educator panel is present
-    // (total === 4) every educator must agree; a 0–3/4 "AVOID/WEAK" signal is
-    // rejected so the page never shows "2/4 experts" beside a premium score.
-    // experts is null ONLY when the confirmation build threw / candles < 30 — a
-    // provider hiccup must not silently 0 out the feed, so null stays allowed.
-    if (experts && experts.consensus.total === 4 && experts.consensus.agreed < 4) {
-      drops.experts += 1;
+    // ── MASLA 4 — 4/4 experts required (spec primary gate). experts is null
+    // ONLY when the confirmation build threw / candles < 30 — a provider hiccup
+    // must not silently 0 out the feed, so null stays allowed.
+    const expertsOk = !experts || experts.consensus.total !== 4 || experts.consensus.agreed >= 4;
+    if (conditionsOk && expertsOk) {
+      // Informational: the 10-indicator agreement is never a hard gate.
+      if (indicatorRows && indicatorRows.length > 0 && indicatorsAgreed(indicatorRows) < 8) {
+        drops.indicators += 1;
+      }
+      drops.emitted += 1;
+      emitted.push(emitSignal(item, full, confirmations, indicatorRows, experts));
       continue;
     }
-
-    // ── MASLA 2 — the 10-indicator panel is populated on the card only when
-    // 30+ candles exist; its agreement is informational for the card and is
-    // never a hard emission gate.
-    if (indicatorRows && indicatorRows.length > 0 && indicatorsAgreed(indicatorRows) < 8) {
-      drops.indicators += 1;
+    if (!conditionsOk) drops.conditions += 1;
+    else drops.experts += 1;
+    // Relaxation buffer (spec: "agar 0 signals hain to conditions relax karo"):
+    // >=5/8 conditions + >=3/4 experts ship ONLY when this market's strict pass
+    // ends empty (flushed after the loop). Scores stay honest — only the
+    // emission floor relaxes and the card still shows the real condition count.
+    if (full.conditionsPassed >= 5 && (!experts || experts.consensus.total !== 4 || experts.consensus.agreed >= 3)) {
+      nearMisses.push({ item, full, confirmations, indicatorRows, experts });
+    } else if (full.conditionsPassed >= 4) {
+      drops.conditionDetails.push({
+        symbol: item.symbol,
+        conditionsPassed: full.conditionsPassed,
+        failed: full.conditions.filter((entry) => !entry.pass).map((entry) => entry.id),
+      });
     }
+    // Emission now happens in the strict branch above or the relaxation flush.
+  }
 
-    const direction = full.direction;
-    drops.emitted += 1;
-    emitted.push({
-      symbol: item.symbol,
-      label: item.label,
-      market: item.market,
-      // MASLA 3 — score = (conditions_passed / 8) * 100 straight from the
-      // shared engine (8/8=100, 7/8=88, 6/8=75): identical on Trade + Signals.
-      score: full.score,
-      direction,
-      bias: direction === "bullish" ? "Bullish" : "Bearish",
-      price: full.price,
-      pattern: full.chartPattern,
-      support: full.support,
-      resistance: full.resistance,
-      watchLevel: direction === "bearish" ? full.resistance : full.support,
-      reason: item.reason,
-      analyzedAt: new Date().toISOString(),
-      chartPattern: full.chartPattern,
-      chartPatternNote: full.chartPattern
-        ? `${full.chartPattern} @ ${full.chartPatternConfidence}%`
-        : null,
-      candlestickPattern: full.candlestick,
-      candlestickType: full.candlestickType,
-      candlestickConfidence: full.candlestickConfidence,
-      candlestick: full.candlestick
-        ? { name: full.candlestick, type: full.candlestickType!, confidence: full.candlestickConfidence }
-        : null,
-      conditionsPassed: full.conditionsPassed,
-      conditions: full.conditions,
-      confirmations,
-      indicators: indicatorRows,
-      experts,
-    });
+  // ── Relaxation flush (spec): if the strict pass produced NOTHING for this
+  // market, ship the best near misses (>=5/8 + >=3/4) instead of an empty tab.
+  if (emitted.length === 0 && nearMisses.length > 0) {
+    nearMisses.sort(
+      (first, second) =>
+        second.full.conditionsPassed - first.full.conditionsPassed ||
+        (second.experts?.consensus.agreed ?? 0) - (first.experts?.consensus.agreed ?? 0),
+    );
+    for (const near of nearMisses) {
+      if (emitted.length >= MAX_SIGNALS_PER_MARKET_PER_DAY) break;
+      drops.emitted += 1;
+      drops.relaxed += 1;
+      emitted.push(emitSignal(near.item, near.full, near.confirmations, near.indicatorRows, near.experts));
+    }
   }
 
   // MASLA 2 — persist every emitted setup (Firestore `signals` collection) so
