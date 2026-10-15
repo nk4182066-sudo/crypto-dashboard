@@ -29,7 +29,7 @@ const BOTTOM_LINKS = [
   { href: "/markets", label: "Markets", icon: "📊" },
   { href: "/trade", label: "Trade", icon: "📈" },
   { href: "/signals", label: "Signals", icon: "⚡" },
-  { href: "/patterns", label: "Assets", icon: "💰" },
+  { href: "/results", label: "Results", icon: "📊" },
 ];
 
 function isActive(pathname: string, href: string) {

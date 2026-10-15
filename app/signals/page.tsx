@@ -275,9 +275,10 @@ export default function SignalsPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- `tick` intentionally re-triggers the TTL filter
   }, [apiSignals, cloudSignals, backupSignals, tick, market]);
 
-  // MASLA 6 — show ONLY 88+ ("STRONG" = 7/8 conditions) setups. 6/8 conditions
-  // (75) or lower is REJECTED and hidden. Highest score first. Nothing below
-  // MIN_SCORE is ever emitted either, so this is purely an ordering step.
+  // MASLA 6 — engine strict tier = 7/8 (88); display floor = 75 (6/8) so an
+  // empty strict market still renders the relaxation tier. Highest score
+  // first. This is purely an ordering/filter step — the hard gates are in
+  // app/api/market-signals/route.ts.
   const displayed = useMemo(
     () => signals
       .filter((s) => s.score >= MIN_SCORE)

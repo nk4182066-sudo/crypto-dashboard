@@ -16,11 +16,14 @@ startScheduler();
 const validMarkets: ScanMarket[] = ["crypto", "forex", "stocks", "metals"];
 
 /** How many extra all-coins symbols we scan per market (above the minimums). */
+// Per-market scan pool = static universe + these extras, capped so a cold
+// serverless instance always returns a full page (crypto 50 / forex 30 /
+// stocks 30 / metals 10 = 120 candidates, 24 history-fetch budget per request).
 const DYNAMIC_LIMITS: Record<ScanMarket, number> = {
-  crypto: 45,
-  forex: 24,
-  stocks: 28,
-  metals: 6,
+  crypto: 12,
+  forex: 14,
+  stocks: 8,
+  metals: 4,
 };
 
 /** One coin row from /api/market/all-coins (only the fields we need). */
@@ -126,10 +129,11 @@ export interface MarketSignal {
 // This used to be an in-memory per-symbol cooldown + daily counter, but those
 // live on the serverless instance — a warm instance that had already emitted
 // returned 0 on the next request, flip-flopping the page between N and 0.
+// 10-20 signals per market per day is the daily target (15 is the sweet spot).
 // The response is now capped by count only; duplicate-suppression across
 // refreshes is handled by persistSignals()'s 4h per-symbol guard (which reads
 // Firestore, shared across instances), so the browser always gets a full list.
-const MAX_SIGNALS_PER_MARKET_PER_DAY = 8;
+const MAX_SIGNALS_PER_MARKET_PER_DAY = 15;
 
 /**
  * How many candidates per request may pull the full 1h/4h/1d history for the
@@ -302,6 +306,9 @@ export async function GET(request: Request) {
     .filter((item) => item.market === market)
     .sort((first, second) => second.confidence - first.confidence);
 
+  // Audit — candidate pool per market + per-request emission cap.
+  console.log(`[signals ${market}] ${ordered.length} candidates, cap ${MAX_SIGNALS_PER_MARKET_PER_DAY}`);
+
   type Candidate = (typeof ordered)[number];
 
   /** Relaxation buffer (spec): strict-gate near misses, flushed only when the
@@ -443,6 +450,12 @@ export async function GET(request: Request) {
       continue;
     }
 
+    // Audit log — passing setups only (7/8+). Score 88 at 7/8; the page shows
+    // the exact same X/8 conditions for Trade + Signals.
+    if (full.conditionsPassed >= 7) {
+      console.log(`[signals] ${item.symbol}: ${full.conditionsPassed}/8 conditions, Score ${full.score} → SIGNAL`);
+    }
+
     // ── INVARIANT GUARD (masla 3 / no-pattern contradiction) ──
     // The chart-pattern condition is condition #1 of 8. A signal that failed it
     // (no directional chart pattern) can never legitimately pass 8/8; its ceiling
@@ -465,10 +478,10 @@ export async function GET(request: Request) {
     // choppy markets, so GOOD (6/8) is the delivery floor. The no-pattern
     // invariant above still caps a pattern-less signal at 7/8, so a 6/8 with no
     // chart pattern is labelled honestly and never masquerades as PERFECT.
-    // Strict floor (spec primary gate): >=6/8 conditions — recorded as a flag
-    // only; the actual gate runs AFTER the insight build below so 5/8 near
-    // misses still carry experts/indicators for the relaxation pass.
-    const conditionsOk = full.conditionsPassed >= 6;
+    // Strict floor: 7/8 conditions (8/8 too brittle on live choppy markets).
+    // 7/8 = 88 score; 6/8+ is logged only. 5/8+ near misses ship only when a
+    // market's strict pass ends empty.
+    const conditionsOk = full.conditionsPassed >= 7;
 
     // ── Features 2-3 + KAAM 4 — confirmations, the 4-educator panel and the
     // 10-indicator panel, all computed from the SAME history candles the
@@ -505,10 +518,10 @@ export async function GET(request: Request) {
       }
     }
 
-    // ── MASLA 4 — 4/4 experts required (spec primary gate). experts is null
-    // ONLY when the confirmation build threw / candles < 30 — a provider hiccup
-    // must not silently 0 out the feed, so null stays allowed.
-    const expertsOk = !experts || experts.consensus.total !== 4 || experts.consensus.agreed >= 4;
+    // ── MASLA 4 — delivery gate: 3/4 experts or more. experts is null ONLY
+    // when the confirmation build threw / candles < 30, which must not 0 out
+    // the feed. A full 4/4 is honorable; 3/4 ships as delivery-grade.
+    const expertsOk = !experts || experts.consensus.total !== 4 || experts.consensus.agreed >= 3;
     if (conditionsOk && expertsOk) {
       // Informational: the 10-indicator agreement is never a hard gate.
       if (indicatorRows && indicatorRows.length > 0 && indicatorsAgreed(indicatorRows) < 8) {

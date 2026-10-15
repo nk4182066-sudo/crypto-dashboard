@@ -27,8 +27,11 @@ export const SIGNAL_STORAGE_KEY = "signal-storage";
 /** Older key written by src/lib/signalHistory.ts ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â read once for migration. */
 export const LEGACY_SIGNAL_KEY = "signal-history";
 
-/** Minimum score a setup must reach to be saved, tracked and displayed (MASLA 6). */
-export const MIN_SCORE = 88;
+/** Score floor for what the Signals/results PAGE SHOWS.
+ * 75 = 6/8 conditions (relaxation tier) â€” keeps the tab populated even when
+ * a market's strict pass emits nothing. New engine EMISSIONS still require
+ * 7/8 (88); see app/api/market-signals/route.ts hard gates. */
+export const MIN_SCORE = 75;
 /** Max records kept; oldest are dropped when this is exceeded. */
 export const MAX_SIGNALS = 30;
 /** 30 days â€” a setup that resolves nothing in this window is EXPIRED (MASLA 5). */
