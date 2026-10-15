@@ -159,9 +159,39 @@ export function analyzeCoin(input: AnalyzeCoinInput): AnalyzeResult {
       ? { pass: direction !== "neutral" && candleHit.type === direction && candleHit.confidence >= 65, detail: `${candleHit.name} @ ${candleHit.confidence}%` }
       : { pass: false, detail: "No candlestick pattern in last 3 candles" },
     trend: (() => {
-      const nonSideways = trends.filter((t) => t.bias !== "Sideways");
-      const agree = nonSideways.length === trends.length && new Set(trends.map((t) => t.direction)).size === 1;
-      return { pass: agree, detail: trends.map((t) => `${t.timeframe}=${t.bias}`).join(" / ") };
+      // Multi-timeframe alignment, judged honestly.
+      //
+      // BUG FIXED: the old rule required ALL THREE TFs to be non-sideways AND all
+      // directions pixel-identical (`nonSideways.length === trends.length`). On a
+      // 2-pivot swing read that failed ~98% of bars, so 8/8 (and even 5/8) was
+      // near-impossible. It also let a sideways higher TF cast a bogus vote via
+      // assessTrend()'s default "bullish" direction.
+      //
+      // A real "1h+4h+1d aligned" setup means the PRIMARY 1h trend is CONFIRMED by
+      // at least one DIRECTIONAL higher TF (4h or 1d). Sideways TFs are ignored —
+      // they neither confirm nor veto. This is the honest interpretation: the
+      // higher timeframe must agree with the trade, not be a perfect mirror.
+      const primaryTf = trends.find((t) => t.timeframe === "1h");
+      if (!primaryTf || primaryTf.bias === "Sideways") {
+        return { pass: false, detail: "Primary 1h trend is sideways" };
+      }
+      const higherDirectional = trends.filter((t) => t.timeframe !== "1h" && t.bias !== "Sideways");
+      if (higherDirectional.length === 0) {
+        return { pass: false, detail: "4h/1d both sideways — no higher-TF confirmation" };
+      }
+      const confirming = higherDirectional.filter((t) => t.direction === primaryTf.direction);
+      if (confirming.length === 0) {
+        return { pass: false, detail: "Higher TFs disagree: " + trends.map((t) => `${t.timeframe}=${t.bias}`).join(" / ") };
+      }
+      const voters = [primaryTf, ...confirming];
+      const hh = voters.reduce((n, t) => n + t.hh, 0);
+      const hl = voters.reduce((n, t) => n + t.hl, 0);
+      const lh = voters.reduce((n, t) => n + t.lh, 0);
+      const ll = voters.reduce((n, t) => n + t.ll, 0);
+      return {
+        pass: true,
+        detail: `${primaryTf.bias} 1h confirmed by ${confirming.map((t) => t.timeframe).join("+")} · HH ${hh}, HL ${hl}, LH ${lh}, LL ${ll}`,
+      };
     })(),
     rsi: (() => {
       // Direction-confirming RSI — NOT the opposite extreme. The other 7

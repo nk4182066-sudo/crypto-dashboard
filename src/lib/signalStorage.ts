@@ -28,10 +28,11 @@ export const SIGNAL_STORAGE_KEY = "signal-storage";
 export const LEGACY_SIGNAL_KEY = "signal-history";
 
 /** Score floor for what the Signals/results PAGE SHOWS.
- * 75 = 6/8 conditions (relaxation tier) â€” keeps the tab populated even when
- * a market's strict pass emits nothing. New engine EMISSIONS still require
- * 7/8 (88); see app/api/market-signals/route.ts hard gates. */
-export const MIN_SCORE = 75;
+ * 75 = 6/8 conditions (relaxation tier) — keeps the tab populated even when
+ * a market's strict pass emits nothing. New engine EMISSIONS require the
+ * strict 8/8 condition gate (100) plus 4/4 expert consensus; see the hardened
+ * app/api/market-signals/route.ts gates. 88 is now the UI display floor. */
+export const MIN_SCORE = 88;
 /** Max records kept; oldest are dropped when this is exceeded. */
 export const MAX_SIGNALS = 30;
 /** 30 days â€” a setup that resolves nothing in this window is EXPIRED (MASLA 5). */

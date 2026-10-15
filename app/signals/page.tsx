@@ -193,7 +193,7 @@ export default function SignalsPage() {
       setLoading(true);
       setError(null);
       try {
-        const response = await fetch(`/api/market-signals?market=${market}`, { cache: "no-store" });
+        const response = await fetch(`/api/signals/live?market=${market}`, { cache: "no-store" });
         if (!response.ok) throw new Error("Failed to load setups");
         const payload = (await response.json()) as { generatedAt?: string; results?: MarketSignal[] };
         if (cancelled) return;
@@ -275,10 +275,9 @@ export default function SignalsPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- `tick` intentionally re-triggers the TTL filter
   }, [apiSignals, cloudSignals, backupSignals, tick, market]);
 
-  // MASLA 6 — engine strict tier = 7/8 (88); display floor = 75 (6/8) so an
-  // empty strict market still renders the relaxation tier. Highest score
-  // first. This is purely an ordering/filter step — the hard gates are in
-  // app/api/market-signals/route.ts.
+  // MASLA 6 — engine strict tier = 7/8 (88); display floor = MIN_SCORE (88) so
+  // only 7/8+ high-confidence setups render. Highest score first. This is purely
+  // an ordering/filter step — the hard gates are in app/api/market-signals/route.ts.
   const displayed = useMemo(
     () => signals
       .filter((s) => s.score >= MIN_SCORE)

@@ -14,6 +14,8 @@
 //     symbols: "EURUSD=X", "AAPL", "GC=F") — Yahoo accepts them directly.
 // Educational analysis only — not financial advice.
 import { readAllSignals, updateSignal, type CloudDoc } from "@/src/lib/signalCloud";
+import { refresh } from "@/src/lib/signalsLive";
+import { type ScanMarket } from "@/src/scanner/universe";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 30;
@@ -202,6 +204,15 @@ export async function GET(request: Request) {
       hitTarget,
       ...(price !== undefined ? { currentPrice: price } : {}),
     });
+    // Auto-refill: on win/loss/expiry, slot the next best 8/8+4/4 candidate
+    // back into the same market to maintain the live pool.
+    if (outcome !== "PENDING") {
+      try {
+        void refresh(signal.market as ScanMarket);
+      } catch (error) {
+        console.warn("[track-signals] auto-refill failed:", error instanceof Error ? error.message : error);
+      }
+    }
 
     if (outcome === "WIN") wins += 1;
     else if (outcome === "LOSS") losses += 1;

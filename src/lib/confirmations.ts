@@ -36,7 +36,7 @@ export interface Consensus {
   total: number;
   label: "STRONG" | "MODERATE" | "WEAK" | "AVOID";
   color: "green" | "lightgreen" | "yellow" | "red";
-  /** A signal may only be delivered when agreed >= 3. */
+  /** STRICTLY 4/4 required — 3/4 or less = REJECT. */
   deliver: boolean;
 }
 
@@ -196,7 +196,7 @@ export function consensusOf(educators: EducatorVerdict[]): Consensus {
   else if (agreed === 3) { label = "MODERATE"; color = "lightgreen"; }
   else if (agreed === 2) { label = "WEAK"; color = "yellow"; }
   else { label = "AVOID"; color = "red"; }
-  return { agreed, total, label, color, deliver: agreed >= 3 };
+  return { agreed, total, label, color, deliver: agreed >= 4 };
 }
 
 /**

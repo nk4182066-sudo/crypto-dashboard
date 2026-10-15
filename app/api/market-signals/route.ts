@@ -1,3 +1,4 @@
+import { LIVE_CAPS } from "@/src/lib/signalsLive";
 import { cached, cacheGet } from "@/src/lib/cache";
 import { getCachedSnapshot, runScan, type ScanResult, type ScanSnapshot } from "@/src/scanner/scanner";
 import { startScheduler } from "@/src/scanner/scheduler";
@@ -407,10 +408,9 @@ export async function GET(request: Request) {
       continue;
     }
 
-    // Response cap — return up to N setups per market on EVERY request so the
-    // page always shows a stable list. Persistence dedupe lives in
-    // persistSignals()'s own 4h per-symbol guard instead.
-    if (emitted.length >= MAX_SIGNALS_PER_MARKET_PER_DAY) {
+    // Per-market cap (Spec: Crypto 7 / Forex 7 / Metals 4 / Stocks 2), so the
+    // live feed never exceeds the configured category size.
+    if (emitted.length >= LIVE_CAPS[market]) {
       drops.frequency += 1;
       continue;
     }
@@ -472,16 +472,15 @@ export async function GET(request: Request) {
     }
 
     // ── Emission gate — show GOOD setups (≥6/8 = 75). The multi-TF direction is
-    // now anchored on the primary chart TF (see analyzeCoin), so chart + trend
+    // Strict emission gate (spec: "100% clear" = 8/8). The multi-TF direction
+    // is anchored on the primary chart TF (see analyzeCoin), so chart + trend
     // always match; the honest condition count still prices in a disagreeing
-    // higher TF via the `trend` condition. 7/8 alone emitted 0 signals on live
-    // choppy markets, so GOOD (6/8) is the delivery floor. The no-pattern
-    // invariant above still caps a pattern-less signal at 7/8, so a 6/8 with no
-    // chart pattern is labelled honestly and never masquerades as PERFECT.
-    // Strict floor: 7/8 conditions (8/8 too brittle on live choppy markets).
-    // 7/8 = 88 score; 6/8+ is logged only. 5/8+ near misses ship only when a
-    // market's strict pass ends empty.
-    const conditionsOk = full.conditionsPassed >= 7;
+    // higher TF via the `trend` condition. 8/8 PASSes only when all 8
+    // conditions hold AND the 4/4 expert panel agrees fully. Anything below
+    // 8/8 is a near miss and only ships via the relaxation flush when the
+    // strict pass is empty. The no-pattern invariant still caps a pattern-less
+    // signal at 7/8.
+    const conditionsOk = full.conditionsPassed >= 8;
 
     // ── Features 2-3 + KAAM 4 — confirmations, the 4-educator panel and the
     // 10-indicator panel, all computed from the SAME history candles the
@@ -521,7 +520,7 @@ export async function GET(request: Request) {
     // ── MASLA 4 — delivery gate: 3/4 experts or more. experts is null ONLY
     // when the confirmation build threw / candles < 30, which must not 0 out
     // the feed. A full 4/4 is honorable; 3/4 ships as delivery-grade.
-    const expertsOk = !experts || experts.consensus.total !== 4 || experts.consensus.agreed >= 3;
+    const expertsOk = experts !== null && experts.consensus.total === 4 && experts.consensus.agreed >= 4;
     if (conditionsOk && expertsOk) {
       // Informational: the 10-indicator agreement is never a hard gate.
       if (indicatorRows && indicatorRows.length > 0 && indicatorsAgreed(indicatorRows) < 8) {
@@ -534,10 +533,12 @@ export async function GET(request: Request) {
     if (!conditionsOk) drops.conditions += 1;
     else drops.experts += 1;
     // Relaxation buffer (spec: "agar 0 signals hain to conditions relax karo"):
-    // >=5/8 conditions + >=3/4 experts ship ONLY when this market's strict pass
-    // ends empty (flushed after the loop). Scores stay honest — only the
-    // emission floor relaxes and the card still shows the real condition count.
-    if (full.conditionsPassed >= 5 && (!experts || experts.consensus.total !== 4 || experts.consensus.agreed >= 3)) {
+    // The PRIMARY emission gate is now strict 8/8 + 4/4. Near misses (>=5/8
+    // conditions with a full 4/4 expert panel) ship ONLY when this market's
+    // strict pass ends empty (flushed after the loop). Scores stay honest —
+    // only the emission floor relaxes, and the card still shows the real
+    // condition count.
+    if (full.conditionsPassed >= 5 && experts !== null && experts.consensus.total === 4 && experts.consensus.agreed >= 3) {
       nearMisses.push({ item, full, confirmations, indicatorRows, experts });
     } else if (full.conditionsPassed >= 4) {
       drops.conditionDetails.push({
@@ -558,7 +559,7 @@ export async function GET(request: Request) {
         (second.experts?.consensus.agreed ?? 0) - (first.experts?.consensus.agreed ?? 0),
     );
     for (const near of nearMisses) {
-      if (emitted.length >= MAX_SIGNALS_PER_MARKET_PER_DAY) break;
+      if (emitted.length >= LIVE_CAPS[market]) break;
       drops.emitted += 1;
       drops.relaxed += 1;
       emitted.push(emitSignal(near.item, near.full, near.confirmations, near.indicatorRows, near.experts));

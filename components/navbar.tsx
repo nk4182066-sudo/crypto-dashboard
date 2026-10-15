@@ -21,7 +21,7 @@ const TOP_LINKS = [
   { href: "/signals", label: "Signals" },
   { href: "/risk", label: "Risk" },
   { href: "/chat", label: "Chat" },
-  { href: "/patterns", label: "Patterns" },
+  { href: "/assets", label: "Assets" },
 ];
 
 const BOTTOM_LINKS = [
@@ -29,7 +29,7 @@ const BOTTOM_LINKS = [
   { href: "/markets", label: "Markets", icon: "📊" },
   { href: "/trade", label: "Trade", icon: "📈" },
   { href: "/signals", label: "Signals", icon: "⚡" },
-  { href: "/results", label: "Results", icon: "📊" },
+  { href: "/assets", label: "Assets", icon: "📚" },
 ];
 
 function isActive(pathname: string, href: string) {
