@@ -7,14 +7,8 @@
 // then routes into the dashboard. Educational app — not financial advice.
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { auth, NOT_CONFIGURED } from "@/src/lib/firebase";
+import { auth, NOT_CONFIGURED, signInWithGoogle } from "@/src/lib/firebase";
 import { saveUser } from "@/src/lib/userAuth";
-import {
-  GoogleAuthProvider,
-  FacebookAuthProvider,
-  signInWithPopup,
-  type User,
-} from "firebase/auth";
 
 const BG = "#0B0E11";
 const CARD = "#181A20";

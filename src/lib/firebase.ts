@@ -3,7 +3,6 @@
 import {
   getAuth,
   GoogleAuthProvider,
-  FacebookAuthProvider,
   signInWithPopup,
   signOut as firebaseSignOut,
   onAuthStateChanged,
@@ -34,7 +33,6 @@ export const auth: Auth | null = app ? getAuth(app) : null;
 export const NOT_CONFIGURED = "auth/not-configured";
 
 export const googleProvider = new GoogleAuthProvider();
-export const facebookProvider = new FacebookAuthProvider();
 
 /**
  * Popup-based Google sign-in. Throws so callers can surface the error.
@@ -46,21 +44,6 @@ export async function signInWithGoogle(): Promise<User> {
   if (!auth) throw new Error(NOT_CONFIGURED);
   const provider = new GoogleAuthProvider();
   provider.setCustomParameters({ prompt: "select_account" });
-  const result = await signInWithPopup(auth, provider);
-  return result.user;
-}
-
-/**
- * Popup-based Facebook sign-in. Throws so callers can surface the error.
- * A fresh provider per call with `auth_type: 'reauthenticate'` forces the
- * Facebook login page every time (MASLA 9), even if a session already exists.
- */
-export async function signInWithFacebook(): Promise<User> {
-  if (!auth) throw new Error(NOT_CONFIGURED);
-  const provider = new FacebookAuthProvider();
-  provider.addScope("email");
-  provider.addScope("public_profile");
-  provider.setCustomParameters({ auth_type: "reauthenticate" });
   const result = await signInWithPopup(auth, provider);
   return result.user;
 }
