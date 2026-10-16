@@ -10,6 +10,7 @@ import {
   type User,
 } from "firebase/auth";
 import { initializeApp, getApps } from "firebase/app";
+import { getFirestore } from "firebase/firestore";
 
 const firebaseConfig = {
   apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY,
@@ -28,6 +29,10 @@ const app = getApps().length > 0 ? getApps()[0] : isConfigured ? initializeApp(f
 
 /** `null` when Firebase is not configured — UI shows a setup hint instead of crashing. */
 export const auth: Auth | null = app ? getAuth(app) : null;
+
+/** Firestore database instance (null when Firebase is not configured). */
+export const db = app ? getFirestore(app) : null;
+export const COLLECTION_USERS = "users";
 
 /** Error code surfaced when sign-in is attempted without Firebase config. */
 export const NOT_CONFIGURED = "auth/not-configured";

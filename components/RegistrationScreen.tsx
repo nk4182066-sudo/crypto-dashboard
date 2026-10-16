@@ -1,16 +1,15 @@
 "use client";
 
-// Registration — two sign-in options only: Google + Facebook.
+// Registration — Google sign-in only (Facebook removed).
 // Real Firebase popup auth (via the userAuth wrappers, which fall back to a
 // local placeholder if Firebase is not configured so the flow never dead-ends).
 // No phone / OTP / reCAPTCHA. Educational only. Not financial advice.
 import { useState } from "react";
-import { googleSignIn, facebookSignIn, type AppUser } from "@/src/lib/userAuth";
+import { googleSignIn, type AppUser } from "@/src/lib/userAuth";
 
 const TEXT = "#EAECEF";
 const MUTED = "#9CA3AF";
 const GREEN = "#00C087";
-const FACEBOOK_BLUE = "#1877F2";
 
 export default function RegistrationScreen({
   onComplete,
@@ -19,7 +18,7 @@ export default function RegistrationScreen({
   onComplete: (user?: AppUser) => void;
   onSkip: () => void;
 }) {
-  const [busy, setBusy] = useState<"google" | "facebook" | null>(null);
+  const [busy, setBusy] = useState<"google" | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   async function handleGoogle() {
@@ -27,19 +26,6 @@ export default function RegistrationScreen({
     setBusy("google");
     try {
       const user = await googleSignIn();
-      onComplete(user);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setBusy(null);
-    }
-  }
-
-  async function handleFacebook() {
-    setError(null);
-    setBusy("facebook");
-    try {
-      const user = await facebookSignIn();
       onComplete(user);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -91,20 +77,6 @@ export default function RegistrationScreen({
               G
             </span>
             {busy === "google" ? "Signing in..." : "🔵 Continue with Google"}
-          </button>
-
-          {/* 2. Facebook — #1877F2 */}
-          <button
-            type="button"
-            onClick={handleFacebook}
-            disabled={busy !== null}
-            className="flex w-full items-center justify-center gap-3 rounded-xl py-3 text-sm font-semibold text-white transition-opacity disabled:opacity-60"
-            style={{ backgroundColor: FACEBOOK_BLUE }}
-          >
-            <span className="flex h-5 w-5 items-center justify-center rounded-full bg-white text-xs font-bold" style={{ color: FACEBOOK_BLUE }}>
-              f
-            </span>
-            {busy === "facebook" ? "Signing in..." : "📘 Continue with Facebook"}
           </button>
         </div>
 

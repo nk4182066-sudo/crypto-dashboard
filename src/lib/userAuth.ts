@@ -1,7 +1,7 @@
 // Client-side auth helper — Firebase-first with a localStorage fallback so the
 // flow works even before NEXT_PUBLIC_FIREBASE_* is configured. Persists the
 // signed-in user under one key the navbar/logout both read. Educational only.
-import { auth, signOut } from "@/src/lib/firebase";
+import { auth, signInWithGoogle, signOut } from "@/src/lib/firebase";
 
 export interface AppUser {
   name?: string;
@@ -61,19 +61,13 @@ export async function googleSignIn(): Promise<AppUser> {
 }
 
 /**
- * Facebook sign-in. Uses real Firebase popup when configured; on any failure
- * (not configured / popup blocked) it degrades to a local placeholder user so
- * the flow never dead-ends.
- */
-
-/**
  * Signs out. Clears the Firebase session (when configured) and every piece of
  * client state (localStorage + sessionStorage, including the onboarding flag)
  * so the next load lands on the login screen — not the dashboard.
  */
 export async function signOutFlow(): Promise<void> {
   try {
-    if (auth) await firebaseSignOut();
+    if (auth) await signOut();
   } catch (error) {
     console.warn("[auth] Firebase sign-out failed:", error);
   }
