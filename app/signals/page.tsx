@@ -10,7 +10,7 @@ import { useRouter } from "next/navigation";
 import PatternLanguageTabs, { type PatternDetailLanguage } from "@/components/PatternLanguageTabs";
 import { generateFullSignal, type FullSignal } from "@/src/lib/signalGenerator";
 import { analyzeCoin } from "@/src/lib/analyzeCoin";
-import { saveSignal, MIN_SCORE } from "@/src/lib/signalStorage";
+import { saveSignal, MIN_SCORE, DISPLAY_MIN_SCORE } from "@/src/lib/signalStorage";
 import { CandlestickVisual, ChartPatternVisual } from "@/components/PatternVisuals";
 import { TrendBadge, ConfirmationSection, IndicatorPanel, ExpertPanel, GuidanceSection } from "@/components/AnalysisInsights";
 import { buildGuidance, type ConfirmationIndicator, type Consensus, type EducatorVerdict } from "@/src/lib/confirmations";
@@ -275,12 +275,14 @@ export default function SignalsPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- `tick` intentionally re-triggers the TTL filter
   }, [apiSignals, cloudSignals, backupSignals, tick, market]);
 
-  // MASLA 6 — engine strict tier = 7/8 (88); display floor = MIN_SCORE (88) so
-  // only 7/8+ high-confidence setups render. Highest score first. This is purely
-  // an ordering/filter step — the hard gates are in app/api/market-signals/route.ts.
+  // MASLA 6 — engine strict tier = 7/8 (88); the HIGH-CONFIDENCE badge stays at
+  // MIN_SCORE (88). The list itself renders from DISPLAY_MIN_SCORE (75 = 6/8)
+  // so the strict-empty relaxation cards (app/api/signals/live fallback) show
+  // instead of an empty tab — every card still derives its REAL X/8 count.
+  // Highest score first. Ordering/filter only — the hard gates live in the API.
   const displayed = useMemo(
     () => signals
-      .filter((s) => s.score >= MIN_SCORE)
+      .filter((s) => s.score >= DISPLAY_MIN_SCORE)
       .sort((first, second) => second.score - first.score),
     [signals],
   );

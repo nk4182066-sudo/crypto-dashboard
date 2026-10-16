@@ -9,7 +9,12 @@
  * Emission rules (strict, per spec):
  *   - conditionsOk >= 8  → 8/8 (PERFECT, score 100).
  *   - expertsOk = agreed >= 4 && total === 4  → 4/4 expert consensus.
- *   - score 88+ is the UI display floor (see signalStorage.MIN_SCORE).
+ *   - score 88+ earns the High-Confidence badge (signalStorage.MIN_SCORE);
+ *     the page list renders from DISPLAY_MIN_SCORE (75).
+ *   - FALLBACK (spec: "agar 0 signals hain to conditions relax karo"): when a
+ *     market's strict pass is empty, getStrictSignals() flushes its best
+ *     >=5/8 + >=3/4 near misses (same policy /api/market-signals ships) so the
+ *     tab is never silently empty — strict always wins when it fires.
  *
  * Auto-refill:
  *   - /api/track-signals resolves a setup to WIN / LOSS / EXPIRED and then
@@ -20,8 +25,8 @@
  * Educational analysis only — not financial advice.
  */
 
-import { cacheGet } from "./cache";
-import { getCachedSnapshot } from "@/src/scanner/scanner";
+import { cached } from "./cache";
+import { getCachedSnapshot, runScan, type ScanResult } from "@/src/scanner/scanner";
 import { scanUniverse, type ScanMarket } from "@/src/scanner/universe";
 export type { ScanMarket };
 import { analyzeCoin } from "./analyzeCoin";
@@ -99,8 +104,27 @@ function toEmittedSignal(item: { symbol: string; label: string; market: ScanMark
   };
 }
 
-/** Evaluates ONE candidate against the strict 8/8 + 4/4 gate. Returns null if rejected. */
-export async function evaluateStrict(candidate: { symbol: string; label: string; market: ScanMarket; reason: string }, h1: Candle[], h4: Candle[], d1: Candle[]): Promise<EmittedMarketSignal | null> {
+/** A strict-gate near miss captured for the relaxation flush (spec: "agar 0
+ * signals hain to conditions relax karo"). Same policy /api/market-signals
+ * ships — used ONLY when the strict 8/8 + 4/4 pass produces nothing. */
+export interface StrictNearMiss {
+  item: { symbol: string; label: string; market: ScanMarket; reason: string };
+  full: ReturnType<typeof analyzeCoin>;
+  confirmations: EmittedMarketSignal["confirmations"];
+  indicators: EmittedMarketSignal["indicators"];
+  experts: EmittedMarketSignal["experts"];
+}
+
+/** Evaluates ONE candidate against the strict 8/8 + 4/4 gate. Returns null if
+ * rejected; qualifying near misses (>=5/8 conditions + >=3/4 experts) are also
+ * pushed into `nearMisses` (when provided) for the zero-signal fallback. */
+export async function evaluateStrict(
+  candidate: { symbol: string; label: string; market: ScanMarket; reason: string },
+  h1: Candle[],
+  h4: Candle[],
+  d1: Candle[],
+  nearMisses?: StrictNearMiss[],
+): Promise<EmittedMarketSignal | null> {
   if (h1.length < 20) return null;
 
   const full = analyzeCoin({ symbol: candidate.symbol, market: candidate.market, primary: h1, h1, h4, d1 });
@@ -154,63 +178,212 @@ export async function evaluateStrict(candidate: { symbol: string; label: string;
 
   // STRICT 4/4 expert gate (spec: "Strict 8/8 + 4/4").
   const expertsOk = experts !== null && experts.consensus.total === 4 && experts.consensus.agreed >= 4;
-  if (!conditionsOk || !expertsOk) return null;
+  if (!conditionsOk || !expertsOk) {
+    // Near-miss audit — shows HOW CLOSE a candidate got, so a 0-signal response
+    // is explainable ("28 candidates were 7/8, none 8/8") instead of a black box.
+    if (full.conditionsPassed >= 6 || (experts?.consensus.agreed ?? 0) >= 3) {
+      console.log(
+        `[signalsLive] near-miss ${candidate.symbol}: ${full.conditionsPassed}/8 conditions` +
+          `, experts ${experts?.consensus.agreed ?? 0}/${experts?.consensus.total ?? 0}` +
+          `, indicators ${confirmations?.confirmed ?? 0}/${confirmations?.total ?? 0}` +
+          `, dir=${full.direction}, score=${full.score}`,
+      );
+    }
+    // Relaxation buffer — the SAME >=5/8 + >=3/4 bar /api/market-signals keeps.
+    // Never emitted while ANY strict signal exists; only the zero-signal flush
+    // reads it (getStrictSignals), best-first up to the market cap.
+    if (nearMisses && full.conditionsPassed >= 5 && experts !== null && experts.consensus.total === 4 && experts.consensus.agreed >= 3) {
+      nearMisses.push({ item: candidate, full, confirmations, indicators, experts });
+    }
+    return null;
+  }
 
   return toEmittedSignal(candidate, full, confirmations, indicators, experts);
 }
 
 
+/**
+ * Absolute origin for server-side self-calls. A bare "/api/..." fetch has no
+ * base in the Node runtime (the same rule chat + autoAnalysis follow), so every
+ * history read here is rebuilt against a real origin: API routes pass
+ * request.url's origin, standalone callers fall back to the deployment URL and
+ * finally to the local dev server.
+ */
+function selfOrigin(origin?: string): string {
+  const explicit = origin?.trim();
+  if (explicit) return explicit.replace(/\/+$/, "");
+  const site = process.env.NEXT_PUBLIC_SITE_URL?.trim();
+  if (site) return site.replace(/\/+$/, "");
+  if (process.env.VERCEL_URL) return `https://${process.env.VERCEL_URL}`;
+  return `http://localhost:${process.env.PORT ?? 3000}`;
+}
+
+/**
+ * How many candidates one getStrictSignals() call may run the FULL 1h/4h/1d
+ * history analysis on. Bounds cold-start latency (3 history fetches each) while
+ * the confidence-ordered candidates ensure the best setups are analysed first —
+ * the same style of bound /api/market-signals uses (MAX_FULL_ANALYSES_PER_REQUEST).
+ */
+const MAX_CANDIDATES_PER_CALL = 30;
+
+/** How long one serverless instance reuses its cold-start market scan. */
+const COLD_SCAN_TTL_MS = 5 * 60 * 1000;
+/** Per-instance memo so refresh() + getLiveSignals() on one request share ONE cold scan. */
+const coldScanCache = new Map<ScanMarket, { at: number; items: ScanResult[] }>();
+
 /** Fetch ONE timeframe of candles from the shared /api/market/history endpoint —
  * the exact source the Trade page and the strict engine read. Empty array on
- * any failure so scoring degrades gracefully. */
+ * any failure so scoring degrades gracefully. A SYNTHETIC series is also
+ * rejected: demo candles must never become a signal. */
 async function fetchHistoryCandles(
+  origin: string | undefined,
   market: ScanMarket,
   symbol: string,
   timeframe: "1h" | "4h" | "1d",
 ): Promise<Candle[]> {
-  try {
-    const query = new URLSearchParams({ market, symbol, timeframe });
-    const response = await fetch(`/api/market/history?${query}`, { cache: "no-store" });
-    if (!response.ok) return [];
-    const payload = (await response.json()) as { candles?: Candle[] };
-    return Array.isArray(payload.candles) ? payload.candles : [];
-  } catch {
-    return [];
-  }
+  // Same 20s cache key /api/market-signals uses, so both routes share one fetch
+  // per symbol+timeframe instead of re-hitting the history chain per pass.
+  return cached<Candle[]>(
+    `signals:hist:${market}:${symbol}:${timeframe}`,
+    { ttlMs: 20_000, staleMs: 300_000, maxEntries: 8192 },
+    async () => {
+      const query = new URLSearchParams({ market, symbol, timeframe });
+      try {
+        const response = await fetch(`${selfOrigin(origin)}/api/market/history?${query}`, {
+          cache: "no-store",
+          signal: AbortSignal.timeout(15_000),
+        });
+        if (!response.ok) {
+          console.warn(`[signalsLive] history ${response.status} for ${market}/${symbol}/${timeframe}`);
+          return [];
+        }
+        const payload = (await response.json()) as { candles?: Candle[]; source?: string };
+        if (payload.source === "Generated demo data") return [];
+        return Array.isArray(payload.candles) ? payload.candles : [];
+      } catch (error) {
+        console.warn(
+          `[signalsLive] history fetch failed for ${market}/${symbol}/${timeframe}:`,
+          error instanceof Error ? error.message : error,
+        );
+        return [];
+      }
+    },
+  );
 }
 
-/** Scans the universe (cached snapshot) and returns every candidate for `market`
- * that clears the strict 8/8 + 4/4 gate. No cap applied here — callers apply
- * LIVE_CAPS. Each candidate runs the SAME analyzeCoin() the Trade + Signals
- * pages use, over the SAME h1/h4/d1 candles the engine reads. */
-export async function getStrictSignals(market: ScanMarket, limit?: number): Promise<EmittedMarketSignal[]> {
-  const snapshot = await getCachedSnapshot();
-  const candidates = snapshot?.results?.filter((item) => item.market === market) ?? [];
-  const results: EmittedMarketSignal[] = [];
-  let dropped = 0;
+/**
+ * Scans the universe (cached snapshot) and returns every candidate for `market`
+ * that clears the strict 8/8 + 4/4 gate (score floor 88). No cap applied here —
+ * callers apply LIVE_CAPS. Each candidate runs the SAME analyzeCoin() the Trade
+ * + Signals pages use, over the SAME h1/h4/d1 candles the engine reads.
+ *
+ * COLD-START FALLBACK — getCachedSnapshot() never triggers a scan, so a fresh
+ * serverless instance used to return [] forever (Signals page stuck on
+ * "loading" → 0 signals). When the snapshot is null OR has no rows for this
+ * market, scan this market's universe slice immediately — the same pattern the
+ * chat route uses — memoised per instance so one request only pays for one scan.
+ */
+export async function getStrictSignals(market: ScanMarket, limit?: number, origin?: string): Promise<EmittedMarketSignal[]> {
+  let candidates = getCachedSnapshot()?.results?.filter((item) => item.market === market) ?? [];
 
-  for (const item of candidates) {
-    const [h1, h4, d1] = await Promise.all([
-      fetchHistoryCandles(item.market, item.symbol, "1h"),
-      fetchHistoryCandles(item.market, item.symbol, "4h"),
-      fetchHistoryCandles(item.market, item.symbol, "1d"),
-    ]);
-    if (h1.length < 20) { dropped += 1; continue; }
+  if (candidates.length === 0) {
+    const memo = coldScanCache.get(market);
+    if (memo && Date.now() - memo.at < COLD_SCAN_TTL_MS) {
+      candidates = memo.items;
+      console.log(`[signalsLive] ${market}: snapshot empty → cold-scan cache hit (${candidates.length} candidates)`);
+    } else {
+      try {
+        const targets = scanUniverse.filter((target) => target.market === market);
+        const fresh = await runScan(targets);
+        candidates = fresh.results.filter((item) => item.market === market);
+        coldScanCache.set(market, { at: Date.now(), items: candidates });
+        console.log(
+          `[signalsLive] cold-start scan(${market}): Scanned ${fresh.scanned}, found ${candidates.length} candidates (${fresh.failed} failed)`,
+        );
+      } catch (error) {
+        console.warn(`[signalsLive] cold-start scan failed for ${market}:`, error instanceof Error ? error.message : error);
+      }
+    }
+  }
+
+  const results: EmittedMarketSignal[] = [];
+  const nearMisses: StrictNearMiss[] = [];
+  let scanned = 0;
+  let noCandles = 0;
+  let rejected = 0;
+  let belowFloor = 0;
+  let relaxed = 0;
+
+  // Candidates are evaluated in small PARALLEL batches: the three history
+  // fetches per candidate used to run strictly one-candidate-at-a-time, which
+  // made a cold market=all request take minutes. Batch size 5 balances a warm
+  // serverless burst (~15 self-calls per market, 4 markets in parallel) against
+  // Yahoo/Bybit rate limits; evaluateStrict() itself is CPU-cheap.
+  const CANDIDATE_BATCH = 5;
+  for (let start = 0; start < candidates.length; start += CANDIDATE_BATCH) {
     if (limit !== undefined && results.length >= limit) break;
-    const signal = await evaluateStrict(item, h1, h4, d1);
-    if (signal) results.push(signal);
-    else dropped += 1;
+    if (scanned >= MAX_CANDIDATES_PER_CALL) break; // cold-request latency bound
+    const batch = candidates.slice(start, Math.min(start + CANDIDATE_BATCH, MAX_CANDIDATES_PER_CALL));
+    const candleSets = await Promise.all(
+      batch.map((item) =>
+        Promise.all([
+          fetchHistoryCandles(origin, item.market, item.symbol, "1h"),
+          fetchHistoryCandles(origin, item.market, item.symbol, "4h"),
+          fetchHistoryCandles(origin, item.market, item.symbol, "1d"),
+        ]),
+      ),
+    );
+
+    for (let index = 0; index < batch.length; index += 1) {
+      if (limit !== undefined && results.length >= limit) break;
+      if (scanned >= MAX_CANDIDATES_PER_CALL) break;
+      const item = batch[index];
+      const [h1, h4, d1] = candleSets[index];
+      scanned += 1;
+      if (h1.length < 20) { noCandles += 1; continue; }
+      const signal = await evaluateStrict(item, h1, h4, d1, nearMisses);
+      if (!signal) { rejected += 1; continue; }
+      // 88+ emission floor (8/8 = 100; the no-pattern guard caps a card at 7/8 = 88).
+      if (signal.score < 88) { belowFloor += 1; continue; }
+      results.push(signal);
+    }
+  }
+
+  // RELAXATION FLUSH (user spec: "agar 0 signals hain to conditions relax karo"
+  // — the policy /api/market-signals has always shipped): ONLY when the strict
+  // 8/8 + 4/4 pass produced NOTHING for this market, slot the best
+  // >=5/8-conditions + >=3/4-experts near misses in, best-first, up to the
+  // market cap. Cards keep their REAL condition count and honest score; the
+  // strict gate stays untouched whenever it fires.
+  if (results.length === 0 && nearMisses.length > 0) {
+    nearMisses.sort(
+      (a, b) =>
+        b.full.conditionsPassed - a.full.conditionsPassed ||
+        (b.experts?.consensus.agreed ?? 0) - (a.experts?.consensus.agreed ?? 0) ||
+        b.full.score - a.full.score,
+    );
+    const relaxCap = limit ?? LIVE_CAPS[market];
+    for (const near of nearMisses) {
+      if (results.length >= relaxCap) break;
+      results.push(toEmittedSignal(near.item, near.full, near.confirmations, near.indicators, near.experts));
+      relaxed += 1;
+    }
+    console.log(`[signalsLive] ${market}: strict pass empty → RELAXED ${relaxed} near-miss(es) (best ${nearMisses[0].full.conditionsPassed}/8)`);
   }
 
   if (limit === undefined) {
     results.sort((a, b) => b.score - a.score || (a.symbol < b.symbol ? -1 : 1));
   }
+  console.log(
+    `[signalsLive] ${market}: Scanned ${scanned}, found ${results.length} signals` +
+      ` (candidates=${candidates.length}, noCandles=${noCandles}, rejected=${rejected}, belowFloor=${belowFloor}, relaxed=${relaxed})`,
+  );
   return results;
 }
 
 /** Returns the LIVE POOL for `market`, capped at LIVE_CAPS[m]. */
-export async function getLiveSignals(market: ScanMarket): Promise<EmittedMarketSignal[]> {
-  const strict = await getStrictSignals(market);
+export async function getLiveSignals(market: ScanMarket, origin?: string): Promise<EmittedMarketSignal[]> {
+  const strict = await getStrictSignals(market, undefined, origin);
   return strict.slice(0, LIVE_CAPS[market]);
 }
 
@@ -220,7 +393,7 @@ export async function getLiveSignals(market: ScanMarket): Promise<EmittedMarketS
  * Resolves WIN/LOSS/EXPIRED records out, then slots the best passing candidates
  * back in (auto-refill on resolution). Best-effort persistence.
  */
-export async function refresh(market: ScanMarket): Promise<EmittedMarketSignal[]> {
+export async function refresh(market: ScanMarket, origin?: string): Promise<EmittedMarketSignal[]> {
   const allDocs = await readAllSignals();
   const pool: EmittedMarketSignal[] = [];
   const liveBySymbol = new Map<string, EmittedMarketSignal>();
@@ -267,7 +440,7 @@ export async function refresh(market: ScanMarket): Promise<EmittedMarketSignal[]
   const toFill = Math.max(0, LIVE_CAPS[market] - pool.length);
   if (toFill === 0) return pool;
 
-  const candidates = (await getStrictSignals(market, toFill)).filter((s) => !liveBySymbol.has(s.symbol));
+  const candidates = (await getStrictSignals(market, toFill, origin)).filter((s) => !liveBySymbol.has(s.symbol));
   const toAdd = candidates.slice(0, toFill);
 
   for (const sig of toAdd) {

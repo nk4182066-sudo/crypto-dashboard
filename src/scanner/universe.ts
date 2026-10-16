@@ -11,10 +11,10 @@ export interface ScanTarget {
  * Feature 10 — the tracked universe the scanner walks every cycle.
  * Kept liquid on purpose: each entry costs one candles request. Symbols are
  * verified Yahoo chart symbols so the scheduler always yields enough signals
- * per market (crypto 30+, forex 15+, stocks 20+, metals 5+).
+ * per market (crypto 50 / forex 30 / stocks 30 / metals 10 = 120 candidates).
  */
 export const scanUniverse: ScanTarget[] = [
-  // Crypto (35)
+  // Crypto (50)
   { symbol: "BTC-USD", market: "crypto", label: "Bitcoin" },
   { symbol: "ETH-USD", market: "crypto", label: "Ethereum" },
   { symbol: "SOL-USD", market: "crypto", label: "Solana" },
@@ -54,7 +54,21 @@ export const scanUniverse: ScanTarget[] = [
   { symbol: "SUI-USD", market: "crypto", label: "Sui" },
   { symbol: "APT-USD", market: "crypto", label: "Aptos" },
   { symbol: "PEPE-USD", market: "crypto", label: "Pepe" },
-  // Forex (16)
+  // MASLA: top-50 pool (12 more) — every symbol re-verified against the Yahoo
+  // chart API (UNI/GRT/STX/IMX answer 404 "may be delisted" → deliberately excluded).
+  { symbol: "TIA-USD", market: "crypto", label: "Celestia" },
+  { symbol: "VET-USD", market: "crypto", label: "VeChain" },
+  { symbol: "SAND-USD", market: "crypto", label: "The Sandbox" },
+  { symbol: "AXS-USD", market: "crypto", label: "Axie Infinity" },
+  { symbol: "EGLD-USD", market: "crypto", label: "MultiversX" },
+  { symbol: "FLOW-USD", market: "crypto", label: "Flow" },
+  { symbol: "CHZ-USD", market: "crypto", label: "Chiliz" },
+  { symbol: "QNT-USD", market: "crypto", label: "Quant" },
+  { symbol: "ONDO-USD", market: "crypto", label: "Ondo" },
+  { symbol: "KAS-USD", market: "crypto", label: "Kaspa" },
+  { symbol: "JUP-USD", market: "crypto", label: "Jupiter" },
+  { symbol: "WLD-USD", market: "crypto", label: "Worldcoin" },
+  // Forex (30)
   { symbol: "EURUSD=X", market: "forex", label: "EUR/USD" },
   { symbol: "GBPUSD=X", market: "forex", label: "GBP/USD" },
   { symbol: "USDJPY=X", market: "forex", label: "USD/JPY" },
@@ -71,7 +85,23 @@ export const scanUniverse: ScanTarget[] = [
   { symbol: "NZDUSD=X", market: "forex", label: "NZD/USD" },
   { symbol: "USDCHF=X", market: "forex", label: "USD/CHF" },
   { symbol: "CADJPY=X", market: "forex", label: "CAD/JPY" },
-  // Stocks (22)
+  // MASLA: 30-pair forex pool (14 more, Yahoo-verified; all also covered by
+  // Frankfurter/ECB for the 1d fallback chain).
+  { symbol: "NZDJPY=X", market: "forex", label: "NZD/JPY" },
+  { symbol: "EURPLN=X", market: "forex", label: "EUR/PLN" },
+  { symbol: "EURNOK=X", market: "forex", label: "EUR/NOK" },
+  { symbol: "EURSEK=X", market: "forex", label: "EUR/SEK" },
+  { symbol: "USDSGD=X", market: "forex", label: "USD/SGD" },
+  { symbol: "USDNOK=X", market: "forex", label: "USD/NOK" },
+  { symbol: "USDSEK=X", market: "forex", label: "USD/SEK" },
+  { symbol: "USDPLN=X", market: "forex", label: "USD/PLN" },
+  { symbol: "USDTRY=X", market: "forex", label: "USD/TRY" },
+  { symbol: "USDINR=X", market: "forex", label: "USD/INR" },
+  { symbol: "USDMXN=X", market: "forex", label: "USD/MXN" },
+  { symbol: "USDZAR=X", market: "forex", label: "USD/ZAR" },
+  { symbol: "USDBRL=X", market: "forex", label: "USD/BRL" },
+  { symbol: "USDHKD=X", market: "forex", label: "USD/HKD" },
+  // Stocks (30)
   { symbol: "AAPL", market: "stocks", label: "Apple" },
   { symbol: "TSLA", market: "stocks", label: "Tesla" },
   { symbol: "NVDA", market: "stocks", label: "NVIDIA" },
@@ -94,13 +124,28 @@ export const scanUniverse: ScanTarget[] = [
   { symbol: "BA", market: "stocks", label: "Boeing" },
   { symbol: "CAT", market: "stocks", label: "Caterpillar" },
   { symbol: "GS", market: "stocks", label: "Goldman Sachs" },
-  // Metals (6) — Yahoo lists these as futures, not spot `=X` pairs.
+  // MASLA: 30-stock pool (8 more, Yahoo-verified).
+  { symbol: "ORCL", market: "stocks", label: "Oracle" },
+  { symbol: "IBM", market: "stocks", label: "IBM" },
+  { symbol: "CRM", market: "stocks", label: "Salesforce" },
+  { symbol: "ADBE", market: "stocks", label: "Adobe" },
+  { symbol: "PYPL", market: "stocks", label: "PayPal" },
+  { symbol: "QCOM", market: "stocks", label: "Qualcomm" },
+  { symbol: "TXN", market: "stocks", label: "Texas Instruments" },
+  { symbol: "PLTR", market: "stocks", label: "Palantir" },
+  // Metals (10) — Yahoo lists these as futures, not spot `=X` pairs.
   { symbol: "GC=F", market: "metals", label: "Gold" },
   { symbol: "SI=F", market: "metals", label: "Silver" },
   { symbol: "HG=F", market: "metals", label: "Copper" },
   { symbol: "PL=F", market: "metals", label: "Platinum" },
   { symbol: "PA=F", market: "metals", label: "Palladium" },
   { symbol: "MGC=F", market: "metals", label: "Micro Gold" },
+  // MASLA: 10-metal pool (+4) — the two ETFs give the spot-style exposure the
+  // futures roll can distort; ZNC/ALI are the liquid LME contracts Yahoo serves.
+  { symbol: "GLD", market: "metals", label: "SPDR Gold (GLD)" },
+  { symbol: "SLV", market: "metals", label: "iShares Silver (SLV)" },
+  { symbol: "ZNC=F", market: "metals", label: "Zinc" },
+  { symbol: "ALI=F", market: "metals", label: "Aluminum" },
 ];
 
 /** Feature 2 — the scheduler runs on this interval. */

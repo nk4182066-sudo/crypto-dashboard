@@ -33,6 +33,15 @@ export const LEGACY_SIGNAL_KEY = "signal-history";
  * strict 8/8 condition gate (100) plus 4/4 expert consensus; see the hardened
  * app/api/market-signals/route.ts gates. 88 is now the UI display floor. */
 export const MIN_SCORE = 88;
+/**
+ * Signals page LIST display floor (relaxation era). Strict 8/8 stays the
+ * primary gate, but when a market's strict pass is empty the API falls back to
+ * its best >=5/8 near misses — 75 (= 6/8) lets those cards actually render
+ * instead of an empty tab. MIN_SCORE (88) remains the "High-Confidence Setup"
+ * badge + Results-page persistence floor, and the card label derives the real
+ * X/8 count from the score (100→8/8, 88→7/8, 75→6/8), so nothing overstates.
+ */
+export const DISPLAY_MIN_SCORE = 75;
 /** Max records kept; oldest are dropped when this is exceeded. */
 export const MAX_SIGNALS = 30;
 /** 30 days â€” a setup that resolves nothing in this window is EXPIRED (MASLA 5). */

@@ -415,15 +415,22 @@ export async function GET(request: Request) {
   // futures symbols before the generic Yahoo call below. The spot "XAUUSD=X" /
   // "XAGUSD=X" tickers were retired by Yahoo (they now answer 404), so these
   // map to the COMEX futures contracts, which Yahoo still serves.
+  // PASSTHROUGH: universe futures symbols (GC=F, SI=F, MGC=F, ZNC=F …) and the
+  // metals ETFs (GLD, SLV …) already ARE Yahoo tickers — rewriting them used to
+  // produce garbage like "GC=FUSD=X" → Yahoo 404 → SYNTHETIC demo candles, which
+  // the strict gate (rightly) rejected → metals always showed 0 live signals.
   const metalsYahooSymbol: Record<string, string> = {
     XAU: "GC=F",
     XAG: "SI=F",
     XPT: "PL=F",
     XPD: "PA=F",
     XCU: "HG=F",
+    GLD: "GLD",
+    SLV: "SLV",
   };
+  const metalsBase = symbol.split("-")[0];
   const providerSymbol = market === "metals"
-    ? (metalsYahooSymbol[symbol.split("-")[0]] ?? `${symbol.split("-")[0]}USD=X`)
+    ? (metalsYahooSymbol[metalsBase] ?? (symbol.includes("=") ? symbol : `${metalsBase}USD=X`))
     : symbol;
 
   const url = new URL(`https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(providerSymbol)}`);

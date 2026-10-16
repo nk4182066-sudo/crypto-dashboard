@@ -17,7 +17,13 @@
 import { refresh, getLiveSignals, LIVE_CAPS, type EmittedMarketSignal, type ScanMarket } from "@/src/lib/signalsLive";
 import { scanUniverse } from "@/src/scanner/universe";
 
-const MARKET_VALUES: ScanMarket[] = scanUniverse.map((s) => s.market);
+// ONE entry per MARKET — scanUniverse holds one row per SYMBOL (120 today), so
+// mapping it straight to markets produced ["crypto","crypto",…"metals",…] and
+// `market=all` fired refresh() + getLiveSignals() 120 TIMES per request (82
+// before the pool expansion): ~120 Firestore reads + 120 strict passes → the
+// route routinely blew its serverless duration and the Signals page showed
+// "loading" forever. Dedupe to the 4 real markets.
+const MARKET_VALUES: ScanMarket[] = [...new Set(scanUniverse.map((s) => s.market))];
 
 export const dynamic = "force-dynamic";
 
@@ -34,13 +40,17 @@ function toComparable(market: string, symbol: string): string {
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
   const market = toMarket(searchParams.get("market"));
+  const origin = new URL(request.url).origin;
 
   // Always refresh before responding so the pool is populated and settled.
+  // Markets run in PARALLEL — each is an independent I/O chain (scan + history
+  // fetches), and serialising them on a cold instance used to risk blowing the
+  // serverless duration before a single signal was returned.
   try {
     if (market === "all") {
-      for (const m of MARKET_VALUES) await refresh(m);
+      await Promise.all(MARKET_VALUES.map((m) => refresh(m, origin)));
     } else {
-      await refresh(market);
+      await refresh(market, origin);
     }
   } catch (error) {
     console.warn(`[signals/live] background refresh failed:`, error instanceof Error ? error.message : error);
@@ -50,16 +60,16 @@ export async function GET(request: Request) {
 
   if (market === "all") {
     const merged: EmittedMarketSignal[] = [];
-    for (const m of MARKET_VALUES) {
-      const pool = await getLiveSignals(m);
-      for (const signal of pool) results[toComparable(m, signal.symbol)] = [signal];
-      merged.push(...pool);
-    }
+    const pools = await Promise.all(MARKET_VALUES.map((m) => getLiveSignals(m, origin)));
+    MARKET_VALUES.forEach((m, index) => {
+      for (const signal of pools[index] ?? []) results[toComparable(m, signal.symbol)] = [signal];
+      merged.push(...(pools[index] ?? []));
+    });
     merged.sort((a, b) => b.score - a.score || a.market.localeCompare(b.market) || (a.symbol < b.symbol ? -1 : 1));
     return Response.json({ generatedAt: new Date().toISOString(), targets: LIVE_CAPS, results: merged }, { headers: { "Cache-Control": "no-store" } });
   }
 
-  const pool = await getLiveSignals(market);
+  const pool = await getLiveSignals(market, origin);
   const cap = LIVE_CAPS[market as ScanMarket];
   return Response.json({ generatedAt: new Date().toISOString(), market, cap, results: pool }, { headers: { "Cache-Control": "no-store" } });
 }

@@ -208,7 +208,7 @@ export async function GET(request: Request) {
     // back into the same market to maintain the live pool.
     if (outcome !== "PENDING") {
       try {
-        void refresh(signal.market as ScanMarket);
+        void refresh(signal.market as ScanMarket, new URL(request.url).origin);
       } catch (error) {
         console.warn("[track-signals] auto-refill failed:", error instanceof Error ? error.message : error);
       }
