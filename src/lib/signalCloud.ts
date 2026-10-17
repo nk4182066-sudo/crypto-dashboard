@@ -187,6 +187,34 @@ export function subscribeSignals(onSignals: (signals: CloudDoc[]) => void): () =
   }
 }
 
+/**
+ * Real-time listener for the Results page — same as `subscribeSignals()` but
+ * WITHOUT the 4h freshness filter, so the full 30-day history shows up
+ * (documents past the TTL are deleted by `sweepExpired()` anyway). Every doc
+ * is returned with its Firestore id attached. Never throws.
+ */
+export function subscribeAllSignals(
+  onSignals: (signals: Array<CloudDoc & { id: string }>) => void,
+): () => void {
+  const db = getCloudDb();
+  if (!db) {
+    console.info(`[signalCloud] full listener off (${initReason}) — using localStorage backup.`);
+    return () => {};
+  }
+  try {
+    return onSnapshot(
+      collection(db, SIGNALS_COLLECTION),
+      (snapshot) => {
+        onSignals(snapshot.docs.map((entry) => ({ id: entry.id, ...(entry.data() as CloudDoc) })));
+      },
+      (error) => console.warn("[signalCloud] full listener error:", error.message),
+    );
+  } catch (error) {
+    console.warn("[signalCloud] full listener failed:", error instanceof Error ? error.message : error);
+    return () => {};
+  }
+}
+
 /** Restore the last on-screen snapshot (localStorage backup layer). */
 export function loadSignalBackup(): CloudDoc[] {
   try {

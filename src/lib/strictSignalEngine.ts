@@ -342,16 +342,89 @@ export interface StrictPattern {
   description: string;
 }
 
-export function scoreFromConditions(conditionsMet: number): { score: number; quality: Quality | null } {
-  // MASLA 4/6 — score is a clean linear function of conditions passed:
-  //   8/8 = 100 (PERFECT), 7/8 = 88 (STRONG), 6/8 = 75 (REJECT floor).
-  // Anything below 6/8 is not deliverable (score 0 -> hidden by callers).
-  if (conditionsMet >= 8) return { score: 100, quality: "PERFECT" };
-  if (conditionsMet === 7) return { score: 88, quality: "STRONG" };
-  if (conditionsMet === 6) return { score: 75, quality: "GOOD" };
-  return { score: 0, quality: null };
+export function scoreFromConditions(conditionsMet: number, indicatorsAgreedCount?: number): { score: number; quality: Quality | null } {
+  // STRICT TIER SCORING — no relaxation, no fallback:
+  //   Tier 1 (PREMIUM): 8/8 conditions + 10/10 indicators → score 95-100
+  //   Tier 2 (STRONG):  7/8 conditions + 9/10 indicators → score 88-94
+  //   Tier 3 (GOOD):    7/8 conditions + 8/10 indicators → score 85-87
+  //   Anything below 7 conditions OR indicators <= 7 → REJECT (score 0)
+  if (conditionsMet === 8) {
+    const score = indicatorsAgreedCount != null && indicatorsAgreedCount >= 10 ? 100 : 95;
+    return { score, quality: "PERFECT" };
+  }
+  if (conditionsMet === 7) {
+    if (indicatorsAgreedCount != null && indicatorsAgreedCount >= 9) {
+      return { score: 88 + Math.min(6, Math.max(0, indicatorsAgreedCount - 9)), quality: "STRONG" }; // 88-94
+    }
+    if (indicatorsAgreedCount != null && indicatorsAgreedCount >= 8) {
+      return { score: 85 + Math.min(2, Math.max(0, indicatorsAgreedCount - 8)), quality: "GOOD" }; // 85-87
+    }
+    return { score: 0, quality: null }; // indicators <= 7 → REJECT
+  }
+  return { score: 0, quality: null }; // < 7 conditions → REJECT
 }
 
+
+/** Strict tier verdict for a scanned setup. Returns null when the setup must
+ *  be REJECTED (never shown, never saved, never alerted). No relaxation. */
+export type SignalTier = "PREMIUM" | "STRONG" | "GOOD" | null;
+
+export interface SignalTierVerdict {
+  tier: SignalTier;
+  label: string;
+  color: "green" | "blue" | "yellow";
+}
+
+/** Hard-gated tier assignment. Every tier requires:
+ *  - expertsAgreed >= 3  (2/4 or less → REJECT)
+ *  - indicatorsAgreedCount >= 8  (7/10 or less → REJECT)
+ *  - candlestickConfirmed === true  (Neutral candlestick → REJECT)
+ *  - volumePassed === true  (Volume < 1.5x → REJECT)
+ *  - chartPatternPassed === true  ("No clear pattern" → REJECT)
+ *
+ *  Tier 1 (PREMIUM):  8/8 conditions + 10/10 indicators + 4/4 experts → 95-100
+ *  Tier 2 (STRONG):   7/8 conditions + 9/10 indicators + 3/4 experts → 88-94
+ *  Tier 3 (GOOD):     7/8 conditions + 8/10 indicators + 3/4 experts → 85-87
+ */
+export function computeSignalTier({
+  conditionsPassed,
+  indicatorsAgreedCount,
+  expertsAgreed,
+  candlestickConfirmed,
+  volumePassed,
+  chartPatternPassed,
+}: {
+  conditionsPassed: number;
+  indicatorsAgreedCount: number;
+  expertsAgreed: number;
+  candlestickConfirmed: boolean;
+  volumePassed: boolean;
+  chartPatternPassed: boolean;
+}): SignalTierVerdict | null {
+  // ─── REJECT RULES ───
+  if (expertsAgreed < 3) return null; // 2/4 experts or kam → REJECT
+  if (indicatorsAgreedCount <= 7) return null; // 7/10 indicators or kam → REJECT
+  if (!candlestickConfirmed) return null; // Candlestick Neutral → REJECT
+  if (!volumePassed) return null; // Volume 1.5x se kam → REJECT
+  if (!chartPatternPassed) return null; // "No clear pattern" → REJECT
+
+  // ─── TIER 1: PREMIUM (Green) ───
+  if (conditionsPassed === 8 && indicatorsAgreedCount === 10 && expertsAgreed === 4) {
+    return { tier: "PREMIUM", label: "PREMIUM SETUP", color: "green" };
+  }
+
+  // ─── TIER 2: STRONG (Blue) ───
+  if (conditionsPassed === 7 && indicatorsAgreedCount >= 9 && expertsAgreed >= 3) {
+    return { tier: "STRONG", label: "STRONG SETUP", color: "blue" };
+  }
+
+  // ─── TIER 3: GOOD / Minimum Allowed (Yellow) ───
+  if (conditionsPassed === 7 && indicatorsAgreedCount >= 8 && expertsAgreed >= 3) {
+    return { tier: "GOOD", label: "GOOD SETUP", color: "yellow" };
+  }
+
+  return null;
+}
 export function qualityLabel(quality: Quality | null): Quality | null {
   if (quality === "PERFECT") return "PERFECT";
   if (quality === "STRONG") return "STRONG";
@@ -392,4 +465,6 @@ function seriesLast(values: (number | null)[]): number | null {
   }
   return null;
 }
+
+
 

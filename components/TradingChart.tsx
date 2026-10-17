@@ -325,9 +325,10 @@ export default function TradingChart({ data, chartKey = "", signals = [], candle
       },
       rightPriceScale: {
         borderColor: '#2b3139',
-        // MASLA 3 — autoScale ON by default: scales the price axis to the visible
-        // candles so upper + lower extremes and S/R lines are always shown.
+        // MASLA 1 — autoScale ON with 15% padding so S/R / entry / SL / TP
+        // lines are never cut off at the top or bottom of the axis.
         autoScale: true,
+        scaleMargins: { top: 0.15, bottom: 0.15 },
       },
     });
 
@@ -357,6 +358,23 @@ export default function TradingChart({ data, chartKey = "", signals = [], candle
 
     candlestickSeriesRef.current = candlestickSeries;
     markersRef.current = createSeriesMarkers(candlestickSeries, []);
+
+    // MASLA 1 — series-level price scale: keep autoScale on with padding so
+    // lines + candles always stay visible after zoom / pan.
+    candlestickSeries.priceScale().applyOptions({
+      autoScale: true,
+      scaleMargins: { top: 0.15, bottom: 0.15 },
+    });
+
+    // Re-fit the price axis whenever the visible range changes (wheel zoom,
+    // pinch, pressed-drag pan) so new extremes are fit automatically and
+    // lines + candles never go off-screen. Toggling autoScale forces a
+    // recalculation even when it was already on.
+    const onAutoScaleRangeChange = () => {
+      const priceScale = candlestickSeries.priceScale();
+      priceScale.applyOptions({ autoScale: false });
+      priceScale.applyOptions({ autoScale: true });
+    };
 
     const trendlineSeries = chart.addSeries(LineSeries, {
       color: '#f59e0b',
@@ -437,6 +455,8 @@ export default function TradingChart({ data, chartKey = "", signals = [], candle
     container.addEventListener("touchend", onTouchEnd, { passive: true });
     container.addEventListener("wheel", onWheel, { passive: true });
 
+    chart.timeScale().subscribeVisibleLogicalRangeChange(onAutoScaleRangeChange);
+
     const onVisibleRangeChange = (range: { from: number; to: number } | null) => {
       if (interactedRef.current && range && range.from <= 20 && historyStateRef.current.hasMoreHistory && !historyStateRef.current.loadingOlder) {
         loadOlderRef.current();
@@ -445,6 +465,7 @@ export default function TradingChart({ data, chartKey = "", signals = [], candle
     chart.timeScale().subscribeVisibleLogicalRangeChange(onVisibleRangeChange);
 
     return () => {
+      chart.timeScale().unsubscribeVisibleLogicalRangeChange(onAutoScaleRangeChange);
       chart.timeScale().unsubscribeVisibleLogicalRangeChange(onVisibleRangeChange);
       container.removeEventListener("pointerdown", onPointerDown);
       container.removeEventListener("pointerup", onPointerUp);

@@ -28,22 +28,18 @@ export const SIGNAL_STORAGE_KEY = "signal-storage";
 export const LEGACY_SIGNAL_KEY = "signal-history";
 
 /** Score floor for what the Signals/results PAGE SHOWS.
- * 75 = 6/8 conditions (relaxation tier) — keeps the tab populated even when
- * a market's strict pass emits nothing. New engine EMISSIONS require the
- * strict 8/8 condition gate (100) plus 4/4 expert consensus; see the hardened
- * app/api/market-signals/route.ts gates. 88 is now the UI display floor. */
-export const MIN_SCORE = 88;
+ * 85 = Tier 3 minimum allowed score. Anything below 85 is REJECTED — never
+ * shown, never saved, never alerted. No relaxation tier exists. */
+export const MIN_SCORE = 85;
 /**
- * Signals page LIST display floor (relaxation era). Strict 8/8 stays the
- * primary gate, but when a market's strict pass is empty the API falls back to
- * its best >=5/8 near misses — 75 (= 6/8) lets those cards actually render
- * instead of an empty tab. MIN_SCORE (88) remains the "High-Confidence Setup"
- * badge + Results-page persistence floor, and the card label derives the real
- * X/8 count from the score (100→8/8, 88→7/8, 75→6/8), so nothing overstates.
+ * Signals page LIST display floor. Same as MIN_SCORE (85) — no relaxation,
+ * no fallback. If a market emits no Tier 1/2/3 signals, the tab shows the
+ * "Wait for high-quality setup" empty state instead of garbage cards.
  */
-export const DISPLAY_MIN_SCORE = 75;
-/** Max records kept; oldest are dropped when this is exceeded. */
-export const MAX_SIGNALS = 30;
+export const DISPLAY_MIN_SCORE = 85;
+/** Max records kept; oldest are dropped when this is exceeded.
+ *  300 ≈ a full 30-day history (route emits ≤15/market/day, 4 markets). */
+export const MAX_SIGNALS = 300;
 /** 30 days â€” a setup that resolves nothing in this window is EXPIRED (MASLA 5). */
 export const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
 /** Results page re-check interval (30 seconds, per spec). */

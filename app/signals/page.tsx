@@ -1,4 +1,5 @@
 "use client";
+import AuthGuard from "@/components/AuthGuard";
 
 // AI Setups page. Clean like /markets: market tabs, then every scanned setup
 // for that market (all-coins API scans the full universe), sorted by score
@@ -49,6 +50,8 @@ const MUTED = "#9CA3AF";
 const GREEN = "#00C087";
 const RED = "#F6465D";
 const AMBER = "#F0B90B";
+const BLUE = "#3B82F6";
+const YELLOW = "#F59E0B";
 
 type Market = "crypto" | "forex" | "stocks" | "metals";
 
@@ -77,6 +80,8 @@ interface MarketSignal {
   indicators?: IndicatorRow[] | null;
   /** Feature 3 — expert panel + consensus (save requires agreed >= 3). */
   experts?: { educators: EducatorVerdict[]; consensus: Consensus } | null;
+  /** STRICT tier — PREMIUM / STRONG / GOOD. Optional on stored/legacy records. */
+  tier?: "PREMIUM" | "STRONG" | "GOOD";
 }
 
 const TABS: { key: Market; label: string }[] = [
@@ -125,10 +130,11 @@ function statusOf(signal: MarketSignal): { text: string; color: string } {
  * formula, so they can never disagree). The emoji is cosmetic only — the
  * number is authoritative. 8/8=100 PERFECT, 7/8=88 STRONG.
  */
-function scoreTier(score: number): { emoji: string; label: string } {
-  if (score >= 100) return { emoji: "🏆", label: "PERFECT — 8/8 Conditions" };
-  if (score >= 88) return { emoji: "⭐", label: "STRONG — 7/8 Conditions" };
-  return { emoji: "⭐", label: "STRONG" };
+function scoreTier(score: number): { emoji: string; label: string; color: string } {
+  if (score >= 95) return { emoji: "🟢", label: "PREMIUM SETUP", color: GREEN };
+  if (score >= 88) return { emoji: "🔵", label: "STRONG SETUP", color: BLUE };
+  if (score >= 85) return { emoji: "🟡", label: "GOOD SETUP", color: YELLOW };
+  return { emoji: "⚪", label: "REJECTED", color: MUTED };
 }
 
 function timeAgo(iso: string): string {
@@ -141,7 +147,7 @@ function timeAgo(iso: string): string {
   return `${hours}h ago`;
 }
 
-export default function SignalsPage() {
+function SignalsPageContent() {
   const router = useRouter();
   const [market, setMarket] = useState<Market>("crypto");
   // MASLA 2 — three sources merged below: live API, Firestore (real-time) and
@@ -461,9 +467,9 @@ export default function SignalsPage() {
       ) : displayed.length === 0 ? (
         fiveSecDone && !loading ? (
           <div className="rounded-2xl border p-6 text-center text-sm" style={{ backgroundColor: CARD, borderColor: BORDER, color: MUTED }}>
-            <p>Abhi koi signal nahi.</p>
-            <p className="mt-1">Market analysis chal raha hai — 30 second baad dobara check karein.</p>
-            <p className="mt-2 text-xs opacity-70">(Sirf 88+ score wale high-confidence setups yahan dikhte hain.)</p>
+            <p>Wait for high-quality setup</p>
+            <p className="mt-1">Market scan chal raha hai — sirf Tier 1/2/3 setups (85+ score) yahan dikhenge.</p>
+            <p className="mt-2 text-xs opacity-70">(No relaxation. No garbage signals. 85+ score, 3/4+ experts, confirmed candlestick, 1.5x+ volume required.)</p>
           </div>
         ) : (
           <div className="animate-pulse rounded-2xl border p-6 text-center text-sm" style={{ backgroundColor: CARD, borderColor: BORDER, color: MUTED }} role="status">
@@ -477,17 +483,14 @@ export default function SignalsPage() {
             <p className="text-center text-xs" style={{ color: MUTED }} role="status">Live scan chal raha hai…</p>
           )}
           {displayed.map((signal, index) => {
-            // MASLA 6 — every visible card is 88+; a single header tops the list.
+            const tierInfo = scoreTier(signal.score);
+            // MASLA 6 — every visible card is 85+; a single header tops the list.
             const sectionHeader = index === 0 ? (
-              <h2 className="mb-3 flex items-center gap-2 text-sm font-bold" style={{ color: AMBER }}>
-                ⭐ PREMIUM SETUPS — Score 88+ (High-Confidence)
+              <h2 className="mb-3 flex items-center gap-2 text-sm font-bold" style={{ color: tierInfo.color }}>
+                {tierInfo.emoji} {tierInfo.label} — Score {signal.tier === "PREMIUM" ? "95-100" : signal.tier === "STRONG" ? "88-94" : "85-87"}
               </h2>
             ) : null;
             const status = statusOf(signal);
-            const tier = scoreTier(signal.score);
-            // KAAM 3 — derive the strict-engine condition count from the shared
-            // score so the card never overstates it: 100→8/8, 88→7/8, else 6/8.
-            const conditionsCount = signal.score >= 100 ? 8 : signal.score >= 88 ? 7 : 6;
             const full: FullSignal = generateFullSignal({
               symbol: signal.symbol,
               market: signal.market,
@@ -543,17 +546,17 @@ export default function SignalsPage() {
                 {/* Header */}
                 <div className="mb-2 flex items-center justify-between">
                   <span className="text-base font-bold" style={{ color: TEXT }}>{displaySymbol(signal.symbol)}</span>
-                  <span className="flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-bold" style={{ color: GREEN, backgroundColor: "rgba(0,192,135,0.12)" }}>
-                    {tier.emoji} Score: {signal.score}/100
+                  <span className="flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-bold" style={{ color: tierInfo.color, backgroundColor: `${tierInfo.color}20` }}>
+                    {tierInfo.emoji} Score: {signal.score}/100
                   </span>
                 </div>
 
-                {/* KAAM 4/6 — every visible card is 88+ (7-8/8 conditions), so the
+                {/* KAAM 4/6 — every visible card is 85+ (Tier 3 minimum), so the
                     ribbon always shows. Conditions are the shared strict-engine
-                    count (score 100=8/8, 88=7/8); experts is the live X/4 panel. */}
-                <p className="mb-2 text-xs font-bold" style={{ color: AMBER }}>
-                  ⭐ Premium Setup — Institutional-Grade Analysis
-                  {` · ${conditionsCount}/8 Conditions`}
+                    count; experts is the live X/4 panel. Tier is from the API gate. */}
+                <p className="mb-2 text-xs font-bold" style={{ color: tierInfo.color }}>
+                  {tierInfo.emoji} {tierInfo.label}
+                  {` · ${signal.conditionsPassed ?? 0}/8 Conditions`}
                   {signal.experts ? ` · ${signal.experts.consensus.agreed}/4 Experts Confirmed` : ""}
                 </p>
                 {/* Feature 1 — full-width trend badge at the top of the card. */}
@@ -737,3 +740,10 @@ function Line({ icon, label, value, valueColor, note }: { icon?: string; label: 
   );
 }
 
+export default function SignalsPage() {
+  return (
+    <AuthGuard>
+      <SignalsPageContent />
+    </AuthGuard>
+  );
+}

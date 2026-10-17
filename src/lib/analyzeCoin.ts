@@ -21,6 +21,7 @@ import {
   type StrictIndicators,
   type StrictTrend,
 } from "@/src/lib/strictSignalEngine";
+import { calculateIndicators, indicatorsAgreed, type IndicatorRow } from "@/src/lib/indicatorEngine";
 
 /** The 8 mandatory conditions, in the order MASLA 2 lists them. */
 export const CONDITION_ORDER: ConditionId[] = [
@@ -276,7 +277,19 @@ export function analyzeCoin(input: AnalyzeCoinInput): AnalyzeResult {
     conditionsPassed = Math.min(conditionsPassed, 7);
   }
 
-  const { score, quality } = scoreFromConditions(conditionsPassed);
+  // ── 10-Indicator agreement (strict tier gate) ─────────────────────────────
+  // Compute the full 10-indicator panel and count how many agree with the setup
+  // direction. This feeds scoreFromConditions() to place the score in the
+  // correct tier band (85-87 / 88-94 / 95-100).
+  let indicatorsAgreedCount = 0;
+  try {
+    const rows: IndicatorRow[] = calculateIndicators({ candles, direction });
+    indicatorsAgreedCount = indicatorsAgreed(rows);
+  } catch {
+    indicatorsAgreedCount = 0;
+  }
+
+  const { score, quality } = scoreFromConditions(conditionsPassed, indicatorsAgreedCount);
 
   return {
     symbol,

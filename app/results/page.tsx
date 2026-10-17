@@ -1,4 +1,5 @@
 "use client";
+import AuthGuard from "@/components/AuthGuard";
 
 // Results & Tracking page — full A→Z breakdown of every tracked setup.
 // Roman Urdu and English are shown TOGETHER in every section (no language tabs).
@@ -12,12 +13,17 @@ import {
   saveSignals,
   evaluateSignal,
   applyCloudOutcome,
+  cloudStatusToLocal,
+  buildWhy,
+  buildLesson,
   money,
   REFRESH_MS,
   type StoredSignal,
   type SignalStatus,
+  type SignalDirection,
+  type HitTarget,
 } from "@/src/lib/signalStorage";
-import { subscribeSignals, type CloudDoc } from "@/src/lib/signalCloud";
+import { subscribeAllSignals, type CloudDoc } from "@/src/lib/signalCloud";
 
 const GREEN = "#00C087";
 const CARD = "#181A20";
@@ -53,10 +59,86 @@ function fmtDate(ts: number): string {
   return d.toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
 }
 
-/** Score tier badge — 80+ are tracked, so every card is at least "Strong". */
-function scoreTier(score: number): { emoji: string; label: string } {
-  if (score >= 90) return { emoji: "🏆", label: "Excellent" };
-  return { emoji: "⭐", label: "Strong" };
+/**
+ * MASLA 2 — rebuild a full StoredSignal card from a Firestore CloudDoc so the
+ * Results page shows EVERY signal the server emitted (not just ones this
+ * browser happened to save). Missing fields fall back to safe defaults and
+ * both narratives are generated so the card renders identically to a local one.
+ */
+function cloudToStored(doc: CloudDoc & { id?: string }): StoredSignal | null {
+  if (typeof doc?.symbol !== "string" || !doc.symbol) return null;
+  const num = (value: unknown): number =>
+    typeof value === "number" && Number.isFinite(value) ? value : 0;
+  const direction: SignalDirection =
+    doc.direction === "bearish" ? "bearish" : doc.direction === "neutral" ? "neutral" : "bullish";
+  const cloudStatus = String(doc.status ?? "");
+  const status: SignalStatus = cloudStatusToLocal(cloudStatus) ?? "PENDING";
+  const hitRaw = String(doc.hitTarget ?? "");
+  const hitTarget: HitTarget =
+    hitRaw === "TP1" || hitRaw === "TP2" || hitRaw === "TP3" || hitRaw === "SL"
+      ? hitRaw
+      : status === "SUCCESS"
+        ? "TP1"
+        : status === "FAILED"
+          ? "SL"
+          : null;
+  const price = num(doc.price) || num(doc.currentPrice);
+
+  const record: StoredSignal = {
+    id: typeof doc.id === "string" && doc.id ? doc.id : `${doc.market ?? "cloud"}_${doc.symbol}_${doc.createdAt ?? 0}`,
+    symbol: doc.symbol,
+    market: typeof doc.market === "string" && doc.market ? doc.market : "crypto",
+    score: num(doc.score),
+    direction,
+    trend:
+      typeof doc.trend === "string" && doc.trend
+        ? doc.trend
+        : direction === "bearish"
+          ? "Downtrend (Lower Highs / Lower Lows)"
+          : direction === "bullish"
+            ? "Uptrend (Higher Highs / Higher Lows)"
+            : "Sideways / Range",
+    pattern:
+      typeof doc.pattern === "string" && doc.pattern
+        ? doc.pattern
+        : typeof doc.chartPattern === "string" && doc.chartPattern
+          ? doc.chartPattern
+          : "No clear pattern",
+    candlestick:
+      typeof doc.candlestick === "string" && doc.candlestick
+        ? doc.candlestick
+        : typeof doc.candlestickPattern === "string" && doc.candlestickPattern
+          ? `${doc.candlestickPattern} (${doc.candlestickType ?? "neutral"}, ${num(doc.candlestickConfidence)}%)`
+          : "Neutral (no confirmation)",
+    entry1: num(doc.entry1) || price,
+    entry2: num(doc.entry2) || price,
+    stopLoss: num(doc.stopLoss),
+    tp1: num(doc.tp1),
+    tp2: num(doc.tp2),
+    tp3: num(doc.tp3),
+    support: num(doc.support),
+    resistance: num(doc.resistance),
+    createdAt: num(doc.createdAt) || num(Date.parse(String(doc.analyzedAt ?? ""))) || Date.now(),
+    status,
+    hitTarget,
+    currentPrice: num(doc.currentPrice) || price,
+    whyUrdu: "",
+    whyEnglish: "",
+    lessonUrdu: "",
+    lessonEnglish: "",
+  };
+
+  const why = buildWhy(record);
+  const lesson = buildLesson(record.status, record.pattern, record.candlestick);
+  return { ...record, whyUrdu: why.urdu, whyEnglish: why.english, lessonUrdu: lesson.urdu, lessonEnglish: lesson.english };
+}
+
+/** Score tier badge — strict tiers only: PREMIUM (95+), STRONG (88-94), GOOD (85-87). */
+function scoreTier(score: number): { emoji: string; label: string; color: string } {
+  if (score >= 95) return { emoji: "🟢", label: "PREMIUM SETUP", color: "#00C087" };
+  if (score >= 88) return { emoji: "🔵", label: "STRONG SETUP", color: "#3B82F6" };
+  if (score >= 85) return { emoji: "🟡", label: "GOOD SETUP", color: "#F59E0B" };
+  return { emoji: "⚪", label: "REJECTED", color: "#9CA3AF" };
 }
 
 const statusMeta: Record<SignalStatus, { emoji: string; label: string; color: string }> = {
@@ -66,7 +148,7 @@ const statusMeta: Record<SignalStatus, { emoji: string; label: string; color: st
   EXPIRED: { emoji: "⌛", label: "EXPIRED", color: MUTED },
 };
 
-export default function ResultsPage() {
+function ResultsPageContent() {
   const [records, setRecords] = useState<StoredSignal[]>([]);
   const [status, setStatus] = useState<StatusFilter>("all");
   const [time, setTime] = useState<TimeFilter>("all");
@@ -81,21 +163,22 @@ export default function ResultsPage() {
     setLoading(false);
   }, []);
 
-  // MASLA 5/6 — Firestore cross-device sync. The server cron (/api/track-signals,
+  // MASLA 2 — Firestore cross-device sync. The server cron (/api/track-signals,
   // every 5 min) writes WIN/LOSS/EXPIRED into Firestore even while no browser is
-  // open. This real-time listener overlays that authoritative outcome onto the
-  // matching local record (by symbol), so a setup resolved on ANY device — or by
-  // the cron itself — shows the same result here. Only PENDING locals are
-  // upgraded; a local win/loss is never downgraded.
+  // open. This listener:
+  //   1. overlays that authoritative outcome onto matching local records (by
+  //      symbol) — only PENDING locals are upgraded, never downgraded; AND
+  //   2. ADDS every cloud signal this browser does not have yet, so the Results
+  //      page shows the full Firestore set (all categories, correct counts,
+  //      fresh data) instead of a localStorage subset.
   useEffect(() => {
     let cancelled = false;
 
-    function mergeCloud(docs: CloudDoc[]) {
+    function mergeCloud(docs: Array<CloudDoc & { id: string }>) {
       if (cancelled || docs.length === 0) return;
       setRecords((prev) => {
-        if (prev.length === 0) return prev;
-        // Index cloud docs by normalized symbol → most recent outcome wins.
-        const bySymbol = new Map<string, CloudDoc>();
+        // Index cloud docs by normalized symbol → most recent wins.
+        const bySymbol = new Map<string, CloudDoc & { id: string }>();
         for (const doc of docs) {
           if (typeof doc?.symbol !== "string") continue;
           const key = baseKey(doc.symbol);
@@ -105,7 +188,11 @@ export default function ResultsPage() {
             bySymbol.set(key, doc);
           }
         }
+
         let changed = false;
+        const knownKeys = new Set(prev.map((r) => baseKey(r.symbol)));
+
+        // (1) Overlay cloud outcome onto existing PENDING records.
         const merged = prev.map((r) => {
           if (r.status !== "PENDING") return r;
           const doc = bySymbol.get(baseKey(r.symbol));
@@ -115,15 +202,30 @@ export default function ResultsPage() {
             currentPrice: typeof doc.currentPrice === "number" ? doc.currentPrice : undefined,
             hitTarget: typeof doc.hitTarget === "string" ? doc.hitTarget : undefined,
           });
-          if (next !== r && next.status !== r.status) changed = true;
+          if (next !== r) changed = true;
           return next;
         });
-        if (changed) saveSignals(merged);
-        return changed ? merged : prev;
+
+        // (2) Add cloud signals missing locally (this device never saved them).
+        const additions: StoredSignal[] = [];
+        for (const [key, doc] of bySymbol) {
+          if (knownKeys.has(key)) continue;
+          const record = cloudToStored(doc);
+          if (record) additions.push(record);
+        }
+        if (additions.length > 0) changed = true;
+
+        if (!changed) return prev;
+        const next = [...merged, ...additions].sort((a, b) => b.createdAt - a.createdAt);
+        // Bound the store (MAX_SIGNALS) but never drop resolved history silently —
+        // saveSignals keeps the newest MAX_SIGNALS entries, which matches the
+        // Firestore 30-day TTL sweep.
+        saveSignals(next);
+        return next;
       });
     }
 
-    const unsubscribe = subscribeSignals(mergeCloud);
+    const unsubscribe = subscribeAllSignals(mergeCloud);
     return () => {
       cancelled = true;
       unsubscribe();
@@ -478,3 +580,10 @@ function ResultCard({ record: r }: { record: StoredSignal }) {
   );
 }
 
+export default function ResultsPage() {
+  return (
+    <AuthGuard>
+      <ResultsPageContent />
+    </AuthGuard>
+  );
+}
