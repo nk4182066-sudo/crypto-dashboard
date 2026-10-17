@@ -24,6 +24,7 @@ export type LocalIntent =
   | "INDICATOR_HELP"
   | "RISK_HELP"
   | "MARKET_OVERVIEW"
+  | "MARKET_ANALYSIS"
   | "HELP"
   | "UNKNOWN";
 
@@ -40,6 +41,32 @@ export interface LocalResponse {
 
 /** Alias so the chat route can import a neutral `Intent` name. */
 export type Intent = LocalIntent;
+
+/** Which market a bare category request ("Forex", "crypto market", "gold") means. */
+export type MarketScope = "crypto" | "forex" | "metals" | "stocks";
+
+/** Category words (English + Roman Urdu) → market scope. Metals before crypto so
+ *  "gold coin" style phrases stay on the metal; forex matches explicit market
+ *  words only (never bare "usd" — "BTC-USD" mentions would false-positive). */
+const MARKET_SCOPE_WORDS: Array<{ scope: MarketScope; words: string[] }> = [
+  { scope: "forex", words: ["forex", "foreign exchange", "currency market", "currency pair", "currency pairs", "currency trading"] },
+  { scope: "metals", words: ["gold", "silver", "xau", "xag", "xauusd", "xagusd", "sona", "soney", "metal", "metals", "bullion"] },
+  { scope: "crypto", words: ["crypto", "cryptocurrency", "coin", "coins", "token", "tokens", "altcoin", "altcoins"] },
+  { scope: "stocks", words: ["stock market", "stocks", "share market", "shares", "equity market", "nasdaq", "stock"] },
+];
+
+/** Detects a bare market-category request so the chat route can answer with that
+ *  market's REAL engine scan. Fixes the "Forex → Monero" free-association bug:
+ *  a market-class word never reaches the LLM's asset guesswork again. */
+export function detectMarketScope(message: string): MarketScope | null {
+  const lower = message.toLowerCase().replace(/[!?.,،؟]+/g, " ");
+  for (const entry of MARKET_SCOPE_WORDS) {
+    for (const word of entry.words) {
+      if (new RegExp(`\\b${word.replace(/ /g, "\\s+")}\\b`).test(lower)) return entry.scope;
+    }
+  }
+  return null;
+}
 
 /** Normalised signal payload the chat route passes for SIGNAL_DISCUSSION.
  *  Every field is optional — only what the client sent is present. */
@@ -293,6 +320,10 @@ export function detectIntent(message: string): LocalIntent {
   if (hasWord(m, RISK_WORDS)) return "RISK_HELP";
   if (symbol && hasWord(m, ANALYSIS_WORDS)) return "COIN_ANALYSIS";
   if (symbol && hasWord(m, PRICE_WORDS)) return "COIN_PRICE";
+  // Bare market-category request ("Forex", "crypto market", "gold") → the chat
+  // route answers with that market's REAL engine scan (forex majors / metals /
+  // crypto top picks). Never let a generic model guess the asset class again.
+  if (detectMarketScope(message)) return "MARKET_ANALYSIS";
   if (hasWord(m, MARKET_WORDS)) return "MARKET_OVERVIEW";
   if (hasWord(m, HELP_WORDS)) return "HELP";
   if (GREETINGS.some((g) => compact.startsWith(g))) return "GREETING";
@@ -328,8 +359,8 @@ function scoreTier(score: number): string {
 
 export function greetingReply(romanUrdu: boolean): string {
   return romanUrdu
-    ? `Assalam-o-Alaikum! Main ${ASSISTANT} hoon. Main aapko crypto, forex, aur gold ka real-time analysis de sakta hoon. Kisi bhi coin ka naam likhein — jaise "BTC analysis" ya "aaj ke signals dikhao". Bataiye, kya dekhna chahte hain? 😊\n${DISCLAIMER}`
-    : `Hello! I'm ${ASSISTANT}. I can give you real-time crypto, forex, and gold analysis. Name any coin — like "BTC analysis" or "show today's signals". What would you like to look at? 😊\n${DISCLAIMER}`;
+    ? `Assalam-o-Alaikum! Main ${ASSISTANT} hoon. Main aapko crypto, forex, metals aur stocks ka real-time analysis de sakta hoon. Kisi coin ya pair ka naam likhein — jaise "BTC analysis", "forex", "gold" — ya "aaj ke signals dikhao". Bataiye, kya dekhna chahte hain? 😊\n${DISCLAIMER}`
+    : `Hello! I'm ${ASSISTANT}. I can give you real-time crypto, forex, metals, and stocks analysis. Name any coin or pair — like "BTC analysis", "forex", or "show today's signals". What would you like to look at? 😊\n${DISCLAIMER}`;
 }
 
 export function howAreYouReply(romanUrdu: boolean): string {
@@ -343,7 +374,7 @@ export function helpMenu(romanUrdu: boolean): string {
     ? [
         "Bhai, main in cheezon mein madad kar sakta hoon:",
         "",
-        "• \"BTC ka analysis batao\" — kisi bhi coin ki live analysis",
+        "• \"BTC ka analysis batao\" — kisi bhi coin ya pair ki live analysis",
         "• \"aaj ke signals dikhao\" — best trade setups",
         "• \"BTC signal pe baat karein\" — signal discuss (entry / SL / TP)",
         "• \"RSI kya hai?\" — indicators ki seekhai",
@@ -351,13 +382,13 @@ export function helpMenu(romanUrdu: boolean): string {
         "• \"risk calculator\" — position sizing kaise nikalein",
         "• \"market kaisa hai?\" — overall market overview",
         "",
-        "Coin ka naam likh dein aur poochh lein. 😊",
+        "Coin ka naam likh dein — koi bhi coin ya pair — aur poochh lein. 😊",
         DISCLAIMER,
       ].join("\n")
     : [
         "Here's what I can help with:",
         "",
-        "• \"Give me a BTC analysis\" — live analysis of any coin",
+        "• \"Give me a BTC analysis\" — live analysis of any coin or pair",
         "• \"Show today's signals\" — best trade setups",
         "• \"Let's discuss the BTC signal\" — talk through entry / SL / TP",
         "• \"What is RSI?\" — learn indicators",
@@ -743,6 +774,7 @@ export async function generateResponse(
       return signalDiscussionReply(message, context.signal ?? null);
     case "SIGNAL_QUERY":
     case "COIN_ANALYSIS":
+    case "MARKET_ANALYSIS":
     default:
       // COIN_ANALYSIS / SIGNAL_QUERY need full multi-timeframe engine analysis,
       // which the chat route runs on the paid/engine path. Give a helpful nudge.

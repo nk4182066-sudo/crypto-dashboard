@@ -1,5 +1,7 @@
 "use client";
 
+import AuthGuard from "@/components/AuthGuard";
+
 // Chart Patterns Library — searchable grid of all 25 chart patterns from the
 // existing catalogue. Click a card -> /chart-patterns/[name]. Educational only.
 import { useMemo, useState } from "react";
@@ -31,6 +33,14 @@ function categoryLabel(category: PatternCategory): string {
 }
 
 export default function ChartPatternsPage() {
+  return (
+    <AuthGuard>
+      <ChartPatternsPageContent />
+    </AuthGuard>
+  );
+}
+
+function ChartPatternsPageContent() {
   const [query, setQuery] = useState("");
 
   const filtered = useMemo(() => {

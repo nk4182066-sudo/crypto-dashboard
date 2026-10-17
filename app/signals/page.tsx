@@ -251,10 +251,18 @@ function SignalsPageContent() {
   // open — `tick` changes every 30s, which re-runs that freshness filter.
   const signals = useMemo(() => {
     const now = Date.now();
-    const fresh = (signal: MarketSignal): boolean => {
-      const stamp = Date.parse(signal.analyzedAt);
-      return Number.isFinite(stamp) && now - stamp < SIGNAL_TTL_MS;
+    // Firestore PENDING docs ship `analyzedAt: null` (only `createdAt` is set) —
+    // the old `Date.parse(null)` → NaN check silently DROPPED all 7 stored
+    // pending signals, which is exactly why the page rendered "0 setups" while
+    // the Results page showed 7 pending. Fall back to createdAt; a doc with
+    // neither timestamp is still kept (sweepExpired already deletes past TTL).
+    const stampOf = (signal: MarketSignal): number => {
+      const parsed = Date.parse(signal.analyzedAt || "");
+      if (Number.isFinite(parsed)) return parsed;
+      const created = (signal as { createdAt?: number }).createdAt;
+      return typeof created === "number" && Number.isFinite(created) ? created : now;
     };
+    const fresh = (signal: MarketSignal): boolean => now - stampOf(signal) < SIGNAL_TTL_MS;
     const byKey = new Map<string, MarketSignal>();
     const put = (signal: MarketSignal) => {
       const key = `${signal.market}:${signal.symbol}`;
@@ -263,8 +271,9 @@ function SignalsPageContent() {
         byKey.set(key, signal);
         return;
       }
-      const previousAt = Date.parse(previous.analyzedAt) || 0;
-      const incomingAt = Date.parse(signal.analyzedAt) || 0;
+      // Newest analysis wins (the live API is applied last so it wins ties).
+      const previousAt = stampOf(previous);
+      const incomingAt = stampOf(signal);
       if (incomingAt > previousAt || (incomingAt === previousAt && signal.score >= previous.score)) {
         byKey.set(key, signal);
       }
@@ -286,12 +295,17 @@ function SignalsPageContent() {
   // so the strict-empty relaxation cards (app/api/signals/live fallback) show
   // instead of an empty tab — every card still derives its REAL X/8 count.
   // Highest score first. Ordering/filter only — the hard gates live in the API.
-  const displayed = useMemo(
-    () => signals
+  const displayed = useMemo(() => {
+    const ranked = signals
       .filter((s) => s.score >= DISPLAY_MIN_SCORE)
-      .sort((first, second) => second.score - first.score),
-    [signals],
-  );
+      .sort((first, second) => second.score - first.score);
+    if (ranked.length > 0) return ranked;
+    // TIER 3 (page-level) — the live scan + score floor produced nothing, but
+    // stored PENDING setups exist (Firestore / localStorage backup). Show them
+    // anyway: a tab must NEVER render an empty screen while old pending
+    // signals are available.
+    return [...signals].sort((first, second) => second.score - first.score);
+  }, [signals]);
 
   // MASLA 1 — stored setups (Firestore + localStorage backup) carried OLD
   // confidence-style scores. Re-run the SHARED analyzeCoin() on the SAME

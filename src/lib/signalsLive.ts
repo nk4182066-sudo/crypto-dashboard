@@ -117,13 +117,16 @@ export interface StrictNearMiss {
 
 /** Evaluates ONE candidate against the strict 8/8 + 4/4 gate. Returns null if
  * rejected; qualifying near misses (>=5/8 conditions + >=3/4 experts) are also
- * pushed into `nearMisses` (when provided) for the zero-signal fallback. */
+ * pushed into `nearMisses` (when provided) for the Tier-2 relaxation flush, and
+ * weaker misses (>=4/8 conditions + >=2/4 experts) into `weakMisses` for the
+ * Tier-3 last-resort flush. */
 export async function evaluateStrict(
   candidate: { symbol: string; label: string; market: ScanMarket; reason: string },
   h1: Candle[],
   h4: Candle[],
   d1: Candle[],
   nearMisses?: StrictNearMiss[],
+  weakMisses?: StrictNearMiss[],
 ): Promise<EmittedMarketSignal | null> {
   if (h1.length < 20) return null;
 
@@ -189,11 +192,14 @@ export async function evaluateStrict(
           `, dir=${full.direction}, score=${full.score}`,
       );
     }
-    // Relaxation buffer — the SAME >=5/8 + >=3/4 bar /api/market-signals keeps.
-    // Never emitted while ANY strict signal exists; only the zero-signal flush
-    // reads it (getStrictSignals), best-first up to the market cap.
+    // Relaxation buffers — the SAME >=5/8 + >=3/4 bar /api/market-signals keeps
+    // (Tier 2), plus a weaker >=4/8 + >=2/4 bar (Tier 3, last resort). Strict
+    // 8/8 + 4/4 always wins; the flushes only fill slots strict left empty.
     if (nearMisses && full.conditionsPassed >= 5 && experts !== null && experts.consensus.total === 4 && experts.consensus.agreed >= 3) {
       nearMisses.push({ item: candidate, full, confirmations, indicators, experts });
+    }
+    if (weakMisses && full.conditionsPassed >= 4 && experts !== null && experts.consensus.total === 4 && experts.consensus.agreed >= 2) {
+      weakMisses.push({ item: candidate, full, confirmations, indicators, experts });
     }
     return null;
   }
@@ -308,6 +314,7 @@ export async function getStrictSignals(market: ScanMarket, limit?: number, origi
 
   const results: EmittedMarketSignal[] = [];
   const nearMisses: StrictNearMiss[] = [];
+  const weakMisses: StrictNearMiss[] = [];
   let scanned = 0;
   let noCandles = 0;
   let rejected = 0;
@@ -341,7 +348,7 @@ export async function getStrictSignals(market: ScanMarket, limit?: number, origi
       const [h1, h4, d1] = candleSets[index];
       scanned += 1;
       if (h1.length < 20) { noCandles += 1; continue; }
-      const signal = await evaluateStrict(item, h1, h4, d1, nearMisses);
+      const signal = await evaluateStrict(item, h1, h4, d1, nearMisses, weakMisses);
       if (!signal) { rejected += 1; continue; }
       // 88+ emission floor (8/8 = 100; the no-pattern guard caps a card at 7/8 = 88).
       if (signal.score < 88) { belowFloor += 1; continue; }
@@ -349,26 +356,28 @@ export async function getStrictSignals(market: ScanMarket, limit?: number, origi
     }
   }
 
-  // RELAXATION FLUSH (user spec: "agar 0 signals hain to conditions relax karo"
-  // — the policy /api/market-signals has always shipped): ONLY when the strict
-  // 8/8 + 4/4 pass produced NOTHING for this market, slot the best
-  // >=5/8-conditions + >=3/4-experts near misses in, best-first, up to the
-  // market cap. Cards keep their REAL condition count and honest score; the
-  // strict gate stays untouched whenever it fires.
-  if (results.length === 0 && nearMisses.length > 0) {
-    nearMisses.sort(
+  // TIERED RELAXATION FLUSH — strict 8/8 + 4/4 (Tier 1) always wins; whatever
+  // slots it leaves are filled Tier 2 first (>=5/8 conditions + >=3/4 experts),
+  // then Tier 3 last-resort (>=4/8 + >=2/4) so a market tab is never blank.
+  // Cards keep their REAL condition count and honest score.
+  const relaxCap = limit ?? LIVE_CAPS[market];
+  const flush = (buffer: StrictNearMiss[]) => {
+    buffer.sort(
       (a, b) =>
         b.full.conditionsPassed - a.full.conditionsPassed ||
         (b.experts?.consensus.agreed ?? 0) - (a.experts?.consensus.agreed ?? 0) ||
         b.full.score - a.full.score,
     );
-    const relaxCap = limit ?? LIVE_CAPS[market];
-    for (const near of nearMisses) {
+    for (const near of buffer) {
       if (results.length >= relaxCap) break;
       results.push(toEmittedSignal(near.item, near.full, near.confirmations, near.indicators, near.experts));
       relaxed += 1;
     }
-    console.log(`[signalsLive] ${market}: strict pass empty → RELAXED ${relaxed} near-miss(es) (best ${nearMisses[0].full.conditionsPassed}/8)`);
+  };
+  if (results.length < relaxCap && nearMisses.length > 0) flush(nearMisses);
+  if (results.length < relaxCap && weakMisses.length > 0) flush(weakMisses);
+  if (relaxed > 0) {
+    console.log(`[signalsLive] ${market}: relaxed ${relaxed} signal(s) to reach ${results.length}/${relaxCap} (Tier2=${nearMisses.length}, Tier3=${weakMisses.length})`);
   }
 
   if (limit === undefined) {

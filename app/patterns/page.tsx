@@ -1,5 +1,7 @@
 "use client";
 
+import AuthGuard from "@/components/AuthGuard";
+
 // Patterns menu — two big buttons linking to the candlestick and chart pattern
 // libraries. Educational only. Not financial advice.
 import Link from "next/link";
@@ -11,6 +13,14 @@ const MUTED = "#9CA3AF";
 const GREEN = "#00C087";
 
 export default function PatternsPage() {
+  return (
+    <AuthGuard>
+      <PatternsPageContent />
+    </AuthGuard>
+  );
+}
+
+function PatternsPageContent() {
   return (
     <main className="mx-auto max-w-3xl px-4 py-6">
       <p className="text-xs uppercase tracking-wide" style={{ color: MUTED }}>Library</p>

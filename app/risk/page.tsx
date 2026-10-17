@@ -1,5 +1,7 @@
 "use client";
 
+import AuthGuard from "@/components/AuthGuard";
+
 // Risk Manager — simple educational position-size calculator.
 // 3 inputs (balance, leverage, risk %), auto-computed as you type; the
 // Calculate button re-runs the same handler and confirms the snapshot.
@@ -35,6 +37,14 @@ function money(value: number): string {
 }
 
 export default function RiskPage() {
+  return (
+    <AuthGuard>
+      <RiskPageContent />
+    </AuthGuard>
+  );
+}
+
+function RiskPageContent() {
   const [balance, setBalance] = useState<string>("1000");
   const [leverage, setLeverage] = useState<number>(1);
   const [riskPercent, setRiskPercent] = useState<string>("1");

@@ -1,5 +1,6 @@
 "use client";
 
+import AuthGuard from "@/components/AuthGuard";
 // AI Assistant chat page — single window, fast, text-only replies.
 // Educational analysis only. Not financial advice.
 import { useCallback, useEffect, useMemo, useRef, useState, Suspense } from "react";
@@ -107,6 +108,14 @@ function extractReply(payload: unknown): string {
 }
 
 export default function ChatPage() {
+  return (
+    <AuthGuard>
+      <ChatPageContent />
+    </AuthGuard>
+  );
+}
+
+function ChatPageContent() {
   return (
     <Suspense fallback={<div className="flex min-h-screen items-center justify-center" style={{ backgroundColor: BG, color: MUTED }}>Loading chat…</div>}>
       <ChatPageInner />

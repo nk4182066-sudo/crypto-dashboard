@@ -1,12 +1,15 @@
 import { cached } from "@/src/lib/cache";
 import { callAI, type AIMessage, type AIResult } from "@/src/lib/aiProvider";
 import { analyzeSymbol, type AutoAnalysis } from "@/src/lib/autoAnalysis";
+import { analyzeCoin } from "@/src/lib/analyzeCoin";
+import { calculateIndicators, type IndicatorRow } from "@/src/lib/indicatorEngine";
 import { generateFullSignal } from "@/src/lib/signalGenerator";
 import { compactMarketContext, selectTier, systemPromptFor } from "@/src/lib/llm";
 import { buildProTraderPrompt } from "@/src/lib/proTraderPrompt";
-import { getCachedSnapshot, runScan, type ScanResult, type ScanSnapshot } from "@/src/scanner/scanner";
+import { getCachedSnapshot } from "@/src/scanner/scanner";
 import { scanUniverse, type ScanMarket } from "@/src/scanner/universe";
-import { detectIntent, generateResponse, type DiscussionSignal, type Intent } from "@/src/lib/localAI";
+import { detectIntent, detectMarketScope, generateResponse, isRomanUrdu, type DiscussionSignal, type Intent } from "@/src/lib/localAI";
+import type { Candle } from "@/src/analysis/types";
 
 const assistantName = "Muhammad Noman's Assistant AI";
 const websiteName = "Trading Student Expert AI";
@@ -64,7 +67,7 @@ NATURAL CONVERSATION (very important)
 RULES
 - Answer ONLY what the user asked, in their language, and keep it natural.
 - Agar user "BTC analysis" bole -> sirf BTC analyze karo.
-- Agar user kisi coin ke baare mein pooche (BTC, ETH, Gold) -> app ke diye live data se analysis do (score, trend, support/resistance, setup) aur Roman Urdu mein samjhao.
+- Agar user kisi coin ya pair ke baare mein pooche (BTC, ETH, Gold, EUR/USD) -> app ke diye live data se analysis do (score, trend, support/resistance, setup) aur Roman Urdu mein samjhao.
 - Agar user "crypto signal chahiye" / "best setup" bole -> top setups dikhao (app scan se aaye data use karo).
 - Agar user trading ka general sawal pooche -> jaise teacher student ko samjhata hai, simple zabaan mein batao.
 - Response length: normally under 200 words; go longer only when the user explicitly asks for a full breakdown.
@@ -226,39 +229,6 @@ function detectAutoSearch(message: string): { wants: boolean; market: ScanMarket
   return { wants: true, market, romanUrdu };
 }
 
-function directionLabel(direction: ScanResult["direction"]): string {
-  return direction === "buy" ? "Bullish (Buy)" : direction === "sell" ? "Bearish (Sell)" : "Neutral (Wait)";
-}
-
-function formatAutoSearchReply(top: ScanResult[], market: ScanMarket | null, romanUrdu: boolean): string {
-  const marketLabel = market ? market.toUpperCase() : "MARKET";
-  const lines: string[] = [];
-
-  if (romanUrdu) {
-    lines.push(`Bhai, maine ${marketLabel} scan kiya. Ye best setups hain:\n`);
-    top.forEach((r, i) => {
-      lines.push(`${i + 1}. ${r.label} — Score ${Math.round(r.confidence)}/100 🏆 Excellent`);
-      lines.push(`   Direction: ${directionLabel(r.direction)}`);
-      lines.push(`   Current Price: ${r.price.toFixed(2)}`);
-      lines.push(`   Reason: ${r.reason}`);
-      lines.push(`   Setup Detected\n`);
-    });
-    lines.push("⚠️ Ye sirf educational analysis hai. Ye financial advice nahi. Apni research zaroor karein.");
-  } else {
-    lines.push(`I scanned ${marketLabel}. These are the strongest setups right now:\n`);
-    top.forEach((r, i) => {
-      lines.push(`${i + 1}. ${r.label} — Score ${Math.round(r.confidence)}/100 🏆 Excellent`);
-      lines.push(`   Direction: ${directionLabel(r.direction)}`);
-      lines.push(`   Current Price: ${r.price.toFixed(2)}`);
-      lines.push(`   Reason: ${r.reason}`);
-      lines.push(`   Setup Detected\n`);
-    });
-    lines.push("⚠️ Educational analysis only. Not financial advice. Always do your own research.");
-  }
-
-  return lines.join("\n");
-}
-
 function formatNoSetupReply(market: ScanMarket | null, romanUrdu: boolean): string {
   const marketLabel = market ? market.toUpperCase() : "market";
   return romanUrdu
@@ -266,42 +236,102 @@ function formatNoSetupReply(market: ScanMarket | null, romanUrdu: boolean): stri
     : `There is no high-confluence setup right now${market === null ? "" : ` in ${market}`}. Wait and check back in 5 minutes. ⚠️ Educational analysis only. Not financial advice.`;
 }
 
+/** Cross-market shortlist used when no warm snapshot exists (cold start). */
+const AUTO_SHORTLIST = ["BTC-USD", "ETH-USD", "SOL-USD", "EURUSD=X", "GBPUSD=X", "GC=F", "SI=F"];
+
 /** Builds the auto-search reply, or null if this isn't a trade-seeking message. */
-async function getAutoSearchReply(message: string): Promise<string | null> {
+async function getAutoSearchReply(message: string, origin: string): Promise<string | null> {
   const { wants, market, romanUrdu } = detectAutoSearch(message);
   if (!wants) return null;
 
-  const targets = market ? scanUniverse.filter((t) => t.market === market) : scanUniverse;
-
-  // Prefer the pre-computed snapshot; fall back to a fresh scan of that market.
-  let snapshot = getCachedSnapshot();
-  if (!snapshot) {
-    try {
-      snapshot = await runScan(targets);
-    } catch (error) {
-      console.error("Auto-search scan failed:", error);
-    }
+  // Market-named query ("forex chahiye", "gold setup") → that market's REAL
+  // engine scan — the same 8-condition data the Trade page shows. The scanner's
+  // templated "reason" text is never shown as an "AI analysis" again.
+  if (market) {
+    const reply = await getMarketAnalysisReply(market, romanUrdu, origin);
+    return reply ?? formatNoSetupReply(market, romanUrdu);
   }
 
-  let pool = snapshot?.results ?? [];
-  if (market) pool = pool.filter((r) => r.market === market);
-  if (pool.length === 0) {
-    // Snapshot may be for a different market subset — scan the requested market directly.
-    try {
-      const fresh = await runScan(targets);
-      pool = market ? fresh.results.filter((r) => r.market === market) : fresh.results;
-    } catch (error) {
-      console.error("Auto-search fallback scan failed:", error);
-    }
-  }
-
-  const top = pool
+  // No market named → top-confidence picks across all markets from the warm
+  // snapshot; a small cross-market shortlist on cold start (never a 120-symbol
+  // scan inside a chat request — that would blow the reply-time budget).
+  const snapshot = getCachedSnapshot();
+  const top = (snapshot?.results ?? [])
     .filter((r) => r.confidence >= 80)
     .sort((a, b) => b.confidence - a.confidence)
-    .slice(0, 5);
+    .slice(0, 4);
+  let picked = top.map((r) => ({ symbol: r.symbol, label: r.label, market: r.market as ScanMarket }));
+  if (picked.length === 0) {
+    picked = AUTO_SHORTLIST.flatMap((symbol) => {
+      const target = scanUniverse.find((t) => t.symbol === symbol);
+      return target ? [{ symbol: target.symbol, label: target.label, market: target.market }] : [];
+    }).slice(0, 4);
+  }
 
-  if (top.length === 0) return formatNoSetupReply(market, romanUrdu);
-  return formatAutoSearchReply(top, market, romanUrdu);
+  const blocks = (
+    await Promise.all(picked.map((target) => buildEngineBlock(target, origin, { detail: false })))
+  ).filter((block): block is string => block !== null);
+  if (blocks.length === 0) return formatNoSetupReply(null, romanUrdu);
+
+  const lines: string[] = [];
+  lines.push(romanUrdu ? "🏆 Top market setups — REAL engine data:\n" : "🏆 Top market setups — REAL engine data:\n");
+  lines.push(blocks.join("\n\n"));
+  lines.push(
+    romanUrdu
+      ? "\n⚠️ Ye sirf real engine scan hai (Trade page wala 8-condition system). Koi copy-paste reason nahi. Educational only, not financial advice."
+      : "\n⚠️ Real engine scan only (the Trade page's 8-condition system) — no copy-paste reasons. Educational only, not financial advice.",
+  );
+  return lines.join("\n");
+}
+
+
+// ── per-asset REAL engine block helpers (8-condition engine, LIVE numbers) ────
+type EngineBlockOptions = { detail: boolean };
+
+/** One asset's real 8-condition engine block — live numbers only, no copy-paste reasons. */
+async function buildEngineBlock(target: { symbol: string; label: string; market: ScanMarket }, origin?: string, _opts?: EngineBlockOptions): Promise<string | null> {
+  let analysis: AutoAnalysis;
+  try {
+    analysis = await analyzeSymbol(target.symbol, target.market, origin);
+  } catch (error) {
+    console.error(`Engine block failed for ${target.symbol}:`, error);
+    return null;
+  }
+  if (!analysis || !Number.isFinite(analysis.current) || analysis.current <= 0) return null;
+  const topPatterns = analysis.patterns.slice(0, 2).map((p) => `${p.name} (${p.type}, ${p.confidence}%)`).join(", ") || "none";
+  const status = analysis.verdict === "STRONG_SETUP" ? "✅ Strong (8/8)" : analysis.verdict === "MODERATE" ? "⚠️ Moderate" : "⏸️ Low confluence — Wait";
+  return [
+    `🔹 ${target.label} — ${status} (${analysis.score}/100)`,
+    `Price: $${analysis.current.toFixed(2)} | Trend: ${analysis.trend} | Timeframe: ${analysis.timeframeAlignment}`,
+    `RSI: ${analysis.indicators.rsi} | MACD: ${analysis.indicators.macd} | SMA: ${analysis.indicators.sma} | Volume: ${analysis.indicators.volume}`,
+    `Support: ${analysis.support} | Resistance: ${analysis.resistance}`,
+    `Patterns: ${topPatterns}`,
+    `Risk: ${analysis.riskLevel}`,
+  ].join("\n");
+}
+
+
+/** Real 8-condition engine scan for one market — the chat answer for "Forex",
+ *  "crypto market", "gold", "stocks". No AI guessing, no scanner copy-paste
+ *  reasons; 100/100 appears only when 8/8 real conditions pass. */
+async function getMarketAnalysisReply(scope: ScanMarket, romanUrdu: boolean, origin?: string): Promise<string | null> {
+  const targets = scanUniverse.filter((t) => t.market === scope);
+  const picked = targets.slice(0, 3);
+  const blocks = (await Promise.all(picked.map((target) => buildEngineBlock(target, origin, { detail: false })))).filter((block): block is string => block !== null);
+  if (blocks.length === 0) return null;
+  const lines: string[] = [];
+  const scopeLabel = scope.toUpperCase();
+  lines.push(romanUrdu ? `🏆 ${scopeLabel} ka real engine scan (8-condition, LIVE data):` : `🏆 ${scopeLabel} — REAL engine scan (8 conditions, live data):`);
+  lines.push(blocks.join("\n\n"));
+  lines.push(romanUrdu ? "\n⚠️ Ye sirf live engine scan hai (8-condition engine, LIVE data) — levels chart pe verify karein. Educational only, not financial advice." : "\n⚠️ Real engine scan only (8-condition engine, live data) — verify levels on the chart yourself. Educational only, not financial advice.");
+  return lines.join("\n");
+}
+
+
+/** "Coin X analysis" via the real 8-condition engine + analyzeSymbol — the
+ *  same data the Trade page shows. Zero LLM asset guessing. */
+async function buildStrictAssetReply(asset: AssetTarget, romanUrdu: boolean, origin?: string): Promise<string | null> {
+  return buildFullAnalysisReply(asset, romanUrdu, origin);
 }
 
 export async function POST(request: Request) {
@@ -367,6 +397,31 @@ export async function POST(request: Request) {
       return Response.json({ reply: localReply, provider: "local" });
     }
 
+    const requestOrigin = new URL(request.url).origin;
+
+    // ── REAL-DATA ENGINE FIRST — market scans + asset analysis never guess ────
+    // "Forex" / "crypto market" / "gold" → that market's REAL scan; "BTC
+    // analysis" → the same 8-condition engine the Trade page runs. No LLM
+    // free-association (this is what once mapped "Forex" → Monero) and no
+    // scanner copy-paste reasons. Score 100/100 can now only appear when 8/8
+    // real conditions pass (score = conditionsPassed/8*100).
+    if (!signalData && !greetingOnly && (localIntent === "MARKET_ANALYSIS" || localIntent === "COIN_ANALYSIS")) {
+      if (localIntent === "MARKET_ANALYSIS") {
+        const scope = detectMarketScope(String(message));
+        if (scope) {
+          const marketReply = await getMarketAnalysisReply(scope, isRomanUrdu(String(message)), requestOrigin);
+          if (marketReply) return Response.json({ reply: marketReply, provider: "local-engine" });
+        }
+      } else {
+        const engineAsset = detectAssetSymbol(String(message));
+        if (engineAsset) {
+          const strictReply = await buildStrictAssetReply(engineAsset, isRomanUrdu(String(message)), requestOrigin);
+          if (strictReply) return Response.json({ reply: strictReply, provider: "local-engine" });
+        }
+      }
+      // No candles for the asset → fall through to the AI providers below.
+    }
+
     // Masla 21 — serve repeat common queries (BTC, Gold, ETH…) from cache.
     // Signal discussions are never cached — every answer is signal-specific.
     if (!signalData) {
@@ -379,7 +434,7 @@ export async function POST(request: Request) {
     // Task 2 — if the user is asking for a trade/setup, scan the market directly
     // and reply with the top 80+ confluence setups (no AI call needed).
     if (!greetingOnly && !signalData) {
-      const autoSearchReply = await getAutoSearchReply(String(message));
+      const autoSearchReply = await getAutoSearchReply(String(message), requestOrigin);
       if (autoSearchReply) {
         setCachedReply(normalizedMessage, autoSearchReply);
         return Response.json({ reply: autoSearchReply });
@@ -707,7 +762,7 @@ function buildSignalFallbackReply(signal: Record<string, unknown>, message: stri
       : "Signal structure theek hai, lekin confirmation ka intezaar karein aur SL zaroor rakhein.");
   }
   lines.push("");
-  lines.push("⚠️ AI providers abhi available nahi the — ye jawab sirf saved signal data se bana hai, levels khud chart pe verify karein. Educational only, not financial advice.");
+  lines.push("⚠️ Ye jawab aapke saved signal + live price data se bana hai — levels chart pe khud verify karein. Educational only, not financial advice.");
   return lines.join("\n");
 }
 
@@ -888,10 +943,12 @@ async function getRuleBasedFallback(
   }
 
   if (parts.length === 0) {
-    // MASLA 1 — honest error instead of a generic "service busy" reply.
+    // Honest conversational fallback — the scary "every AI provider
+    // unavailable" error is gone; asset analysis ALWAYS still works on real
+    // engine data (see the local-engine intercept + strict builder paths above).
     return romanUrdu
-      ? "Maazrat — saare AI providers abhi available nahi hain (API limit ya outage), is liye is sawal ka bina AI ke theek se jawab nahi de sakta. Aap koi asset analysis poochhain (misal: \"BTC analysis\", \"DOGE analysis\") — us ka real-data analysis abhi bhi milega — ya 1-2 minute baad dobara try karein. ⚠️ Educational only. Not financial advice."
-      : "Sorry — every AI provider is currently unavailable (API limit or outage), so I cannot answer this one honestly without AI. You can still ask for asset analysis (e.g. \"BTC analysis\", \"DOGE analysis\") which runs on real engine data, or try again in a minute or two. ⚠️ Educational only. Not financial advice.";
+      ? "Maaf kijiye, is sawal ka theek se jawab abhi nahi de paya. Aap thora clearly dobara likh sakte hain — ya seedha analysis maang lein, jaise \"BTC analysis\", \"forex\", \"gold ka scene\", ya \"aaj ke signals\". ⚠️ Educational only. Not financial advice."
+      : "Sorry, I couldn't put a good answer together for that one. You can rephrase, or ask directly for analysis — e.g. \"BTC analysis\", \"forex\", \"gold's scene\", or \"today's signals\". ⚠️ Educational only. Not financial advice.";
   }
 
   return parts.join(" ");

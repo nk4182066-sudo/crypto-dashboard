@@ -1,5 +1,7 @@
 "use client";
 
+import AuthGuard from "@/components/AuthGuard";
+
 // Candlestick pattern detail page. Reads the pattern name from the route and
 // renders its catalogue entry with [Roman Urdu] [English] tabs (default Urdu,
 // choice saved to localStorage). Educational only. Not financial advice.
@@ -33,6 +35,14 @@ function typeColor(type: PatternType): string {
 }
 
 export default function CandlestickDetailPage() {
+  return (
+    <AuthGuard>
+      <CandlestickDetailPageContent />
+    </AuthGuard>
+  );
+}
+
+function CandlestickDetailPageContent() {
   const params = useParams();
   const rawName = Array.isArray(params.name) ? params.name[0] : params.name;
   const name = typeof rawName === "string" ? decodeURIComponent(rawName) : "";

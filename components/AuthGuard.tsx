@@ -18,7 +18,7 @@ import { useRouter, usePathname } from "next/navigation";
 import { auth } from "@/src/lib/firebase";
 
 // Public routes — login / signup are open to everyone (no auth required).
-const PUBLIC_ROUTES = ["/login", "/signup"];
+const PUBLIC_ROUTES = ["/login", "/signup", "/terms", "/privacy"];
 
 export default function AuthGuard({
   children,

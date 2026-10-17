@@ -1,5 +1,7 @@
 "use client";
 
+import AuthGuard from "@/components/AuthGuard";
+
 // Candlestick Patterns Library — searchable, grouped grid of all 30 patterns
 // from the existing catalogue: Bullish (10), Bearish (10), Neutral (5) and
 // Multi-candle (5). Click a card -> /candlestick/[name]. Educational only.
@@ -56,6 +58,14 @@ function buildGroups(): PatternGroup[] {
 }
 
 export default function CandlestickPage() {
+  return (
+    <AuthGuard>
+      <CandlestickPageContent />
+    </AuthGuard>
+  );
+}
+
+function CandlestickPageContent() {
   const [query, setQuery] = useState("");
 
   const filtered = useMemo(() => {

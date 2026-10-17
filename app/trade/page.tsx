@@ -554,7 +554,7 @@ function TradeChart() {
               }
               market={dataMarket}
               autoAnalyze={false}
-              height={isFullscreen ? undefined : 420}
+              height={undefined}
             />
             </>
           )}
