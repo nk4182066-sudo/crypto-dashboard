@@ -519,3 +519,4 @@ export function toCloudDoc(signal: EmittedMarketSignal): CloudDoc | null {
   }
 }
 
+
