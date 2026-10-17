@@ -5,7 +5,7 @@ import AuthGuard from "@/components/AuthGuard";
 // for that market (all-coins API scans the full universe), sorted by score
 // highest first. Educational analysis only — never "Buy now", "accuracy", "Guaranteed", "signal".
 // Neutral educational tone — educational analysis only.
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import PatternLanguageTabs, { type PatternDetailLanguage } from "@/components/PatternLanguageTabs";
@@ -82,6 +82,11 @@ interface MarketSignal {
   experts?: { educators: EducatorVerdict[]; consensus: Consensus } | null;
   /** STRICT tier — PREMIUM / STRONG / GOOD. Optional on stored/legacy records. */
   tier?: "PREMIUM" | "STRONG" | "GOOD";
+  /** ATR(14) behind the DYNAMIC TP/SL plan (legacy docs → null until the
+   *  rescoring pass fills it from fresh 1h candles — atrPlan.ts). */
+  atr?: number | null;
+  /** Plan timeframe class in minutes (60 = 1h signals). */
+  timeframeMinutes?: number | null;
 }
 
 const TABS: { key: Market; label: string }[] = [
@@ -245,6 +250,15 @@ function SignalsPageContent() {
     };
   }, []);
 
+  // MASLA 1 rescoring patches — shared-engine recomputes (score / conditions /
+  // ATR) for stored records. Declared BEFORE the `signals` memo below, which
+  // merges these patches over the stored rows at render time.
+  const [rescoring, setRescoring] = useState<Record<string, Partial<MarketSignal>>>({});
+  // One fetch attempt per market:symbol per page session — a failed attempt is
+  // released (see the effect) so the next 30s tick can retry, but a completed
+  // one is never re-fetched, which is what keeps the effect out of any loop.
+  const rescoringTriedRef = useRef<Set<string>>(new Set());
+
   // Merge live API + cloud + backup into one list: one card per market:symbol,
   // newest analysis wins (the live API is applied last so it wins ties).
   // Stored copies older than the 30-day retention drop out while the page is
@@ -286,9 +300,18 @@ function SignalsPageContent() {
     backupSignals.filter(fresh).filter(inMarket).forEach(put);
     cloudSignals.filter(fresh).filter(inMarket).forEach(put);
     apiSignals.filter(inMarket).forEach(put);
-    return [...byKey.values()];
+    // Merge the SHARED-engine rescoring patches (score / conditions / ATR) over
+    // stored records — WITHOUT this, legacy Firestore cards kept their stale
+    // stored score and never gained the dynamic-plan `atr` (the state above was
+    // computed but never read). Fresh API rows are untouched: they were never
+    // targeted (they already ship conditionsPassed + atr).
+    const merged = [...byKey.values()].map((signal): MarketSignal => {
+      const patch = rescoring[`${signal.market}:${signal.symbol}`];
+      return patch ? { ...signal, ...patch } : signal;
+    });
+    return merged;
     // eslint-disable-next-line react-hooks/exhaustive-deps -- `tick` intentionally re-triggers the TTL filter
-  }, [apiSignals, cloudSignals, backupSignals, tick, market]);
+  }, [apiSignals, cloudSignals, backupSignals, tick, market, rescoring]);
 
   // MASLA 6 — engine strict tier = 7/8 (88); the HIGH-CONFIDENCE badge stays at
   // MIN_SCORE (88). The list itself renders from DISPLAY_MIN_SCORE (75 = 6/8)
@@ -312,14 +335,21 @@ function SignalsPageContent() {
   // /api/market/history candles the Trade page uses, so every card's score,
   // conditions count, direction, pattern and support/resistance EQUALs the
   // Trade page for that same coin. Fresh API signals already ship
-  // conditionsPassed and are skipped; a failure keeps the original value.
-  const [rescoring, setRescoring] = useState<Record<string, Partial<MarketSignal>>>({});
+  // conditionsPassed + atr and are skipped. Also fills `atr` (DYNAMIC TP/SL
+  // plan input) for legacy docs that predate the ATR-based plan. The results
+  // are merged into the list by the `signals` memo above.
   useEffect(() => {
-    const targets = displayed.filter((s) => s.conditionsPassed == null);
+    const targets = displayed.filter((signal) => {
+      if (signal.conditionsPassed != null && signal.atr != null) return false;
+      const key = `${signal.market}:${signal.symbol}`;
+      if (rescoringTriedRef.current.has(key)) return false;
+      rescoringTriedRef.current.add(key);
+      return true;
+    });
     if (targets.length === 0) return;
     let cancelled = false;
     void (async () => {
-      const entries: Array<[string, Partial<MarketSignal>] | null> = [];
+      const entries: Array<[string, Partial<MarketSignal>]> = [];
       for (const target of targets) {
         if (cancelled) break;
         try {
@@ -353,16 +383,26 @@ function SignalsPageContent() {
                 : null,
               candlestickPattern: full.candlestick,
               candlestickConfidence: full.candlestickConfidence,
+              // DYNAMIC plan input — same 1h ATR the Trade chart reads.
+              atr: full.atr,
+              timeframeMinutes: full.tfMinutes,
             },
           ]);
         } catch {
           /* keep the original value (partial payload, no 1h candles, etc.) */
         }
       }
-      if (!cancelled) {
-        setRescoring(
-          Object.fromEntries(entries.filter(Boolean) as [string, Partial<MarketSignal>][]),
-        );
+      if (cancelled) return;
+      // Release keys that produced nothing (cold history fetch / analysis
+      // throw) so the next 30s refresh retries them; keys WITH a patch stay
+      // marked forever — that is what breaks any re-fetch cycle. Only a
+      // non-empty result touches state (no re-render → no loop).
+      for (const target of targets) {
+        const key = `${target.market}:${target.symbol}`;
+        if (!entries.some(([entryKey]) => entryKey === key)) rescoringTriedRef.current.delete(key);
+      }
+      if (entries.length > 0) {
+        setRescoring(Object.fromEntries(entries));
       }
     })();
     return () => {
@@ -411,6 +451,9 @@ function SignalsPageContent() {
         reason: signal.reason,
         chartPattern: signal.chartPattern,
         chartPatternNote: signal.chartPatternNote,
+        // DYNAMIC ATR plan (same inputs as the card render above).
+        atr: signal.atr,
+        timeframeMinutes: signal.timeframeMinutes,
         candlestick: signal.candlestickPattern
           ? { name: signal.candlestickPattern, confidence: signal.candlestickConfidence, type: signal.direction }
           : null,
@@ -518,6 +561,10 @@ function SignalsPageContent() {
               reason: signal.reason,
               chartPattern: signal.chartPattern,
               chartPatternNote: signal.chartPatternNote,
+              // DYNAMIC ATR plan — same volatility + timeframe as the emitting
+              // analyzeCoin() run, so card TP/SL equal the Trade chart lines.
+              atr: signal.atr,
+              timeframeMinutes: signal.timeframeMinutes,
               candlestick: signal.candlestickPattern
                 ? { name: signal.candlestickPattern, confidence: signal.candlestickConfidence, type: signal.direction }
                 : null,

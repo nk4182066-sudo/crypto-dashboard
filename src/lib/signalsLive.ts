@@ -71,6 +71,10 @@ export interface EmittedMarketSignal {
   confirmations: { indicators: unknown[]; confirmed: number; total: number } | null;
   indicators: unknown[] | null;
   experts: { educators: unknown[]; consensus: { agreed: number; total: number } } | null;
+  /** ATR(14) of the h1 candles — the DYNAMIC TP/SL plan input (atrPlan.ts). */
+  atr?: number | null;
+  /** Timeframe class in minutes (60 = the 1h signal series). */
+  timeframeMinutes?: number | null;
 }
 
 function toEmittedSignal(item: { symbol: string; label: string; market: ScanMarket; reason: string }, full: ReturnType<typeof analyzeCoin>, confirmations: EmittedMarketSignal["confirmations"], indicators: EmittedMarketSignal["indicators"], experts: EmittedMarketSignal["experts"]): EmittedMarketSignal {
@@ -101,6 +105,9 @@ function toEmittedSignal(item: { symbol: string; label: string; market: ScanMark
     confirmations,
     indicators,
     experts,
+    // DYNAMIC plan inputs — cards/docs rebuild the identical ATR-based TP/SL.
+    atr: full.atr,
+    timeframeMinutes: full.tfMinutes,
   };
 }
 
@@ -439,6 +446,11 @@ export async function refresh(market: ScanMarket, origin?: string): Promise<Emit
       confirmations: d.confirmations as { indicators: unknown[]; confirmed: number; total: number } | null,
       indicators: d.indicators as unknown[] | null,
       experts: d.experts as { educators: unknown[]; consensus: { agreed: number; total: number } } | null,
+      // Stored ATR (legacy docs → null, the page rescoring pass fills it).
+      atr: Number.isFinite(Number(d.atr)) && Number(d.atr) > 0 ? Number(d.atr) : null,
+      timeframeMinutes: Number.isFinite(Number(d.timeframeMinutes)) && Number(d.timeframeMinutes) > 0
+        ? Number(d.timeframeMinutes)
+        : 60,
     };
     pool.push(signal);
     liveBySymbol.set(signal.symbol, signal);
@@ -493,6 +505,8 @@ export function toCloudDoc(signal: EmittedMarketSignal): CloudDoc | null {
       confirmations: signal.confirmations,
       indicators: signal.indicators,
       experts: signal.experts,
+      atr: signal.atr ?? null,
+      timeframeMinutes: signal.timeframeMinutes ?? 60,
       status: "PENDING",
       createdAt: Date.now(),
     };

@@ -22,6 +22,7 @@ import {
   type StrictTrend,
 } from "@/src/lib/strictSignalEngine";
 import { calculateIndicators, indicatorsAgreed, type IndicatorRow } from "@/src/lib/indicatorEngine";
+import { buildAtrPlan, estimateAtr, tfMinutesFromCandles } from "@/src/lib/atrPlan";
 
 /** The 8 mandatory conditions, in the order MASLA 2 lists them. */
 export const CONDITION_ORDER: ConditionId[] = [
@@ -34,14 +35,6 @@ export const CONDITION_ORDER: ConditionId[] = [
   "volume",
   "riskReward",
 ];
-
-/**
- * Plan geometry constants — MUST mirror signalGenerator's buildLeverageLevels()
- * (SL = 3% price move, TP1 = 10% price move → R:R 1:3.33). Condition 8 verifies
- * the exact plan both pages display: R:R >= 1:3 and SL <= 3% of price.
- */
-const PLAN_SL_PCT = 0.03;
-const PLAN_TP1_PCT = 0.1;
 
 /** Human-readable label per condition id. */
 export const CONDITION_LABELS: Record<ConditionId, string> = {
@@ -93,6 +86,10 @@ export interface AnalyzeResult {
   trends: StrictTrend[];
   /** Current price (last close of the primary candles). */
   price: number;
+  /** ATR(14) of the PRIMARY candles — the volatility both pages' plan uses. */
+  atr: number | null;
+  /** Timeframe class of the PRIMARY candles in minutes (1h=60, 15m=15…). */
+  tfMinutes: number;
 }
 
 export interface AnalyzeCoinInput {
@@ -151,6 +148,22 @@ export function analyzeCoin(input: AnalyzeCoinInput): AnalyzeResult {
 
   const chartHit = detectChartPattern(input.h4 ?? candles, 200);
   const candleHit = detectCandlePatternLast3(candles);
+
+  // Latest swing levels from the SAME candles both pages read — the Signals
+  // card and the Trade chart can never show different support/resistance.
+  // Computed BEFORE the condition block: condition 8 verifies the exact ATR
+  // plan, whose TP1/SL get trimmed by these structural levels.
+  const pivots = zigZag(candles, 3);
+  const lastLow = [...pivots].reverse().find((p) => p.kind === "low")?.price ?? null;
+  const lastHigh = [...pivots].reverse().find((p) => p.kind === "high")?.price ?? null;
+  const support = lastLow != null && lastLow < price ? lastLow : null;
+  const resistance = lastHigh != null && lastHigh > price ? lastHigh : null;
+
+  // Dynamic plan inputs — ATR(14) + timeframe class of the PRIMARY candles.
+  // Both are exposed on the result so emitted signals/cards embed the exact
+  // volatility the Trade chart plan (buildAtrPlan) is built from.
+  const tfMinutes = tfMinutesFromCandles(candles);
+  const atrValue = estimateAtr(candles);
 
   const passes: Record<ConditionId, { pass: boolean; detail: string }> = {
     chartPattern: chartHit
@@ -236,27 +249,34 @@ export function analyzeCoin(input: AnalyzeCoinInput): AnalyzeResult {
       return { pass: ratio >= 1.5, detail: `Volume ${ratio.toFixed(2)}x 20-bar avg (needs >=1.5x)` };
     })(),
     riskReward: (() => {
-      // Condition 8 — verify the EXACT plan both pages display (SL 3% of
-      // price, TP1 10% → R:R 1:3.33). Structural: generateFullSignal() and
-      // buildLeverageLevels() build this plan, so any future plan-math change
-      // that breaks R:R 1:3 or the 3% SL cap fails here instead of shipping.
+      // Condition 8 — verify the EXACT dynamic plan both pages display
+      // (buildAtrPlan: ATR ladder + Support/Resistance trims). Structural:
+      // generateFullSignal() and the Trade chart draw THIS plan, so any
+      // geometry that breaks R:R(TP3) >= 1:3 or the 3% SL cap fails here
+      // instead of shipping. Neutral direction evaluates the bullish-shaped
+      // plan (neutral setups are rejected upstream anyway). 2.995 = tolerance
+      // for the plan's 2-decimal R:R rounding at the exact 1:3 boundary.
       if (!(price > 0)) return { pass: false, detail: "No price for the plan" };
-      const slPct = PLAN_SL_PCT * 100;
-      const ratio = PLAN_TP1_PCT / PLAN_SL_PCT;
+      const plan = buildAtrPlan({
+        price,
+        direction: direction === "bearish" ? "bearish" : "bullish",
+        atr: atrValue,
+        timeframeMinutes: tfMinutes,
+        support,
+        resistance,
+      });
+      const tfLabel =
+        plan.timeframeMinutes >= 1440
+          ? "1d"
+          : plan.timeframeMinutes >= 60
+            ? `${Math.round(plan.timeframeMinutes / 60)}h`
+            : `${Math.round(plan.timeframeMinutes)}m`;
       return {
-        pass: ratio >= 3 && slPct <= 3,
-        detail: `Plan SL ${slPct.toFixed(1)}% (max 3%) - TP1 ${(PLAN_TP1_PCT * 100).toFixed(0)}% - R:R 1:${ratio.toFixed(2)}`,
+        pass: plan.rr3 >= 3 - 0.005 && plan.slPct <= 3,
+        detail: `ATR plan ${tfLabel} (ATR ${plan.atr.toPrecision(4)}, ${plan.atrBasis}) — SL ${plan.slPct.toFixed(1)}% (max 3%), TP3 R:R 1:${plan.rr3.toFixed(2)}`,
       };
     })(),
   };
-
-  // Latest swing levels from the SAME candles both pages read — the Signals
-  // card and the Trade chart can never show different support/resistance.
-  const pivots = zigZag(candles, 3);
-  const lastLow = [...pivots].reverse().find((p) => p.kind === "low")?.price ?? null;
-  const lastHigh = [...pivots].reverse().find((p) => p.kind === "high")?.price ?? null;
-  const support = lastLow != null && lastLow < price ? lastLow : null;
-  const resistance = lastHigh != null && lastHigh > price ? lastHigh : null;
 
   const conditions: ConditionLine[] = CONDITION_ORDER.map((id) => {
     const result = passes[id];
@@ -310,6 +330,8 @@ export function analyzeCoin(input: AnalyzeCoinInput): AnalyzeResult {
     resistance,
     trends,
     price,
+    atr: atrValue,
+    tfMinutes,
   };
 }
 

@@ -58,6 +58,10 @@ function toCloudDoc(signal: MarketSignal, timeframe: string): CloudDoc | null {
       reason: signal.reason,
       chartPattern: signal.chartPattern,
       chartPatternNote: signal.chartPatternNote,
+      // DYNAMIC ATR plan — the SAME volatility + timeframe the emitting
+      // analyzeCoin() run used, so stored TP/SL equal the card and chart.
+      atr: signal.atr,
+      timeframeMinutes: signal.timeframeMinutes,
       candlestick: signal.candlestick
         ? { name: signal.candlestickPattern!, confidence: signal.candlestickConfidence, type: signal.candlestickType ?? signal.direction }
         : null,
@@ -124,6 +128,11 @@ export interface MarketSignal {
   experts?: { educators: EducatorVerdict[]; consensus: Consensus } | null;
 /** STRICT tier — PREMIUM / STRONG / GOOD / null (rejected). Never null on an emitted card. */
   tier: SignalTier;
+  /** ATR(14) of the emitting 1h candles — drives the DYNAMIC TP/SL plan the
+   *  card, stored doc and Trade chart all share (atrPlan.ts). */
+  atr?: number | null;
+  /** Timeframe class of the emitting candles in minutes (60 for signals). */
+  timeframeMinutes?: number | null;
 }
 
 // ------------------------------------------------------------------ response cap
@@ -357,6 +366,9 @@ export async function GET(request: Request) {
       confirmations,
       indicators: indicatorRows,
       experts,
+      // DYNAMIC plan volatility — cards/docs rebuild the exact same TP/SL.
+      atr: full.atr,
+      timeframeMinutes: full.tfMinutes,
     };
   }
 

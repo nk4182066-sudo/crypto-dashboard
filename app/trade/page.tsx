@@ -43,6 +43,19 @@ function refreshMsFor(timeframe: Timeframe): number {
   }
 }
 
+/** Timeframe → minutes, so the ATR plan picks the right ladder (<=15m tight). */
+function tfToMinutes(timeframe: Timeframe): number {
+  switch (timeframe) {
+    case "1m": return 1;
+    case "5m": return 5;
+    case "15m": return 15;
+    case "4h": return 240;
+    case "1d": return 1440;
+    case "1h":
+    default: return 60;
+  }
+}
+
 interface Candle {
   time: number;
   open: number;
@@ -280,8 +293,10 @@ function TradeChart() {
   }, [analysis]);
 
   // Leverage-aware Entry / SL / TP1-2-3 lines + entry arrow.
-  // Spec: SL = 3% price move (≈30% margin loss @leverage), TP1/2/3 = 10/20/30%
-  // price moves (≈100/200/300% margin profit @leverage), R:R ≥ 1:3.33.
+  // DYNAMIC ATR plan (atrPlan.ts): >=1h → SL 1x ATR, TP1 1.5x (2-3h),
+  // TP2 2.5x (4-5h), TP3 4x (6-8h); <=15m → tight ladder (0.5x ATR TP1).
+  // S/R trim TP1 to the nearest wall and may place the stop behind structure —
+  // never fixed 3% / 10/20/30%, so targets always sit near the entry on screen.
   // Direction-correct: bullish → SL below entry, targets above; bearish reversed.
   const { planLevels, arrowMarkers } = useMemo(() => {
     const empty: { planLevels: ChartLevel[]; arrowMarkers: ChartArrowMarker[] } = { planLevels: [], arrowMarkers: [] };
@@ -293,7 +308,14 @@ function TradeChart() {
     const last = candles[candles.length - 1];
     const entry = analysis.currentPrice || last.close;
     const lev = leverage > 0 ? leverage : 10;
-    const plan = buildLeverageLevels(entry, bullish ? "bullish" : "bearish", lev);
+    const plan = buildLeverageLevels(entry, bullish ? "bullish" : "bearish", lev, {
+      // Chart candles drive BOTH the ATR and the timeframe class (15m → tight),
+      // so the on-chart plan always matches the timeframe the user is viewing.
+      candles,
+      timeframeMinutes: tfToMinutes(timeframe),
+      support: analysis.support,
+      resistance: analysis.resistance,
+    });
 
     // Distinct green shades for TP1 (light) → TP3 (deep).
     const tpColors = ["#4ade80", "#22c55e", "#15803d"];
@@ -314,7 +336,7 @@ function TradeChart() {
     }];
 
     return { planLevels: levels, arrowMarkers: markers };
-  }, [analysis, candles, leverage]);
+  }, [analysis, candles, leverage, timeframe]);
 
   // Gated by the on-chart toggles: Levels controls S/R + Entry/SL/TP lines,
   // Pattern the outline, and arrows follow Levels.
@@ -353,8 +375,10 @@ function TradeChart() {
   // same coin (chart-outline detection below stays a visual layer only).
   const topPattern = coinAnalysis?.chartPattern ?? patternHits[0]?.pattern ?? analysis?.patterns[0]?.name ?? "No clear pattern";
   // MASLA 4 — the authoritative score is the shared analyseCoin result (same as
-  // Signals). Falls back to the chart heuristic only when there are no candles.
-  const score = coinAnalysis?.score ?? analysis?.score ?? 0;
+  // Signals). The heuristic `analysis.score` is NEVER shown as the ALGO score
+  // (it produced the "0/100 vs 88/100" contradiction) — while the engine has
+  // not run yet (loading / <20 candles) the row shows "…" instead of 0/100.
+  const score = coinAnalysis?.score ?? 0;
   const conditionsPassed = coinAnalysis?.conditionsPassed ?? 0;
   const conditionsTotal = coinAnalysis?.conditionsTotal ?? 8;
   // Panel direction — ONE source for the trend label and the expert/indicator
@@ -556,6 +580,18 @@ function TradeChart() {
               autoAnalyze={false}
               height={undefined}
             />
+            {/* a11y + verification — the chart draws levels on <canvas> (no DOM
+                text), so expose the EXACT plan (Entry/SL/TP1-3 prices) here for
+                screen readers and the E2E smoke test. */}
+            {planLevels.length > 0 ? (
+              <div className="sr-only" data-testid="plan-levels">
+                {planLevels.map((level) => (
+                  <span key={`${level.kind}:${level.price}`} data-kind={level.kind} data-price={level.price}>
+                    {level.kind} {level.price}
+                  </span>
+                ))}
+              </div>
+            ) : null}
             </>
           )}
         </div>
@@ -565,11 +601,13 @@ function TradeChart() {
       <section aria-label="AI analysis" className="mt-4 rounded-2xl border p-4" style={{ backgroundColor: CARD, borderColor: BORDER }}>
         <h2 className="mb-3 text-sm font-bold" style={{ color: TEXT }}>📊 AI ANALYSIS</h2>
         {/* MASLA 4/11 — trend badge + score come from the SHARED analyseCoin
-            engine, so this ALGO score always equals the Signals page ALGO. */}
-        {coinAnalysis ? <TrendBadge direction={coinAnalysis.direction} score={coinAnalysis.score} /> : (analysis ? <TrendBadge direction={analysis.direction} score={analysis.score} /> : null)}
+            engine ONLY, so this ALGO score always equals the Signals page ALGO.
+            Before the engine runs we render no badge (never the heuristic or
+            a misleading 0/100). */}
+        {coinAnalysis ? <TrendBadge direction={coinAnalysis.direction} score={coinAnalysis.score} /> : null}
         <div className="flex flex-col gap-2 text-sm">
           <Row label="Pattern" value={topPattern} />
-          <Row label="Score" value={`${score}/100`} />
+          <Row label="Score" value={coinAnalysis ? `${score}/100` : "…"} />
           {coinAnalysis ? <Row label="Conditions" value={`${conditionsPassed}/${conditionsTotal} Passed`} valueColor={conditionsPassed === conditionsTotal ? GREEN : conditionsPassed >= 7 ? "#f0b90b" : MUTED} /> : null}
           <Row label="Trend" value={trendLabel} valueColor={trendLabel === "Bullish" ? GREEN : trendLabel === "Bearish" ? RED : MUTED} />
           <Row label="Support" value={support > 0 ? `$${fmtPrice(support)}` : "—"} valueColor={GREEN} />

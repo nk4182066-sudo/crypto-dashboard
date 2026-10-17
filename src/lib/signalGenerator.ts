@@ -15,6 +15,9 @@ import type { Candle } from "@/src/analysis/types";
 import { scanCandlestickPatterns } from "@/src/lib/chart/candlestickPatterns";
 // MASLA 5 — single shared price formatter/rounder (fixes SHIB $0.0000 + BTC cents).
 import { roundPrice, formatPrice as money } from "@/src/lib/formatPrice";
+// Dynamic SL/TP geometry (ATR + Support/Resistance) — replaces the old static
+// 3% SL / 10-20-30% TP ladder that squished the chart on 1h/15m views.
+import { buildAtrPlan, type AtrPlan } from "@/src/lib/atrPlan";
 
 export type SignalDirection = "bullish" | "bearish" | "neutral";
 
@@ -60,6 +63,12 @@ export interface FullSignalInput {
   candlestick?: CandlestickDetection | null;
   /** Trader's leverage (drives margin loss/profit %). Defaults to 10. */
   leverage?: number;
+  /** DYNAMIC plan inputs (see PlanContext) — primary candles / pre-computed
+   *  ATR / explicit timeframe. Omitted → the plan degrades to the S/R
+   *  structure proxy, never to static percentages. */
+  candles?: Candle[] | null;
+  atr?: number | null;
+  timeframeMinutes?: number | null;
 }
 
 export interface FullSignal {
@@ -136,14 +145,20 @@ function trendOf(direction: SignalDirection, bias?: string | null): string {
   return "Sideways / Range";
 }
 
-// ── Leverage-aware SL/TP constants (single source of truth) ──────────────
-// SL is a fixed 3% price move (≈30% margin loss at 10x) and the targets are
-// fixed 10% / 20% / 30% price moves (≈100% / 200% / 300% margin profit at
-// 10x). This guarantees R:R ≥ 1:3.33 on every signal.
-const SL_PRICE_PCT = 0.03;
-const TP1_PRICE_PCT = 0.1;
-const TP2_PRICE_PCT = 0.2;
-const TP3_PRICE_PCT = 0.3;
+/** Chart/plan context — the DYNAMIC inputs of the ATR plan. All optional: a
+ *  cold caller (stored card without candles) degrades to the structure proxy
+ *  inside buildAtrPlan() instead of falling back to static percentages. */
+export interface PlanContext {
+  /** Primary-timeframe candles (ATR + timeframe class). */
+  candles?: Candle[] | null;
+  /** Pre-computed ATR (analyzeCoin() exposes the one both pages share). */
+  atr?: number | null;
+  /** Explicit timeframe minutes (1m/5m/15m → tight ladder, 1h+ → default). */
+  timeframeMinutes?: number | null;
+  /** Swing support (bullish stop side) / resistance (bearish stop side). */
+  support?: number | null;
+  resistance?: number | null;
+}
 
 export interface LeverageLevels {
   direction: "bullish" | "bearish";
@@ -166,35 +181,46 @@ export interface LeverageLevels {
 
 /**
  * Leverage-aware SL/TP plan shared by the signal generator and the trade
- * chart. SL = 3% price move; TP1/2/3 = 10/20/30% price moves. At L× leverage
- * the trade risks ≈(3×L)% of margin to make ≈(10×L)%+ on TP1 (R:R 1:3.33).
+ * chart — DYNAMIC, ATR-based (see src/lib/atrPlan.ts):
+ *   >=1h: SL 1x ATR, TP1 1.5x (~2-3h), TP2 2.5x (~4-5h), TP3 4x (~6-8h)
+ *   <=15m: tight ladder (SL/TP1 0.5x, TP2 1x, TP3 1.5x) — "aur bhi tight"
+ * Support/Resistance trim TP1 to the nearest wall and may place the stop just
+ * beyond structure, but only while R:R(TP3) >= 1:3 and SL <= 3% of price hold.
  * Direction flips which side of the entry each level sits on:
  *   bullish → SL below entry, targets above;  bearish → the reverse.
  */
-export function buildLeverageLevels(price: number, direction: "bullish" | "bearish", leverage = 10): LeverageLevels {
+export function buildLeverageLevels(
+  price: number,
+  direction: "bullish" | "bearish",
+  leverage = 10,
+  context: PlanContext = {},
+): LeverageLevels {
   const lev = Number.isFinite(leverage) && leverage > 0 ? leverage : 10;
-  const entry = roundPrice(price);
-  const sign = direction === "bullish" ? 1 : -1;
-  const stopLoss = roundPrice(entry * (1 - sign * SL_PRICE_PCT));
-  const tp1 = roundPrice(entry * (1 + sign * TP1_PRICE_PCT));
-  const tp2 = roundPrice(entry * (1 + sign * TP2_PRICE_PCT));
-  const tp3 = roundPrice(entry * (1 + sign * TP3_PRICE_PCT));
+  const plan: AtrPlan = buildAtrPlan({
+    price,
+    direction,
+    candles: context.candles,
+    atr: context.atr,
+    timeframeMinutes: context.timeframeMinutes,
+    support: context.support,
+    resistance: context.resistance,
+  });
   return {
     direction,
-    entry,
-    stopLoss,
-    tp1,
-    tp2,
-    tp3,
-    slPercent: SL_PRICE_PCT * 100,
-    slLossPercent: Math.round(SL_PRICE_PCT * 100 * lev),
-    tp1Percent: TP1_PRICE_PCT * 100,
-    tp2Percent: TP2_PRICE_PCT * 100,
-    tp3Percent: TP3_PRICE_PCT * 100,
-    tp1ProfitPercent: Math.round(TP1_PRICE_PCT * 100 * lev),
-    tp2ProfitPercent: Math.round(TP2_PRICE_PCT * 100 * lev),
-    tp3ProfitPercent: Math.round(TP3_PRICE_PCT * 100 * lev),
-    rr: `1:${(TP1_PRICE_PCT / SL_PRICE_PCT).toFixed(2)}`,
+    entry: plan.entry,
+    stopLoss: plan.stopLoss,
+    tp1: plan.tp1,
+    tp2: plan.tp2,
+    tp3: plan.tp3,
+    slPercent: plan.slPct,
+    slLossPercent: Math.round(plan.slPct * lev),
+    tp1Percent: plan.tp1Pct,
+    tp2Percent: plan.tp2Pct,
+    tp3Percent: plan.tp3Pct,
+    tp1ProfitPercent: Math.round(plan.tp1Pct * lev),
+    tp2ProfitPercent: Math.round(plan.tp2Pct * lev),
+    tp3ProfitPercent: Math.round(plan.tp3Pct * lev),
+    rr: `1:${plan.rr1.toFixed(2)}`,
     leverage: lev,
   };
 }
@@ -203,9 +229,9 @@ export function buildLeverageLevels(price: number, direction: "bullish" | "beari
  * Builds the full educational signal. Leverage-aware SL/TP math:
  * - Entry 1 (aggressive): current price
  * - Entry 2 (conservative): near support (bullish) / resistance (bearish)
- * - SL: 3% price move from entry (≈30% margin loss at 10x)
- * - TP1/2/3: 10% / 20% / 30% price moves (≈100% / 200% / 300% profit at 10x)
- * - R:R per target = reward / risk (min 1:3.33)
+ * - SL / TP1-3: DYNAMIC ATR ladder (>=1h: 1x/1.5x/2.5x/4x ATR; <=15m: tight),
+ *   trimmed by Support/Resistance — never fixed 3% / 10/20/30% (atrPlan.ts)
+ * - R:R per target = reward / risk of the SAME plan (TP3 R:R >= 1:3)
  */
 export function generateFullSignal(input: FullSignalInput): FullSignal {
   const { symbol, market, direction, pattern = null, score = 0, bias, reason } = input;
@@ -229,9 +255,17 @@ export function generateFullSignal(input: FullSignalInput): FullSignal {
   const bearish = direction === "bearish";
 
   const lev = input.leverage && input.leverage > 0 ? input.leverage : 10;
-  // Leverage-aware plan: SL 3% (≈30% loss @10x), TP1/2/3 10/20/30%
-  // (≈100/200/300% profit @10x), R:R 1:3.33. Direction-aware.
-  const plan = buildLeverageLevels(price, bearish ? "bearish" : "bullish", lev);
+  // Leverage-aware plan: DYNAMIC ATR geometry — the SAME ladder the Trade
+  // chart draws (context carries candles/ATR/timeframe + S/R for trimming).
+  const plan = buildLeverageLevels(price, bearish ? "bearish" : "bullish", lev, {
+    candles: input.candles,
+    atr: input.atr,
+    timeframeMinutes: input.timeframeMinutes,
+    // RAW swing levels (not the ±3% display defaults above) — buildAtrPlan
+    // decides whether structure is usable or falls back to its own proxy.
+    support: input.support ?? null,
+    resistance: input.resistance ?? null,
+  });
 
   // Entry 1 (aggressive) = current price; Entry 2 (conservative) = the S/R
   // level (support for longs, resistance for shorts).
