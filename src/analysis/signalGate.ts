@@ -28,6 +28,7 @@
  */
 
 import type { Candle, MarketAnalysis } from "./types";
+import { buildAtrPlan, estimateAtr } from "@/src/lib/atrPlan";
 
 /**
  * Thresholds for the checks (single source of truth).
@@ -125,8 +126,38 @@ function roundPrice(value: number): number {
  * `structuralStop` is retained for call-site compatibility but the fixed
  * spec governs the distances so loss/profit stay in the 20-30% / 100%+ band.
  */
-function buildPlan(entry: number, dir: Direction, _structuralStop: number | null, leverage = 0): TradePlan {
-  const slPricePercent = GATE.maxStopLossPercent * 100; // 3
+function buildPlan(entry: number, dir: Direction, _structuralStop: number | null, leverage = 0, candles?: Candle[]): TradePlan {
+  const tfMinutes = candles && candles.length >= 2 ? 60 : 60;
+  const atrValue = candles && candles.length >= 16 ? estimateAtr(candles) : null;
+
+  if (atrValue && atrValue > 0 && entry > 0) {
+    const plan = buildAtrPlan({
+      price: entry,
+      direction: dir,
+      atr: atrValue,
+      timeframeMinutes: tfMinutes,
+      support: null,
+      resistance: null,
+    });
+    const takeProfits = [
+      { label: "TP1", price: plan.tp1, rewardRisk: plan.rr1, pricePercent: plan.tp1Pct, profitPercent: Math.round(plan.tp1Pct * leverage) },
+      { label: "TP2", price: plan.tp2, rewardRisk: plan.rr2, pricePercent: plan.tp2Pct, profitPercent: Math.round(plan.tp2Pct * leverage) },
+      { label: "TP3", price: plan.tp3, rewardRisk: plan.rr3, pricePercent: plan.tp3Pct, profitPercent: Math.round(plan.tp3Pct * leverage) },
+    ];
+    return {
+      entry: plan.entry,
+      stopLoss: plan.stopLoss,
+      takeProfits,
+      rewardRisk: plan.rr3,
+      slPercent: plan.slPct,
+      slLossPercent: Math.round(plan.slPct * leverage),
+      rr: `1:${plan.rr3.toFixed(2)}`,
+      leverage,
+    };
+  }
+
+  // Fallback: static spec
+  const slPricePercent = GATE.maxStopLossPercent * 100;
   const stopLoss = dir === "bullish"
     ? roundPrice(entry * (1 - GATE.maxStopLossPercent))
     : roundPrice(entry * (1 + GATE.maxStopLossPercent));
@@ -270,7 +301,7 @@ export function evaluateSignal(candidate: SignalCandidate): GateResult {
   // 8 — R:R plan (structural 1:3.33 from the fixed spec math; asserted here).
   const structuralStop =
     dir === "bullish" ? analysis.structure.lastSwingLow?.price ?? null : analysis.structure.lastSwingHigh?.price ?? null;
-  const plan = buildPlan(price, dir, typeof structuralStop === "number" ? structuralStop : null, candidate.leverage ?? 0);
+  const plan = buildPlan(price, dir, typeof structuralStop === "number" ? structuralStop : null, candidate.leverage ?? 0, candles);
   const rrOk = plan.rewardRisk >= GATE.minRewardRisk;
   checks.rewardRisk = rrOk ? `OK R:R ${plan.rr}` : `R:R ${plan.rr} below 1:${GATE.minRewardRisk}.`;
 

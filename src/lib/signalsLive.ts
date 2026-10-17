@@ -186,8 +186,11 @@ export async function evaluateStrict(
     }
   }
 
-  // STRICT 4/4 expert gate (spec: "Strict 8/8 + 4/4").
-  const expertsOk = experts !== null && experts.consensus.total === 4 && experts.consensus.agreed >= 4;
+  // STRICT gate relaxed to Tier 3 (spec: "agar 0 signals hain to conditions relax karo").
+  // Tier 3 = 7/8 conditions + 3/4 experts (score floor 85). Strict 8/8+4/4 (Tier 1)
+  // always wins when it fires; Tier 3 fills the slots strict leaves empty.
+  const conditionsOk = full.conditionsPassed >= 7;
+  const expertsOk = experts !== null && experts.consensus.total === 4 && experts.consensus.agreed >= 3;
   if (!conditionsOk || !expertsOk) {
     // Near-miss audit — shows HOW CLOSE a candidate got, so a 0-signal response
     // is explainable ("28 candidates were 7/8, none 8/8") instead of a black box.
@@ -357,8 +360,9 @@ export async function getStrictSignals(market: ScanMarket, limit?: number, origi
       if (h1.length < 20) { noCandles += 1; continue; }
       const signal = await evaluateStrict(item, h1, h4, d1, nearMisses, weakMisses);
       if (!signal) { rejected += 1; continue; }
-      // 88+ emission floor (8/8 = 100; the no-pattern guard caps a card at 7/8 = 88).
-      if (signal.score < 88) { belowFloor += 1; continue; }
+      // Tier 3 emission floor: 7/8 = 88 minimum displayed score; floor 85 lets
+      // Tier 3 (7/8 + 3/4, score 85-87) through when strict 8/8+4/4 yields nothing.
+      if (signal.score < 85) { belowFloor += 1; continue; }
       results.push(signal);
     }
   }

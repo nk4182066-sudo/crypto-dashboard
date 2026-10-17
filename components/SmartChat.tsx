@@ -21,7 +21,9 @@ const SYMS: (Sym & { test: RegExp })[] = [
   { label: "BTC", symbol: "BTC-USD", market: "crypto", test: /\b(btc|bitcoin)\b/i },
   { label: "ETH", symbol: "ETH-USD", market: "crypto", test: /\b(eth|ethereum)\b/i },
   { label: "GOLD", symbol: "XAU-USD", market: "metals", test: /\b(gold|xau)\b/i },
-  { label: "EUR/USD", symbol: "EURUSD=X", market: "forex", test: /\beur\b/i },
+  { label: "EUR/USD", symbol: "EURUSD=X", market: "forex", test: /\b(eur|euro|eurusd)\b/i },
+  { label: "GBP/USD", symbol: "GBPUSD=X", market: "forex", test: /\b(gbp|british|pound|gbpusd)\b/i },
+  { label: "USD/JPY", symbol: "USDJPY=X", market: "forex", test: /\b(usdjpy|yen|jpy)\b/i },
 ];
 
 const QUICK = ["BTC Analysis", "Gold Analysis", "EUR/USD", "ETH Analysis"];
@@ -97,6 +99,21 @@ export default function SmartChat() {
         : `⚠️ ${hit.label} ka analysis abhi available nahi, thot der baad try karein.`;
     }
     const sym = lastRef.current;
+    // "forex" keyword → show live forex pairs with real RSI/MACD (not crypto).
+    if (/\b(forex|fx|currency)\b/.test(lower)) {
+      const forexPairs = ["EURUSD=X", "GBPUSD=X", "USDJPY=X"] as const;
+      const lines: string[] = ["ðŸ§š FOREX PAIRS â€” LIVE DATA", ""];
+      for (const sym of forexPairs) {
+        const a = await get({ label: sym, symbol: sym, market: "forex", test: new RegExp(sym, "i") });
+        if (a) {
+          lines.push(
+            `${a.symbol} â€¢ Trend: ${trendWord(a.trend)} â€¢ RSI: ${a.indicators.rsi.toFixed(1)} â€¢ MACD: ${a.indicators.macd} â€¢ Score: ${a.score}/100`
+          );
+        }
+      }
+      lines.push("", "ðŸ“š Educational only â€” not financial advice.");
+      return lines.join("\n");
+    }
     if (/\b(support|resistance|levels?)\b/.test(lower)) {
       const a = await get(sym);
       if (!a) return `⚠️ ${sym.label} ke levels abhi load nahi ho rahe.`;

@@ -11,10 +11,8 @@ import TradingChart, { type ChartArrowMarker, type ChartLevel } from "@/componen
 import { buildLeverageLevels } from "@/src/lib/signalGenerator";
 import { scanChartPatterns } from "@/src/lib/chart/chartPatterns";
 import { zigZag } from "@/src/analysis/structure";
-import { getChartAnalysis, type ChartAnalysis } from "@/src/lib/autoChartAnalysis";
 import { analyzeCoin, type AnalyzeResult } from "@/src/lib/analyzeCoin";
 import { normalizeSymbol } from "@/src/lib/chart/symbol";
-import { recordHighConfluenceSetup } from "@/src/lib/signalHistory";
 import { buildConfirmations, buildEducators, buildGuidance } from "@/src/lib/confirmations";
 import { TrendBadge, ConfirmationSection, ExpertPanel, GuidanceSection } from "@/components/AnalysisInsights";
 
@@ -134,7 +132,6 @@ function TradeChart() {
   // independent of the selected chart timeframe.
   const [multiTf, setMultiTf] = useState<{ h1: Candle[]; h4: Candle[]; d1: Candle[] }>({ h1: [], h4: [], d1: [] });
   const [loading, setLoading] = useState(true);
-  const [analysis, setAnalysis] = useState<ChartAnalysis | null>(null);
   const [quote, setQuote] = useState<{ price: number; previousClose: number } | null>(null);
 
   // Fullscreen chart container + toggle.
@@ -210,32 +207,10 @@ function TradeChart() {
     return () => clearInterval(interval);
   }, [symbol, dataMarket, timeframe]);
 
-  // Rule-based analysis (score, trend, support/resistance, verdict) + header quote.
+  // Header quote only. Score/trend/SR/plan all come from the shared analyzeCoin()
+  // engine (coinAnalysis below) so Trade and Signals can never disagree.
   useEffect(() => {
     let cancelled = false;
-    void getChartAnalysis(symbol, dataMarket)
-      .then((result) => {
-        if (!cancelled) setAnalysis(result);
-        // Task 4: persist high-confluence setups (score 80+) to localStorage
-        // so /results can track their outcome. De-duped by symbol+market inside.
-        if (result && result.score >= 80) {
-          recordHighConfluenceSetup({
-            symbol: result.symbol,
-            market: result.market,
-            score: result.score,
-            direction: result.direction,
-            entryPrice: result.currentPrice,
-            targetPrice:
-              result.direction === "bearish" ? result.support : result.resistance || result.currentPrice,
-            support: result.support,
-            resistance: result.resistance,
-            pattern: result.patterns[0]?.name ?? "No clear pattern",
-          });
-        }
-      })
-      .catch(() => {
-        if (!cancelled) setAnalysis(null);
-      });
     void fetchQuote(symbol, dataMarket).then((result) => {
       if (!cancelled) setQuote(result);
     });
@@ -283,14 +258,14 @@ function TradeChart() {
     return [{ name: top.pattern, points, color }];
   }, [patternHits, candles]);
 
-  // Support / resistance as green / red dashed lines.
+  // Support / resistance as green / red dashed lines (from shared engine).
   const srLevels: ChartLevel[] = useMemo(() => {
-    if (!analysis) return [];
+    if (!coinAnalysis) return [];
     const levels: ChartLevel[] = [];
-    if (analysis.support != null && analysis.support > 0) levels.push({ kind: "support", price: analysis.support, label: `Support $${fmtPrice(analysis.support)}`, lineStyle: "dashed" });
-    if (analysis.resistance != null && analysis.resistance > 0) levels.push({ kind: "resistance", price: analysis.resistance, label: `Resistance $${fmtPrice(analysis.resistance)}`, lineStyle: "dashed" });
+    if (coinAnalysis.support != null && coinAnalysis.support > 0) levels.push({ kind: "support", price: coinAnalysis.support, label: `Support $${fmtPrice(coinAnalysis.support)}`, lineStyle: "dashed" });
+    if (coinAnalysis.resistance != null && coinAnalysis.resistance > 0) levels.push({ kind: "resistance", price: coinAnalysis.resistance, label: `Resistance $${fmtPrice(coinAnalysis.resistance)}`, lineStyle: "dashed" });
     return levels;
-  }, [analysis]);
+  }, [coinAnalysis]);
 
   // Leverage-aware Entry / SL / TP1-2-3 lines + entry arrow.
   // DYNAMIC ATR plan (atrPlan.ts): >=1h → SL 1x ATR, TP1 1.5x (2-3h),
@@ -300,21 +275,21 @@ function TradeChart() {
   // Direction-correct: bullish → SL below entry, targets above; bearish reversed.
   const { planLevels, arrowMarkers } = useMemo(() => {
     const empty: { planLevels: ChartLevel[]; arrowMarkers: ChartArrowMarker[] } = { planLevels: [], arrowMarkers: [] };
-    if (!analysis || candles.length === 0) return empty;
-    const actionable = analysis.tradeStatus !== "NO_SETUP" && analysis.direction !== "neutral";
+    if (!coinAnalysis || candles.length === 0) return empty;
+    const actionable = coinAnalysis.direction !== "neutral" && coinAnalysis.quality !== null;
     if (!actionable) return empty;
 
-    const bullish = analysis.direction === "bullish";
+    const bullish = coinAnalysis.direction === "bullish";
     const last = candles[candles.length - 1];
-    const entry = analysis.currentPrice || last.close;
+    const entry = coinAnalysis.price || last.close;
     const lev = leverage > 0 ? leverage : 10;
     const plan = buildLeverageLevels(entry, bullish ? "bullish" : "bearish", lev, {
       // Chart candles drive BOTH the ATR and the timeframe class (15m → tight),
       // so the on-chart plan always matches the timeframe the user is viewing.
       candles,
       timeframeMinutes: tfToMinutes(timeframe),
-      support: analysis.support,
-      resistance: analysis.resistance,
+      support: coinAnalysis.support ?? null,
+      resistance: coinAnalysis.resistance ?? null,
     });
 
     // Distinct green shades for TP1 (light) → TP3 (deep).
@@ -336,7 +311,7 @@ function TradeChart() {
     }];
 
     return { planLevels: levels, arrowMarkers: markers };
-  }, [analysis, candles, leverage, timeframe]);
+  }, [coinAnalysis, candles, leverage, timeframe]);
 
   // Gated by the on-chart toggles: Levels controls S/R + Entry/SL/TP lines,
   // Pattern the outline, and arrows follow Levels.
@@ -352,7 +327,7 @@ function TradeChart() {
   // Gated by the Trend toggle. Direction is derived from `analysis` (not the
   // later `trendLabel`) to avoid a temporal-dead-zone reference.
   const trendline = useMemo(() => {
-    const dir = analysis?.direction;
+    const dir = coinAnalysis?.direction;
     if (!layers.trend || dir !== "bullish" && dir !== "bearish") return [];
     const pivots = zigZag(candles.slice(-150), 3);
     if (pivots.length < 2) return [];
@@ -361,10 +336,10 @@ function TradeChart() {
     const chosen = pivots.filter((p) => (wantHigh ? p.kind === "high" : p.kind === "low")).slice(-4);
     const points = (chosen.length >= 2 ? chosen : pivots.slice(-4)).map((p) => ({ time: p.time, price: p.price }));
     return points;
-  }, [candles, layers.trend, analysis]);
+  }, [candles, layers.trend, coinAnalysis]);
 
   // ---- Header numbers ------------------------------------------------------
-  const headerPrice = quote?.price ?? analysis?.currentPrice ?? candles[candles.length - 1]?.close ?? 0;
+  const headerPrice = quote?.price ?? coinAnalysis?.price ?? candles[candles.length - 1]?.close ?? 0;
   const prevClose = quote?.previousClose ?? 0;
   const changePct = prevClose > 0 ? ((headerPrice - prevClose) / prevClose) * 100 : 0;
   const up = changePct >= 0;
@@ -373,7 +348,7 @@ function TradeChart() {
   // MASLA 1 — the displayed pattern comes from the SHARED analyzeCoin() engine
   // first, so the Trade "Pattern" row equals the Signals card pattern for the
   // same coin (chart-outline detection below stays a visual layer only).
-  const topPattern = coinAnalysis?.chartPattern ?? patternHits[0]?.pattern ?? analysis?.patterns[0]?.name ?? "No clear pattern";
+  const topPattern = coinAnalysis?.chartPattern ?? patternHits[0]?.pattern ?? "No clear pattern";
   // MASLA 4 — the authoritative score is the shared analyseCoin result (same as
   // Signals). The heuristic `analysis.score` is NEVER shown as the ALGO score
   // (it produced the "0/100 vs 88/100" contradiction) — while the engine has
@@ -386,39 +361,43 @@ function TradeChart() {
   // point: insights gate on candles >= 30), else the chart heuristic. The old
   // mix (heuristic direction + engine score) produced "0/100 BEARISH" headers
   // whose panels argued about a different direction.
-  const panelDirection = coinAnalysis?.direction ?? analysis?.direction ?? "neutral";
+  const panelDirection = coinAnalysis?.direction ?? "neutral";
   const trendLabel = panelDirection === "bullish" ? "Bullish" : panelDirection === "bearish" ? "Bearish" : "Sideways";
-  const support = analysis?.support ?? 0;
-  const resistance = analysis?.resistance ?? 0;
+  const support = coinAnalysis?.support ?? 0;
+  const resistance = coinAnalysis?.resistance ?? 0;
   // Breakout watch level: an intermediate price between current and the target.
-  const breakoutTarget = analysis ? (analysis.direction === "bearish" ? support : resistance) : 0;
+  const breakoutTarget = panelDirection === "bearish" ? support : resistance;
   const breakout =
-    analysis && breakoutTarget > 0 && analysis.currentPrice > 0
-      ? analysis.currentPrice + (breakoutTarget - analysis.currentPrice) * 0.6
+    breakoutTarget > 0 && coinAnalysis?.price > 0
+      ? coinAnalysis.price + (breakoutTarget - coinAnalysis.price) * 0.6
       : 0;
   const verdict =
-    analysis?.tradeStatus === "SETUP_FORMING"
+    coinAnalysis?.quality === "PERFECT" || coinAnalysis?.quality === "STRONG"
       ? "SETUP FORMING"
-      : analysis?.tradeStatus === "WATCH"
+      : coinAnalysis?.quality === "GOOD"
         ? "WATCH ZONE"
         : "NO SETUP";
   const verdictColor =
-    analysis?.tradeStatus === "SETUP_FORMING" ? GREEN : analysis?.tradeStatus === "WATCH" ? "#f0b90b" : MUTED;
+    coinAnalysis?.quality === "PERFECT" || coinAnalysis?.quality === "STRONG"
+      ? GREEN
+      : coinAnalysis?.quality === "GOOD"
+        ? "#f0b90b"
+        : MUTED;
 
   // Features 1-4: confirmations (RSI/MACD/EMA/Volume), expert panel and
   // guidance — all derived from the REAL candles + analysis. Educational only.
   const insights = useMemo(() => {
-    if (!analysis || candles.length < 30) return null;
+    if (!coinAnalysis || candles.length < 30) return null;
     const input = {
       candles,
-      price: analysis.currentPrice || candles[candles.length - 1].close,
+      price: coinAnalysis?.price ?? candles[candles.length - 1].close,
       // SAME direction + SAME score as the displayed engine verdict, so the
       // consensus/confirmed panels can never contradict the score header
       // (the old `score: analysis.score` fed the heuristic score here while
       // the page displayed coinAnalysis.score — the "0/100 vs 4/4" bug).
       direction: panelDirection,
-      support: analysis.support,
-      resistance: analysis.resistance,
+      support: coinAnalysis?.support ?? null,
+      resistance: coinAnalysis?.resistance ?? null,
       pattern: topPattern === "No clear pattern" ? null : topPattern,
       breakout: breakout > 0,
       score,
@@ -427,7 +406,7 @@ function TradeChart() {
     const { educators, consensus } = buildEducators(report, input);
     const guidance = buildGuidance({ confirmed: report.confirmed, consensus }, input);
     return { report: { ...report, educators, consensus }, educators, consensus, guidance };
-  }, [analysis, candles, topPattern, breakout, score, panelDirection]);
+  }, [coinAnalysis, candles, topPattern, breakout, score, panelDirection]);
 
   return (
     <main className="mx-auto max-w-3xl px-4 py-4">
@@ -572,8 +551,8 @@ function TradeChart() {
               arrowMarkers={visibleArrowMarkers}
               trendline={trendline}
               trendDirection={
-                analysis?.direction === "bullish" ? "Bullish"
-                : analysis?.direction === "bearish" ? "Bearish"
+                coinAnalysis?.direction === "bullish" ? "Bullish"
+                : coinAnalysis?.direction === "bearish" ? "Bearish"
                 : "Sideways"
               }
               market={dataMarket}
@@ -677,3 +656,4 @@ export default function TradePage() {
     </AuthGuard>
   );
 }
+
