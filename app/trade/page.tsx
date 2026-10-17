@@ -1,4 +1,5 @@
 "use client";
+import AuthGuard from "@/components/AuthGuard";
 
 // Trade chart page. Clean like /markets: symbol + price header, timeframe
 // buttons, a full-width chart with auto-drawn patterns (blue), support/
@@ -622,7 +623,7 @@ function LayerToggle({ label, active, onClick }: { label: string; active: boolea
   );
 }
 
-export default function TradePage() {
+function TradePageContent() {
   // useSearchParams needs a Suspense boundary for static rendering.
   return (
     <Suspense fallback={<main className="mx-auto max-w-3xl px-4 py-4 text-sm text-[#9CA3AF]">Loading...</main>}>
@@ -631,3 +632,10 @@ export default function TradePage() {
   );
 }
 
+export default function TradePage() {
+  return (
+    <AuthGuard>
+      <TradePageContent />
+    </AuthGuard>
+  );
+}

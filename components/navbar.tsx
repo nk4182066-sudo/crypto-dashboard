@@ -4,7 +4,9 @@
 // Educational tool only. Not financial advice.
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { onAuthStateChanged, type User } from "firebase/auth";
+import { auth } from "@/src/lib/firebase";
 import LogoutButton from "@/components/LogoutButton";
 
 // Bitget-style palette
@@ -42,6 +44,25 @@ export default function Navbar() {
   const pathname = usePathname();
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
+  const [user, setUser] = useState<User | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  // Firebase auth state — navbar (top + bottom nav) sirf logged-in users ko dikhao.
+  useEffect(() => {
+    if (!auth) {
+      setLoading(false);
+      return;
+    }
+    const unsubscribe = onAuthStateChanged(auth, (fbUser) => {
+      setUser(fbUser ?? null);
+      setLoading(false);
+    });
+    return unsubscribe;
+  }, []);
+
+  // Jab tak auth resolve na ho, ya user logged out ho → navbar chupao.
+  // Logged out state pe sirf login page dikhe.
+  if (loading || !user) return null;
 
   return (
     <>

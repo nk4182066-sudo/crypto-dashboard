@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { createUserWithEmailAndPassword, type AuthError } from "firebase/auth";
-import { auth, db, COLLECTION_USERS } from "@/src/lib/firebase";
+import { auth, db, COLLECTION_USERS, onAuthStateChanged } from "@/src/lib/firebase";
 import { doc, setDoc, serverTimestamp } from "firebase/firestore";
 
 const BG = "#0B0E11";
@@ -105,6 +105,16 @@ function Input({ type, value, onChange, placeholder, error, min, max }: InputPro
 
 export default function SignUpPage() {
   const router = useRouter();
+
+  // Agar pehle se logged in hai → dashboard pe bhejo.
+  useEffect(() => {
+    if (!auth) return;
+    const unsub = onAuthStateChanged(auth, (user) => {
+      if (user) router.push("/");
+    });
+    return unsub;
+  }, []);
+
   const [form, setForm] = useState<SignUpForm>({
     name: "",
     email: "",

@@ -50,7 +50,7 @@ export default function OnboardingGate({ children }: { children: React.ReactNode
 
   if (step === "register") {
     return (
-      <RegistrationScreen onComplete={() => setStep("welcome")} onSkip={finish} />
+      <RegistrationScreen onComplete={() => setStep("welcome")} />
     );
   }
 

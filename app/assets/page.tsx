@@ -1,4 +1,5 @@
 "use client";
+import AuthGuard from "@/components/AuthGuard";
 
 // Assets page — the app's "Tools Hub". One screen with three cards that open
 // the pattern libraries and the Results/Tracking page. Keeps the same dark
@@ -41,7 +42,7 @@ const HUB_CARDS: HubCard[] = [
   },
 ];
 
-export default function AssetsPage() {
+function AssetsPageContent() {
   return (
     <main className="mx-auto max-w-3xl px-4 py-6">
       <p className="text-xs uppercase tracking-wide" style={{ color: MUTED }}>Tools Hub</p>
@@ -79,5 +80,12 @@ export default function AssetsPage() {
         ⚠️ Educational only. Not financial advice.
       </footer>
     </main>
+  );
+}
+export default function AssetsPage() {
+  return (
+    <AuthGuard>
+      <AssetsPageContent />
+    </AuthGuard>
   );
 }

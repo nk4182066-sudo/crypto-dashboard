@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { auth, NOT_CONFIGURED, signInWithGoogle } from "@/src/lib/firebase";
+import { auth, NOT_CONFIGURED, signInWithGoogle, onAuthStateChanged } from "@/src/lib/firebase";
 import { saveUser } from "@/src/lib/userAuth";
 
 const BG = "#0B0E11";
@@ -31,6 +31,11 @@ export default function LoginPage() {
 
   useEffect(() => {
     setConfigured(auth !== null);
+    if (!auth) return;
+    const unsub = onAuthStateChanged(auth, (user) => {
+      if (user) router.push("/");
+    });
+    return unsub;
   }, []);
 
   function completeLogin(user: { displayName?: string | null }) {

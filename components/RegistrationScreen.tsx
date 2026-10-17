@@ -13,10 +13,8 @@ const GREEN = "#00C087";
 
 export default function RegistrationScreen({
   onComplete,
-  onSkip,
 }: {
   onComplete: (user?: AppUser) => void;
-  onSkip: () => void;
 }) {
   const [busy, setBusy] = useState<"google" | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -80,15 +78,6 @@ export default function RegistrationScreen({
           </button>
         </div>
 
-        {/* Skip */}
-        <button
-          type="button"
-          onClick={onSkip}
-          className="mt-6 w-full text-center text-xs"
-          style={{ color: MUTED }}
-        >
-          Skip for now →
-        </button>
 
         <p className="mt-6 text-center text-[10px] leading-relaxed" style={{ color: MUTED }}>
           ⚠️ Educational app only. Not financial advice.

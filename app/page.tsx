@@ -1,4 +1,5 @@
 "use client";
+import AuthGuard from "@/components/AuthGuard";
 
 // Home — clean market list only: search bar + market tabs + coin list.
 // The navbar and mobile bottom nav are rendered globally in app/layout.tsx.
@@ -93,7 +94,7 @@ function fmtPrice(p: number): string {
   return p.toFixed(4);
 }
 
-export default function Home() {
+function HomeContent() {
   const router = useRouter();
   const [market, setMarket] = useState<Market>("crypto");
   // Task 2 — start with optimistic placeholders so the list is never blank.
@@ -298,5 +299,12 @@ export default function Home() {
         ⚠️ Educational only. Not financial advice.
       </p>
     </main>
+  );
+}
+export default function Home() {
+  return (
+    <AuthGuard>
+      <HomeContent />
+    </AuthGuard>
   );
 }

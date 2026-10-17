@@ -1,4 +1,5 @@
 "use client";
+import AuthGuard from "@/components/AuthGuard";
 
 // Markets — every asset in one searchable table.
 // Tabs: Spot | Futures | Metals | Stocks | Forex.
@@ -94,7 +95,7 @@ function nameOf(coin: Coin): string {
 /** How many rows render before "Load more" (keeps 400+ pairs snappy). */
 const PAGE_SIZE = 60;
 
-export default function MarketsPage() {
+function MarketsPageContent() {
   const [market, setMarket] = useState<Market>("crypto");
   const [coins, setCoins] = useState<Coin[]>([]);
   const [loading, setLoading] = useState(true);
@@ -330,5 +331,12 @@ export default function MarketsPage() {
         ⚠️ Educational only. Leverage increases risk. Not financial advice.
       </footer>
     </main>
+  );
+}
+export default function MarketsPage() {
+  return (
+    <AuthGuard>
+      <MarketsPageContent />
+    </AuthGuard>
   );
 }
