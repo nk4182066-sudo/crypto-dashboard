@@ -343,25 +343,25 @@ export interface StrictPattern {
 }
 
 export function scoreFromConditions(conditionsMet: number, indicatorsAgreedCount?: number): { score: number; quality: Quality | null } {
-  // STRICT TIER SCORING — no relaxation, no fallback:
-  //   Tier 1 (PREMIUM): 8/8 conditions + 10/10 indicators → score 95-100
-  //   Tier 2 (STRONG):  7/8 conditions + 9/10 indicators → score 88-94
-  //   Tier 3 (GOOD):    7/8 conditions + 8/10 indicators → score 85-87
-  //   Anything below 7 conditions OR indicators <= 7 → REJECT (score 0)
+  // TIERED SCORING (spec: "6/8 = 75+, 7/8 = 85+, 8/8 = 90+"):
+  //   8/8 conditions → 93-100 (PERFECT)
+  //   7/8 conditions → 88-92 (STRONG)
+  //   6/8 conditions → 75-84 (GOOD)
+  //   < 6/8          → score 0, REJECT — "6/8 se neeche kuch nahi": never
+  //                    shown, never saved, never flushed in as filler.
+  // The indicator agreement count (0-10) scales WITHIN each band so more
+  // confluence always scores strictly higher and the bands never overlap.
+  const ind = indicatorsAgreedCount ?? 0;
   if (conditionsMet === 8) {
-    const score = indicatorsAgreedCount != null && indicatorsAgreedCount >= 10 ? 100 : 95;
-    return { score, quality: "PERFECT" };
+    return { score: ind >= 10 ? 100 : ind >= 9 ? 97 : ind >= 8 ? 95 : 93, quality: "PERFECT" };
   }
   if (conditionsMet === 7) {
-    if (indicatorsAgreedCount != null && indicatorsAgreedCount >= 9) {
-      return { score: 88 + Math.min(6, Math.max(0, indicatorsAgreedCount - 9)), quality: "STRONG" }; // 88-94
-    }
-    if (indicatorsAgreedCount != null && indicatorsAgreedCount >= 8) {
-      return { score: 85 + Math.min(2, Math.max(0, indicatorsAgreedCount - 8)), quality: "GOOD" }; // 85-87
-    }
-    return { score: 0, quality: null }; // indicators <= 7 → REJECT
+    return { score: ind >= 9 ? 92 : ind >= 8 ? 90 : 88, quality: "STRONG" };
   }
-  return { score: 0, quality: null }; // < 7 conditions → REJECT
+  if (conditionsMet === 6) {
+    return { score: ind >= 9 ? 84 : ind >= 8 ? 80 : 75, quality: "GOOD" };
+  }
+  return { score: 0, quality: null }; // <6/8 → REJECT (no relaxation below the floor)
 }
 
 
@@ -382,9 +382,9 @@ export interface SignalTierVerdict {
  *  - volumePassed === true  (Volume < 1.5x → REJECT)
  *  - chartPatternPassed === true  ("No clear pattern" → REJECT)
  *
- *  Tier 1 (PREMIUM):  8/8 conditions + 10/10 indicators + 4/4 experts → 95-100
- *  Tier 2 (STRONG):   7/8 conditions + 9/10 indicators + 3/4 experts → 88-94
- *  Tier 3 (GOOD):     7/8 conditions + 8/10 indicators + 3/4 experts → 85-87
+ *  Tier 1 (PREMIUM):  8/8 conditions + 3/4 experts → score 93-100
+ *  Tier 2 (STRONG):   7/8 conditions + 3/4 experts → score 88-92
+ *  Tier 3 (GOOD):     6/8 conditions + 3/4 experts → score 75-84
  */
 export function computeSignalTier({
   conditionsPassed,
@@ -409,17 +409,17 @@ export function computeSignalTier({
   if (!chartPatternPassed) return null; // "No clear pattern" → REJECT
 
   // ─── TIER 1: PREMIUM (Green) ───
-  if (conditionsPassed === 8 && indicatorsAgreedCount === 10 && expertsAgreed === 4) {
+  if (conditionsPassed === 8) {
     return { tier: "PREMIUM", label: "PREMIUM SETUP", color: "green" };
   }
 
   // ─── TIER 2: STRONG (Blue) ───
-  if (conditionsPassed === 7 && indicatorsAgreedCount >= 9 && expertsAgreed >= 3) {
+  if (conditionsPassed === 7) {
     return { tier: "STRONG", label: "STRONG SETUP", color: "blue" };
   }
 
   // ─── TIER 3: GOOD / Minimum Allowed (Yellow) ───
-  if (conditionsPassed === 7 && indicatorsAgreedCount >= 8 && expertsAgreed >= 3) {
+  if (conditionsPassed === 6) {
     return { tier: "GOOD", label: "GOOD SETUP", color: "yellow" };
   }
 

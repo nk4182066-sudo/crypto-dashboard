@@ -28,15 +28,16 @@ export const SIGNAL_STORAGE_KEY = "signal-storage";
 export const LEGACY_SIGNAL_KEY = "signal-history";
 
 /** Score floor for what the Signals/results PAGE SHOWS.
- * 85 = Tier 3 minimum allowed score. Anything below 85 is REJECTED — never
- * shown, never saved, never alerted. No relaxation tier exists. */
-export const MIN_SCORE = 85;
+ * 75 = Tier 3 minimum allowed score (6/8 conditions). Anything below 75 is
+ * REJECTED — never shown, never saved, never alerted. No relaxation tier
+ * exists; a quiet market shows fewer cards instead of ghatiya fillers. */
+export const MIN_SCORE = 75;
 /**
- * Signals page LIST display floor. Same as MIN_SCORE (85) — no relaxation,
- * no fallback. If a market emits no Tier 1/2/3 signals, the tab shows the
- * "Wait for high-quality setup" empty state instead of garbage cards.
+ * Signals page LIST display floor. Same as MIN_SCORE (75 = the 6/8 floor) —
+ * no relaxation, no fallback. If a market emits no Tier 1/2/3 signals, the tab
+ * shows the "Wait for high-quality setup" empty state instead of garbage cards.
  */
-export const DISPLAY_MIN_SCORE = 85;
+export const DISPLAY_MIN_SCORE = 75;
 /** Max records kept; oldest are dropped when this is exceeded.
  *  300 ≈ a full 30-day history (route emits ≤15/market/day, 4 markets). */
 export const MAX_SIGNALS = 300;

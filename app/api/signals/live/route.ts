@@ -1,15 +1,17 @@
-// GET /api/signals/live — the authoritative 20-signal LIVE POOL.
+// GET /api/signals/live — the authoritative 40-signal LIVE POOL.
 //
-// Guarantees exactly 20 live signals (Crypto 7 / Forex 7 / Metals 4 / Stocks 2)
-// by category, selected by the STRICT 8/8 + 4/4 gate and scored by the shared
-// analyzeCoin() engine. Every signal carries the full trade plan (entries,
-// SL, TP1-3, support/resistance, R:R, chart pattern + candlestick, 4-expert
-// consensus) so the Signals page can render the exact card.
+// Guarantees exactly 40 live signals (10 per market: Crypto / Forex / Metals /
+// Stocks), selected by the strict tier gate (Tier 3 floor: 6/8 + 3/4 + score
+// 85) and scored by the shared analyzeCoin() engine. Every signal carries the
+// full trade plan (entries, SL, TP1-3, support/resistance, R:R, chart pattern +
+// candlestick, 4-expert consensus) so the Signals page can render the exact
+// card. Stored PENDING setups from Firestore are always merged in first, so
+// the page can never render "0 setups" while pending signals exist.
 //
-// GET /api/signals/live?market=crypto   → 7 signals for one market.
-// GET /api/signals/live?market=all      → all 20 (or fewer if a market has
+// GET /api/signals/live?market=crypto   → 10 signals for one market.
+// GET /api/signals/live?market=all      → all 40 (or fewer if a market has
 //                                         fewer than its cap).
-// Trigger a background refresh first so the pool is always populated
+// refresh() runs first so the pool is always populated
 // (auto-refill on loss/expiry is handled by the track-signals cron).
 //
 // Educational analysis only — not financial advice.
@@ -42,34 +44,45 @@ export async function GET(request: Request) {
   const market = toMarket(searchParams.get("market"));
   const origin = new URL(request.url).origin;
 
-  // Always refresh before responding so the pool is populated and settled.
-  // Markets run in PARALLEL — each is an independent I/O chain (scan + history
-  // fetches), and serialising them on a cold instance used to risk blowing the
-  // serverless duration before a single signal was returned.
-  try {
-    if (market === "all") {
-      await Promise.all(MARKET_VALUES.map((m) => refresh(m, origin)));
-    } else {
-      await refresh(market, origin);
-    }
-  } catch (error) {
-    console.warn(`[signals/live] background refresh failed:`, error instanceof Error ? error.message : error);
-  }
+  // ONE pass per market — refresh() reads the stored PENDING docs, merges the
+  // fresh strict candidates in (auto-refill) and RETURNS the capped pool. That
+  // return value IS the response: the old flow awaited refresh() but threw its
+  // pool away, then re-querued the strict-only getLiveSignals() — so a
+  // strict-empty pass answered `results: []` even while PENDING setups sat in
+  // Firestore (the "0 setups" page). Markets run in PARALLEL — each is an
+  // independent I/O chain (scan + history fetches), and serialising them on a
+  // cold instance used to risk blowing the serverless duration.
+  const markets: ScanMarket[] = market === "all" ? MARKET_VALUES : [market];
+  const pools = await Promise.all(
+    markets.map(async (active): Promise<EmittedMarketSignal[]> => {
+      try {
+        return await refresh(active, origin);
+      } catch (error) {
+        console.warn(`[signals/live] refresh failed for ${active}:`, error instanceof Error ? error.message : error);
+      }
+      // Defensive fallback — strict-only pool (never persists, never throws).
+      try {
+        return await getLiveSignals(active, origin);
+      } catch (error) {
+        console.warn(`[signals/live] strict fallback failed for ${active}:`, error instanceof Error ? error.message : error);
+        return [];
+      }
+    }),
+  );
 
   const results: Record<string, EmittedMarketSignal[]> = {};
 
   if (market === "all") {
     const merged: EmittedMarketSignal[] = [];
-    const pools = await Promise.all(MARKET_VALUES.map((m) => getLiveSignals(m, origin)));
-    MARKET_VALUES.forEach((m, index) => {
-      for (const signal of pools[index] ?? []) results[toComparable(m, signal.symbol)] = [signal];
+    markets.forEach((active, index) => {
+      for (const signal of pools[index] ?? []) results[toComparable(active, signal.symbol)] = [signal];
       merged.push(...(pools[index] ?? []));
     });
     merged.sort((a, b) => b.score - a.score || a.market.localeCompare(b.market) || (a.symbol < b.symbol ? -1 : 1));
     return Response.json({ generatedAt: new Date().toISOString(), targets: LIVE_CAPS, results: merged }, { headers: { "Cache-Control": "no-store" } });
   }
 
-  const pool = await getLiveSignals(market, origin);
+  const pool = pools[0] ?? [];
   const cap = LIVE_CAPS[market as ScanMarket];
   return Response.json({ generatedAt: new Date().toISOString(), market, cap, results: pool }, { headers: { "Cache-Control": "no-store" } });
 }

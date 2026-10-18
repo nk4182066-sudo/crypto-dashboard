@@ -1,26 +1,26 @@
 /**
- * signalsLive.ts — the 20-signal LIVE POOL service (Feature: live signal lifecycle).
+ * signalsLive.ts — the 40-signal LIVE POOL service (Feature: live signal lifecycle).
  *
- * The strict 8/8 + 4/4 emission gate, per-market caps (Crypto 7 / Forex 7 /
- * Metals 4 / Stocks 2), and the auto-refill are shared here so every surface
+ * The strict tier emission gate, per-market caps (10 each: Crypto / Forex /
+ * Metals / Stocks), and the auto-refill are shared here so every surface
  * (the Signals page, the new /api/signals/live endpoint, and the background
  * refill after a loss/expiry) reads ONE code path and computes ONE score.
  *
- * Emission rules (strict, per spec):
- *   - conditionsOk >= 8  → 8/8 (PERFECT, score 100).
- *   - expertsOk = agreed >= 4 && total === 4  → 4/4 expert consensus.
- *   - score 88+ earns the High-Confidence badge (signalStorage.MIN_SCORE);
- *     the page list renders from DISPLAY_MIN_SCORE (75).
- *   - FALLBACK (spec: "agar 0 signals hain to conditions relax karo"): when a
- *     market's strict pass is empty, getStrictSignals() flushes its best
- *     >=5/8 + >=3/4 near misses (same policy /api/market-signals ships) so the
- *     tab is never silently empty — strict always wins when it fires.
+ * Emission rules (spec: quality floor = 6/8 — "6/8 se neeche kuch nahi"):
+ *   - Tier 1 (PREMIUM):  8/8 conditions + 3/4 experts → score 93-100.
+ *   - Tier 2 (STRONG):   7/8 conditions + 3/4 experts → score 88-92.
+ *   - Tier 3 (GOOD):     6/8 conditions + 3/4 experts → score 75-84.
+ *   - Below Tier 3 (<6/8 OR <3/4 experts) → REJECT. There is NO relaxation
+ *     flush and no near-miss filler — a quiet market simply shows fewer
+ *     signals rather than ghatiya cards ("40 se kam, magar saaf").
+ *   - score 85+ earns the High-Confidence badge (signalStorage.MIN_SCORE);
+ *     the page list renders from DISPLAY_MIN_SCORE (75 = the 6/8 floor).
  *
  * Auto-refill:
  *   - /api/track-signals resolves a setup to WIN / LOSS / EXPIRED and then
- *     calls refresh(market) to slot the next best 8/8+4/4 candidate back in.
- *   - getLiveSignals() is capped at LIVE_CAPS[m] so the pool never exceeds
- *     7 / 7 / 4 / 2, always keeping exactly 20 live signals.
+ *     calls refresh(market) to slot the next best Tier 1/2/3 candidate back in.
+ *   - getLiveSignals()/refresh() are capped at LIVE_CAPS[m] so the pool never
+ *     exceeds 10 per market, keeping exactly 40 live signals.
  *
  * Educational analysis only — not financial advice.
  */
@@ -117,10 +117,10 @@ function toEmittedSignal(item: { symbol: string; label: string; market: ScanMark
 }
 
 /** Evaluates ONE candidate against the strict tier gate.
- *  Tier 1 (8/8 + 4/4 + 88+): returns signal directly.
- *  Tier 2 (7/8 + 4/4 + 85+): returns signal directly.
- *  Tier 3 (6/8 + 3/4 + 85+): returns signal directly.
- *  Below Tier 3 (<6/8 OR <3/4 experts): returns null (rejected). */
+ *  Tier 1 (8/8 + 3/4 + 93+): returns signal directly.
+ *  Tier 2 (7/8 + 3/4 + 88+): returns signal directly.
+ *  Tier 3 (6/8 + 3/4 + 75+): returns signal directly — the quality floor.
+ *  Below Tier 3 (<6/8 OR <3/4 experts): returns null (rejected, never buffered). */
 export async function evaluateStrict(
   candidate: { symbol: string; label: string; market: ScanMarket; reason: string },
   h1: Candle[],
@@ -143,19 +143,55 @@ export async function evaluateStrict(
   }
 
   // Shared 4-indicator + 4-educator panel (same shape the UI renders).
+  // WIRE-UP FIX: these panels were declared but never built, so `experts`
+  // stayed null and `expertsOk` below was ALWAYS false — evaluateStrict()
+  // rejected 100% of candidates and /api/signals/live answered `results: []`
+  // for every market (the Signals page rendered "0 setups" after deploy).
   let confirmations: EmittedConfirmations = null;
   let experts: EmittedExperts = null;
   let indicators: EmittedIndicators = null;
 
-  // STRICT gate with exact tier hierarchy:
-  //   Tier 1 (PREMIUM):  8/8 conditions + 4/4 experts + 88+ score
-  //   Tier 2 (STRONG):   7/8 conditions + 4/4 experts + 85+ score
-  //   Tier 3 (MIN):      6/8 conditions + 3/4 experts + 85+ score
-  //   Below Tier 3 (<6/8 OR <3/4 experts) → REJECT (not shown, not buffered).
+  const insightInput = {
+    candles: h1,
+    price: full.price,
+    direction: full.direction,
+    support: full.support ?? full.price,
+    resistance: full.resistance ?? full.price,
+    pattern: full.chartPattern,
+    breakout: false,
+    score: full.score,
+  };
+  if (h1.length >= 30) {
+    try {
+      const report = buildConfirmations(insightInput);
+      const built = buildEducators(report, insightInput);
+      confirmations = { indicators: report.indicators, confirmed: report.confirmed, total: report.total };
+      experts = { educators: built.educators, consensus: built.consensus };
+    } catch (error) {
+      console.warn("[signalsLive] confirmation build failed:", error instanceof Error ? error.message : error);
+    }
+  }
+  if (h1.length >= 20) {
+    try {
+      indicators = calculateIndicators({ candles: h1, direction: full.direction });
+    } catch (error) {
+      console.warn("[signalsLive] indicator build failed:", error instanceof Error ? error.message : error);
+    }
+  }
+
+  // STRICT gate with exact tier hierarchy (quality floor = 6/8, nothing below):
+  //   Tier 1 (PREMIUM):  8/8 conditions + 4/4 experts + 93+ score
+  //   Tier 2 (STRONG):   7/8 conditions + 3/4 experts + 88+ score
+  //   Tier 3 (GOOD):     6/8 conditions + 3/4 experts + 75+ score
+  //   Below Tier 3 (<6/8 OR <3/4 experts) → REJECT (not shown, not buffered,
+  //   not flushed as filler — a quiet market shows fewer signals instead).
   const conditionsOk = full.conditionsPassed >= 6;
   const expertsOk = experts !== null && (experts as { consensus: { agreed: number; total: number } }).consensus.total === 4 && (experts as { consensus: { agreed: number; total: number } }).consensus.agreed >= 3;
   if (!conditionsOk || !expertsOk) {
     // Below the Tier 3 minimum → reject. No near-miss buffering, no flush.
+    console.log(
+      `[signalsLive] reject ${candidate.symbol}: cond=${full.conditionsPassed} score=${full.score} dir=${full.direction} experts=${experts ? `${(experts as { consensus: { agreed: number; total: number } }).consensus.agreed}/${(experts as { consensus: { agreed: number; total: number } }).consensus.total}` : "null"} h1=${h1.length} failed=[${(full.conditions ?? []).filter((c) => !c.pass).map((c) => c.id).join(",")}]`,
+    );
     return null;
   }
   return toEmittedSignal(candidate, full, confirmations, indicators, experts);
@@ -301,9 +337,10 @@ export async function getStrictSignals(market: ScanMarket, limit?: number, origi
       if (h1.length < 20) { noCandles += 1; continue; }
       const signal = await evaluateStrict(item, h1, h4, d1);
       if (!signal) { rejected += 1; continue; }
-      // Tier 3 emission floor: 6/8 + 3/4 + 85+. Any signal that passes the
-      // quality tier lands here with its REAL condition count and honest score.
-      if (signal.score < 85) { belowFloor += 1; continue; }
+      // Tier 3 emission floor: the 6/8 quality floor (score 75+). Any signal
+      // that passes a quality tier lands here with its REAL condition count
+      // and honest score — signals below 6/8 never reach this point.
+      if (signal.score < 75) { belowFloor += 1; continue; }
       results.push(signal);
     }
   }

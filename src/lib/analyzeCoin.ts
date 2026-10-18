@@ -5,8 +5,9 @@
 // Both pages now call THIS function, which runs the strict 8-condition engine on
 // the same candle set, so Trade and Signals can never disagree.
 //
-// score = (conditions_passed / 8) * 100  → 8/8=100 PERFECT, 7/8=88 STRONG,
-// 6/8=75 REJECT, <=5/8 hidden (MASLA 6 shows 88+ only).
+// score = TIERED by conditions_passed (spec: "6/8 = 75+, 7/8 = 85+, 8/8 = 90+"):
+//   8/8 = 93-100 PERFECT, 7/8 = 88-92 STRONG, 6/8 = 75-84 GOOD,
+//   <6/8 = 0 REJECT (the quality floor — nothing below 6/8 is ever shown).
 //
 // Educational analysis only — not financial advice.
 import type { Candle } from "@/src/analysis/types";

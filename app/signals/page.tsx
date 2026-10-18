@@ -98,6 +98,12 @@ const TABS: { key: Market; label: string }[] = [
 
 // MASLA 2 — auto-refresh every 30s (spec); also re-runs the retention check.
 const REFRESH_MS = 30 * 1000;
+/**
+ * COLD START — while the live API still returns 0 signals (fresh deploy, cold
+ * instance still scanning), re-poll every 8s instead of waiting the full 30s
+ * so the pool appears the moment the first strict pass emits.
+ */
+const COLD_RETRY_MS = 8 * 1000;
 /** Stored setups (cloud/backup) older than this expire — 30-day retention (KAAM 9). */
 const SIGNAL_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 
@@ -137,8 +143,8 @@ function statusOf(signal: MarketSignal): { text: string; color: string } {
  */
 function scoreTier(score: number): { emoji: string; label: string; color: string } {
   if (score >= 95) return { emoji: "🟢", label: "PREMIUM SETUP", color: GREEN };
-  if (score >= 88) return { emoji: "🔵", label: "STRONG SETUP", color: BLUE };
-  if (score >= 85) return { emoji: "🟡", label: "GOOD SETUP", color: YELLOW };
+  if (score >= 85) return { emoji: "🔵", label: "STRONG SETUP", color: BLUE };
+  if (score >= 75) return { emoji: "🟡", label: "GOOD SETUP", color: YELLOW };
   return { emoji: "⚪", label: "REJECTED", color: MUTED };
 }
 
@@ -200,6 +206,11 @@ function SignalsPageContent() {
   // wipes setups that are already on screen.
   useEffect(() => {
     let cancelled = false;
+    // Next poll is scheduled only when the previous load FINISHES (never an
+    // interval) so slow responses can't stack, and an empty/error response
+    // retries in COLD_RETRY_MS instead of idling out the full 30s.
+    let timer: number | undefined;
+    let hadResults = false;
     const load = async () => {
       setLoading(true);
       setError(null);
@@ -208,7 +219,9 @@ function SignalsPageContent() {
         if (!response.ok) throw new Error("Failed to load setups");
         const payload = (await response.json()) as { generatedAt?: string; results?: MarketSignal[] };
         if (cancelled) return;
-        setApiSignals(Array.isArray(payload.results) ? payload.results : []);
+        const results = Array.isArray(payload.results) ? payload.results : [];
+        hadResults = results.length > 0;
+        setApiSignals(results);
         setUpdatedAt(payload.generatedAt ?? null);
       } catch {
         if (!cancelled) {
@@ -219,14 +232,14 @@ function SignalsPageContent() {
         if (!cancelled) {
           setLoading(false);
           setTick((current) => current + 1);
+          timer = window.setTimeout(() => void load(), hadResults ? REFRESH_MS : COLD_RETRY_MS);
         }
       }
     };
     void load();
-    const timer = window.setInterval(() => void load(), REFRESH_MS);
     return () => {
       cancelled = true;
-      window.clearInterval(timer);
+      if (timer !== undefined) window.clearTimeout(timer);
     };
   }, [market]);
 
@@ -313,11 +326,10 @@ function SignalsPageContent() {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- `tick` intentionally re-triggers the TTL filter
   }, [apiSignals, cloudSignals, backupSignals, tick, market, rescoring]);
 
-  // MASLA 6 — engine strict tier = 7/8 (88); the HIGH-CONFIDENCE badge stays at
-  // MIN_SCORE (88). The list itself renders from DISPLAY_MIN_SCORE (75 = 6/8)
-  // so the strict-empty relaxation cards (app/api/signals/live fallback) show
-  // instead of an empty tab — every card still derives its REAL X/8 count.
-  // Highest score first. Ordering/filter only — the hard gates live in the API.
+  // Quality floor = 6/8 (score 75+). The list renders from DISPLAY_MIN_SCORE
+  // (75) and sorts highest score first, so 85+ (Strong/Premium) ranks above
+  // 75-84 (Good). No sub-6/8 signal is ever shown — a quiet market simply
+  // shows fewer cards instead of ghatiya fillers.
   const displayed = useMemo(() => {
     const ranked = signals
       .filter((s) => s.score >= DISPLAY_MIN_SCORE)
