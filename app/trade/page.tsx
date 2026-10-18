@@ -367,9 +367,10 @@ function TradeChart() {
   const resistance = coinAnalysis?.resistance ?? 0;
   // Breakout watch level: an intermediate price between current and the target.
   const breakoutTarget = panelDirection === "bearish" ? support : resistance;
+  const breakoutPrice = coinAnalysis?.price ?? 0;
   const breakout =
-    breakoutTarget > 0 && coinAnalysis?.price > 0
-      ? coinAnalysis.price + (breakoutTarget - coinAnalysis.price) * 0.6
+    breakoutTarget > 0 && breakoutPrice > 0
+      ? breakoutPrice + (breakoutTarget - breakoutPrice) * 0.6
       : 0;
   const verdict =
     coinAnalysis?.quality === "PERFECT" || coinAnalysis?.quality === "STRONG"
@@ -396,8 +397,8 @@ function TradeChart() {
       // (the old `score: analysis.score` fed the heuristic score here while
       // the page displayed coinAnalysis.score — the "0/100 vs 4/4" bug).
       direction: panelDirection,
-      support: coinAnalysis?.support ?? null,
-      resistance: coinAnalysis?.resistance ?? null,
+      support: coinAnalysis?.support ?? 0,
+      resistance: coinAnalysis?.resistance ?? 0,
       pattern: topPattern === "No clear pattern" ? null : topPattern,
       breakout: breakout > 0,
       score,

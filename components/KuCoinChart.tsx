@@ -220,7 +220,7 @@ export default function KuCoinChart({
       },
       rightPriceScale: {
         borderColor: THEME.border,
-        scaleMargins: { top: 0.08, bottom: 0.26 },
+        scaleMargins: { top: 0.15, bottom: 0.15 },
       },
       timeScale: {
         borderColor: THEME.border,

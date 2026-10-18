@@ -104,7 +104,7 @@ export default function SmartChat() {
       const forexPairs = ["EURUSD=X", "GBPUSD=X", "USDJPY=X"] as const;
       const lines: string[] = ["ðŸ§š FOREX PAIRS â€” LIVE DATA", ""];
       for (const sym of forexPairs) {
-        const a = await get({ label: sym, symbol: sym, market: "forex", test: new RegExp(sym, "i") });
+        const a = await get({ label: sym, symbol: sym, market: "forex" });
         if (a) {
           lines.push(
             `${a.symbol} â€¢ Trend: ${trendWord(a.trend)} â€¢ RSI: ${a.indicators.rsi.toFixed(1)} â€¢ MACD: ${a.indicators.macd} â€¢ Score: ${a.score}/100`

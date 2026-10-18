@@ -126,7 +126,7 @@ function roundPrice(value: number): number {
  * `structuralStop` is retained for call-site compatibility but the fixed
  * spec governs the distances so loss/profit stay in the 20-30% / 100%+ band.
  */
-function buildPlan(entry: number, dir: Direction, _structuralStop: number | null, leverage = 0, candles?: Candle[]): TradePlan {
+function buildPlan(entry: number, dir: Direction, _structuralStop: number | null, leverage = 0, candles?: Candle[], analysis?: MarketAnalysis): TradePlan {
   const tfMinutes = candles && candles.length >= 2 ? 60 : 60;
   const atrValue = candles && candles.length >= 16 ? estimateAtr(candles) : null;
 
@@ -136,8 +136,8 @@ function buildPlan(entry: number, dir: Direction, _structuralStop: number | null
       direction: dir,
       atr: atrValue,
       timeframeMinutes: tfMinutes,
-      support: null,
-      resistance: null,
+      support: analysis?.structure?.lastSwingLow?.price ?? null,
+      resistance: analysis?.structure?.lastSwingHigh?.price ?? null,
     });
     const takeProfits = [
       { label: "TP1", price: plan.tp1, rewardRisk: plan.rr1, pricePercent: plan.tp1Pct, profitPercent: Math.round(plan.tp1Pct * leverage) },
@@ -156,32 +156,27 @@ function buildPlan(entry: number, dir: Direction, _structuralStop: number | null
     };
   }
 
-  // Fallback: static spec
-  const slPricePercent = GATE.maxStopLossPercent * 100;
-  const stopLoss = dir === "bullish"
-    ? roundPrice(entry * (1 - GATE.maxStopLossPercent))
-    : roundPrice(entry * (1 + GATE.maxStopLossPercent));
-  const takeProfits = GATE.tpPercent.map((pct, index) => {
-    const price = dir === "bullish"
-      ? roundPrice(entry * (1 + pct))
-      : roundPrice(entry * (1 - pct));
-    return {
-      label: `TP${index + 1}`,
-      price,
-      rewardRisk: Math.round((pct / GATE.maxStopLossPercent) * 100) / 100,
-      pricePercent: Math.round(pct * 100),
-      profitPercent: Math.round(pct * 100 * leverage),
-    };
-  });
-  const firstRR = takeProfits[0]?.rewardRisk ?? 0;
+  // ATR unavailable (cold cards / short candle series) — use a TIGHT price-based
+  // fallback. No static ±10/20/30% TP left anywhere in the pipeline. These are
+  // speculative ~0.5-1.5% targets sized to hit in 2-3h on a 1h chart and still
+  // be visible on a single screen.
+  const slDist = Math.max(0.25 * entry, entry * 0.005); // min 0.25, max 0.5% of price
+  const stopLoss = roundPrice(entry - slDist);
+  const tp1 = roundPrice(entry + entry * 0.005);
+  const tp2 = roundPrice(entry + entry * 0.01);
+  const tp3 = roundPrice(entry + entry * 0.015);
   return {
     entry: roundPrice(entry),
     stopLoss,
-    takeProfits,
-    rewardRisk: firstRR,
-    slPercent: slPricePercent,
-    slLossPercent: Math.round(slPricePercent * leverage),
-    rr: `1:${firstRR.toFixed(2)}`,
+    takeProfits: [
+      { label: "TP1", price: tp1, rewardRisk: 1, pricePercent: 0.5, profitPercent: Math.round(0.5 * leverage) },
+      { label: "TP2", price: tp2, rewardRisk: 2, pricePercent: 1, profitPercent: Math.round(1 * leverage) },
+      { label: "TP3", price: tp3, rewardRisk: 3, pricePercent: 1.5, profitPercent: Math.round(1.5 * leverage) },
+    ],
+    rewardRisk: 3,
+    slPercent: 0.5,
+    slLossPercent: Math.round(0.5 * leverage),
+    rr: `1:3`,
     leverage,
   };
 }
@@ -301,7 +296,7 @@ export function evaluateSignal(candidate: SignalCandidate): GateResult {
   // 8 — R:R plan (structural 1:3.33 from the fixed spec math; asserted here).
   const structuralStop =
     dir === "bullish" ? analysis.structure.lastSwingLow?.price ?? null : analysis.structure.lastSwingHigh?.price ?? null;
-  const plan = buildPlan(price, dir, typeof structuralStop === "number" ? structuralStop : null, candidate.leverage ?? 0, candles);
+  const plan = buildPlan(price, dir, typeof structuralStop === "number" ? structuralStop : null, candidate.leverage ?? 0, candles, analysis);
   const rrOk = plan.rewardRisk >= GATE.minRewardRisk;
   checks.rewardRisk = rrOk ? `OK R:R ${plan.rr}` : `R:R ${plan.rr} below 1:${GATE.minRewardRisk}.`;
 

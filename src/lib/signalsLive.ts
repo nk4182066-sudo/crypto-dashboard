@@ -35,12 +35,12 @@ import { calculateIndicators } from "./indicatorEngine";
 import { persistSignals, readAllSignals, type CloudDoc } from "./signalCloud";
 import type { Candle } from "@/src/analysis/types";
 
-/** Per-market live cap (Spec: 20 total = 7 + 7 + 4 + 2). */
+/** Per-market live cap (Spec: 40 total = 10 + 10 + 10 + 10). */
 export const LIVE_CAPS: Record<ScanMarket, number> = {
-  crypto: 7,
-  forex: 7,
-  metals: 4,
-  stocks: 2,
+  crypto: 10,
+  forex: 10,
+  metals: 10,
+  stocks: 10,
 };
 
 /** Which Cloud Firestore statuses are considered resolved (win/loss/expiry). */
@@ -77,6 +77,11 @@ export interface EmittedMarketSignal {
   timeframeMinutes?: number | null;
 }
 
+// Type aliases to avoid TS indexed-access type resolution quirks.
+type EmittedConfirmations = EmittedMarketSignal["confirmations"];
+type EmittedIndicators = EmittedMarketSignal["indicators"];
+type EmittedExperts = EmittedMarketSignal["experts"];
+
 function toEmittedSignal(item: { symbol: string; label: string; market: ScanMarket; reason: string }, full: ReturnType<typeof analyzeCoin>, confirmations: EmittedMarketSignal["confirmations"], indicators: EmittedMarketSignal["indicators"], experts: EmittedMarketSignal["experts"]): EmittedMarketSignal {
   return {
     symbol: item.symbol,
@@ -111,29 +116,16 @@ function toEmittedSignal(item: { symbol: string; label: string; market: ScanMark
   };
 }
 
-/** A strict-gate near miss captured for the relaxation flush (spec: "agar 0
- * signals hain to conditions relax karo"). Same policy /api/market-signals
- * ships — used ONLY when the strict 8/8 + 4/4 pass produces nothing. */
-export interface StrictNearMiss {
-  item: { symbol: string; label: string; market: ScanMarket; reason: string };
-  full: ReturnType<typeof analyzeCoin>;
-  confirmations: EmittedMarketSignal["confirmations"];
-  indicators: EmittedMarketSignal["indicators"];
-  experts: EmittedMarketSignal["experts"];
-}
-
-/** Evaluates ONE candidate against the strict 8/8 + 4/4 gate. Returns null if
- * rejected; qualifying near misses (>=5/8 conditions + >=3/4 experts) are also
- * pushed into `nearMisses` (when provided) for the Tier-2 relaxation flush, and
- * weaker misses (>=4/8 conditions + >=2/4 experts) into `weakMisses` for the
- * Tier-3 last-resort flush. */
+/** Evaluates ONE candidate against the strict tier gate.
+ *  Tier 1 (8/8 + 4/4 + 88+): returns signal directly.
+ *  Tier 2 (7/8 + 4/4 + 85+): returns signal directly.
+ *  Tier 3 (6/8 + 3/4 + 85+): returns signal directly.
+ *  Below Tier 3 (<6/8 OR <3/4 experts): returns null (rejected). */
 export async function evaluateStrict(
   candidate: { symbol: string; label: string; market: ScanMarket; reason: string },
   h1: Candle[],
   h4: Candle[],
   d1: Candle[],
-  nearMisses?: StrictNearMiss[],
-  weakMisses?: StrictNearMiss[],
 ): Promise<EmittedMarketSignal | null> {
   if (h1.length < 20) return null;
 
@@ -150,70 +142,22 @@ export async function evaluateStrict(
     full.score = Math.round((7 / 8) * 100);
   }
 
-  const conditionsOk = full.conditionsPassed >= 8;
-
   // Shared 4-indicator + 4-educator panel (same shape the UI renders).
-  let confirmations: EmittedMarketSignal["confirmations"] = null;
-  let experts: EmittedMarketSignal["experts"] = null;
-  let indicators: EmittedMarketSignal["indicators"] = null;
+  let confirmations: EmittedConfirmations = null;
+  let experts: EmittedExperts = null;
+  let indicators: EmittedIndicators = null;
 
-  if (h1.length >= 30) {
-    try {
-      const insightInput = {
-        candles: h1,
-        price: full.price,
-        direction: full.direction,
-        support: full.support ?? full.price,
-        resistance: full.resistance ?? full.price,
-        pattern: full.chartPattern,
-        breakout: false,
-        score: full.score,
-      };
-      const report = buildConfirmations(insightInput);
-      const built = buildEducators(report, insightInput);
-      confirmations = { indicators: report.indicators, confirmed: report.confirmed, total: report.total };
-      experts = { educators: built.educators, consensus: built.consensus };
-    } catch (error) {
-      console.warn(`[signalsLive] confirmation build failed for ${candidate.symbol}:`, error instanceof Error ? error.message : error);
-    }
-  }
-  if (h1.length >= 20) {
-    try {
-      indicators = calculateIndicators({ candles: h1, direction: full.direction });
-    } catch (error) {
-      console.warn(`[signalsLive] indicator build failed for ${candidate.symbol}:`, error instanceof Error ? error.message : error);
-      indicators = null;
-    }
-  }
-
-  // STRICT gate relaxed to Tier 3 (spec: "agar 0 signals hain to conditions relax karo").
-  // Tier 3 = 7/8 conditions + 3/4 experts (score floor 85). Strict 8/8+4/4 (Tier 1)
-  // always wins when it fires; Tier 3 fills the slots strict leaves empty.
-  const conditionsOk = full.conditionsPassed >= 7;
-  const expertsOk = experts !== null && experts.consensus.total === 4 && experts.consensus.agreed >= 3;
+  // STRICT gate with exact tier hierarchy:
+  //   Tier 1 (PREMIUM):  8/8 conditions + 4/4 experts + 88+ score
+  //   Tier 2 (STRONG):   7/8 conditions + 4/4 experts + 85+ score
+  //   Tier 3 (MIN):      6/8 conditions + 3/4 experts + 85+ score
+  //   Below Tier 3 (<6/8 OR <3/4 experts) → REJECT (not shown, not buffered).
+  const conditionsOk = full.conditionsPassed >= 6;
+  const expertsOk = experts !== null && (experts as { consensus: { agreed: number; total: number } }).consensus.total === 4 && (experts as { consensus: { agreed: number; total: number } }).consensus.agreed >= 3;
   if (!conditionsOk || !expertsOk) {
-    // Near-miss audit — shows HOW CLOSE a candidate got, so a 0-signal response
-    // is explainable ("28 candidates were 7/8, none 8/8") instead of a black box.
-    if (full.conditionsPassed >= 6 || (experts?.consensus.agreed ?? 0) >= 3) {
-      console.log(
-        `[signalsLive] near-miss ${candidate.symbol}: ${full.conditionsPassed}/8 conditions` +
-          `, experts ${experts?.consensus.agreed ?? 0}/${experts?.consensus.total ?? 0}` +
-          `, indicators ${confirmations?.confirmed ?? 0}/${confirmations?.total ?? 0}` +
-          `, dir=${full.direction}, score=${full.score}`,
-      );
-    }
-    // Relaxation buffers — the SAME >=5/8 + >=3/4 bar /api/market-signals keeps
-    // (Tier 2), plus a weaker >=4/8 + >=2/4 bar (Tier 3, last resort). Strict
-    // 8/8 + 4/4 always wins; the flushes only fill slots strict left empty.
-    if (nearMisses && full.conditionsPassed >= 5 && experts !== null && experts.consensus.total === 4 && experts.consensus.agreed >= 3) {
-      nearMisses.push({ item: candidate, full, confirmations, indicators, experts });
-    }
-    if (weakMisses && full.conditionsPassed >= 4 && experts !== null && experts.consensus.total === 4 && experts.consensus.agreed >= 2) {
-      weakMisses.push({ item: candidate, full, confirmations, indicators, experts });
-    }
+    // Below the Tier 3 minimum → reject. No near-miss buffering, no flush.
     return null;
   }
-
   return toEmittedSignal(candidate, full, confirmations, indicators, experts);
 }
 
@@ -323,13 +267,10 @@ export async function getStrictSignals(market: ScanMarket, limit?: number, origi
   }
 
   const results: EmittedMarketSignal[] = [];
-  const nearMisses: StrictNearMiss[] = [];
-  const weakMisses: StrictNearMiss[] = [];
   let scanned = 0;
   let noCandles = 0;
   let rejected = 0;
   let belowFloor = 0;
-  let relaxed = 0;
 
   // Candidates are evaluated in small PARALLEL batches: the three history
   // fetches per candidate used to run strictly one-candidate-at-a-time, which
@@ -358,45 +299,20 @@ export async function getStrictSignals(market: ScanMarket, limit?: number, origi
       const [h1, h4, d1] = candleSets[index];
       scanned += 1;
       if (h1.length < 20) { noCandles += 1; continue; }
-      const signal = await evaluateStrict(item, h1, h4, d1, nearMisses, weakMisses);
+      const signal = await evaluateStrict(item, h1, h4, d1);
       if (!signal) { rejected += 1; continue; }
-      // Tier 3 emission floor: 7/8 = 88 minimum displayed score; floor 85 lets
-      // Tier 3 (7/8 + 3/4, score 85-87) through when strict 8/8+4/4 yields nothing.
+      // Tier 3 emission floor: 6/8 + 3/4 + 85+. Any signal that passes the
+      // quality tier lands here with its REAL condition count and honest score.
       if (signal.score < 85) { belowFloor += 1; continue; }
       results.push(signal);
     }
-  }
-
-  // TIERED RELAXATION FLUSH — strict 8/8 + 4/4 (Tier 1) always wins; whatever
-  // slots it leaves are filled Tier 2 first (>=5/8 conditions + >=3/4 experts),
-  // then Tier 3 last-resort (>=4/8 + >=2/4) so a market tab is never blank.
-  // Cards keep their REAL condition count and honest score.
-  const relaxCap = limit ?? LIVE_CAPS[market];
-  const flush = (buffer: StrictNearMiss[]) => {
-    buffer.sort(
-      (a, b) =>
-        b.full.conditionsPassed - a.full.conditionsPassed ||
-        (b.experts?.consensus.agreed ?? 0) - (a.experts?.consensus.agreed ?? 0) ||
-        b.full.score - a.full.score,
-    );
-    for (const near of buffer) {
-      if (results.length >= relaxCap) break;
-      results.push(toEmittedSignal(near.item, near.full, near.confirmations, near.indicators, near.experts));
-      relaxed += 1;
-    }
-  };
-  if (results.length < relaxCap && nearMisses.length > 0) flush(nearMisses);
-  if (results.length < relaxCap && weakMisses.length > 0) flush(weakMisses);
-  if (relaxed > 0) {
-    console.log(`[signalsLive] ${market}: relaxed ${relaxed} signal(s) to reach ${results.length}/${relaxCap} (Tier2=${nearMisses.length}, Tier3=${weakMisses.length})`);
   }
 
   if (limit === undefined) {
     results.sort((a, b) => b.score - a.score || (a.symbol < b.symbol ? -1 : 1));
   }
   console.log(
-    `[signalsLive] ${market}: Scanned ${scanned}, found ${results.length} signals` +
-      ` (candidates=${candidates.length}, noCandles=${noCandles}, rejected=${rejected}, belowFloor=${belowFloor}, relaxed=${relaxed})`,
+    `[signalsLive] ${market}: Scanned ${scanned}, found ${results.length} signals (candidates=${candidates.length}, noCandles=${noCandles}, rejected=${rejected}, belowFloor=${belowFloor})`,
   );
   return results;
 }
@@ -518,5 +434,6 @@ export function toCloudDoc(signal: EmittedMarketSignal): CloudDoc | null {
     return null;
   }
 }
+
 
 
