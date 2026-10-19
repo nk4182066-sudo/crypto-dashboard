@@ -9,7 +9,6 @@ import { Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import TradingChart, { type ChartArrowMarker, type ChartLevel } from "@/components/TradingChart";
 import { buildLeverageLevels } from "@/src/lib/signalGenerator";
-import { scanChartPatterns } from "@/src/lib/chart/chartPatterns";
 import { zigZag } from "@/src/analysis/structure";
 import { analyzeCoin, type AnalyzeResult } from "@/src/lib/analyzeCoin";
 import { normalizeSymbol } from "@/src/lib/chart/symbol";
@@ -148,6 +147,8 @@ function TradeChart() {
   });
   const toggleLayer = (key: keyof typeof layers) =>
     setLayers((prev) => ({ ...prev, [key]: !prev[key] }));
+  // Mobile accordion for indicators/experts/guidance — keeps chart clear.
+  const [showInsights, setShowInsights] = useState(false);
   const toggleFullscreen = () => {
     if (!document.fullscreenElement) {
       void chartRef.current?.requestFullscreen?.().catch(() => {});
@@ -155,6 +156,39 @@ function TradeChart() {
       void document.exitFullscreen?.();
     }
   };
+
+  // Single source of truth: fetch the same signal data the Signals page shows,
+  // so Trade and Signals can NEVER disagree on score / conditions / trend.
+  const [apiSignal, setApiSignal] = useState<any>(null);
+  useEffect(() => {
+    let cancelled = false;
+    void fetch(`/api/signals/live?market=${dataMarket}`, { cache: "no-store" })
+      .then(async (r) => {
+        if (!cancelled && r.ok) {
+          const payload = await r.json();
+          const results = Array.isArray(payload.results) ? payload.results : [];
+          // Flexible symbol matching: try exact, then case-insensitive, then
+          // suffix-variant (EUR-USD vs EURUSD=X vs EURUSD) so forex/stocks/metals
+          // never fall through to the local-analyzeCoin fallback path.
+          let sig = results.find((s: any) => s.symbol === symbol);
+          if (!sig) {
+            const sUpper = symbol.toUpperCase();
+            sig =
+              results.find((s: any) => String(s.symbol).toUpperCase() === sUpper) ??
+              results.find((s: any) => {
+                const a = String(s.symbol).toUpperCase().replace(/[=X/-]/g, "");
+                const b = sUpper.replace(/[=X/-]/g, "");
+                return a === b;
+              }) ??
+              null;
+          }
+          setApiSignal(sig ?? null);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [symbol, dataMarket]);
 
   // Track the browser fullscreen state so the layout + button icon stay in sync.
   useEffect(() => {
@@ -219,44 +253,80 @@ function TradeChart() {
     };
   }, [symbol, dataMarket]);
 
-  // Detected chart patterns -> a blue dashed swing outline drawn on the chart.
-  const patternHits = useMemo(
-    () => (candles.length >= 40 ? scanChartPatterns(candles) : []),
-    [candles]
-  );
+  // Detected chart pattern -> a swing outline drawn on the chart, labelled
+  // with the SHARED engine's pattern only (see patternOutlines below).
+  // (The outline memo lives AFTER coinAnalysis, which it reads.)
 
-  // MASLA 4 — SINGLE shared score. analyseCoin runs the strict 8-condition
-  // engine (the SAME one the Signals page scores from) on the chart candles, so
-  // the Trade page ALGO score can NEVER disagree with the Signals page ALGO.
-  // score = (conditions_passed / 8) * 100 → 8/8=100, 7/8=88, 6/8=75, <6 hidden.
-  const coinAnalysis: AnalyzeResult | null = useMemo(
-    () =>
-      candles.length >= 20
-        ? analyzeCoin({
-            symbol,
-            market: dataMarket,
-            primary: candles,
-            // Trend condition = 1h + 4h + 1d (MASLA 2 #3). The chart's own
-            // series wins on its timeframe; the Signals route passes the same
-            // 1h history candles as primary+h1, so at the default 1h view both
-            // pages compute an identical score for the same coin.
-            h1: timeframe === "1h" ? candles : multiTf.h1,
-            h4: timeframe === "4h" ? candles : multiTf.h4,
-            d1: timeframe === "1d" ? candles : multiTf.d1,
-          })
-        : null,
-    [candles, symbol, dataMarket, timeframe, multiTf],
-  );
+  // MASLA 4 — SINGLE shared score. Trade page hamesha API data (Signals page
+  // se) use karta hai score/conditions/trend ke liye, chahe chart ka timeframe
+  // kuch bhi ho. Chart alag timeframe dikh sakta hai, lekin score box aur AI
+  // analysis box Signals page se bilkul match karenge — zero mismatch.
+  // Agar API data available nahi hai, tabhi local analyzeCoin() fall back karega.
+  const coinAnalysis: AnalyzeResult | null = useMemo(() => {
+    // ─── Primary: API data (single source of truth, matches Signals page) ───
+    if (apiSignal) {
+      return {
+        symbol,
+        market: dataMarket,
+        score: apiSignal.score,
+        conditionsPassed: apiSignal.conditionsPassed ?? 0,
+        conditionsTotal: 8,
+        direction: apiSignal.direction,
+        quality:
+          apiSignal.score >= 88
+            ? "PERFECT"
+            : apiSignal.score >= 75
+              ? "STRONG"
+              : apiSignal.score >= 62
+                ? "GOOD"
+                : null,
+        indicators: apiSignal.indicators ?? [],
+        conditions: (apiSignal.conditions ?? []).map((c: any) => ({
+          id: c.id,
+          label: c.id,
+          pass: c.pass,
+          detail: "",
+        })),
+        chartPattern: apiSignal.chartPattern ?? null,
+        chartPatternConfidence: apiSignal.chartPatternNote
+          ? parseFloat(String(apiSignal.chartPatternNote).replace(/[^0-9.]/g, "")) || 0
+          : 0,
+        candlestick: apiSignal.candlestickPattern ?? null,
+        candlestickType: apiSignal.candlestickType ?? null,
+        candlestickConfidence: apiSignal.candlestickConfidence ?? 0,
+        support: apiSignal.support ?? null,
+        resistance: apiSignal.resistance ?? null,
+        trends: [],
+        price: apiSignal.price,
+        atr: apiSignal.atr ?? null,
+        tfMinutes: apiSignal.timeframeMinutes ?? 60,
+      } as AnalyzeResult;
+    }
+    // ─── Fallback: local analyzeCoin() only when API data unavailable ───
+    return candles.length >= 20
+      ? analyzeCoin({
+          symbol,
+          market: dataMarket,
+          primary: candles,
+          h1: timeframe === "1h" ? candles : multiTf.h1,
+          h4: timeframe === "4h" ? candles : multiTf.h4,
+          d1: timeframe === "1d" ? candles : multiTf.d1,
+        })
+      : null;
+  }, [candles, symbol, dataMarket, timeframe, multiTf, apiSignal]);
   const patternOutlines = useMemo(() => {
-    const top = [...patternHits].sort((a, b) => b.confidence - a.confidence)[0];
-    if (!top) return [];
+    // Outline only what the SHARED engine actually found — when it found
+    // nothing the chart draws no pattern (never the loose 25-pattern scan,
+    // which happily labels every symbol "Triple Top").
+    const name = coinAnalysis?.chartPattern;
+    if (!name) return [];
     const pivots = zigZag(candles.slice(-150), 3);
     const points = pivots.slice(-6).map((p) => ({ time: p.time, price: p.price }));
     if (points.length < 2) return [];
     // Green for bullish patterns, red for bearish, neutral amber otherwise.
-    const color = top.type === "bullish" ? GREEN : top.type === "bearish" ? RED : "#f0b90b";
-    return [{ name: top.pattern, points, color }];
-  }, [patternHits, candles]);
+    const color = coinAnalysis.direction === "bullish" ? GREEN : coinAnalysis.direction === "bearish" ? RED : "#f0b90b";
+    return [{ name, points, color }];
+  }, [coinAnalysis, candles]);
 
   // Support / resistance as green / red dashed lines (from shared engine).
   const srLevels: ChartLevel[] = useMemo(() => {
@@ -346,9 +416,13 @@ function TradeChart() {
 
   // ---- AI Analysis box data -----------------------------------------------
   // MASLA 1 — the displayed pattern comes from the SHARED analyzeCoin() engine
-  // first, so the Trade "Pattern" row equals the Signals card pattern for the
-  // same coin (chart-outline detection below stays a visual layer only).
-  const topPattern = coinAnalysis?.chartPattern ?? patternHits[0]?.pattern ?? "No clear pattern";
+  // ONLY, so the Trade "Pattern" row equals the Signals card pattern for the
+  // same coin. When the engine found nothing (real OHLC analysis says so) the
+  // row says "No clear pattern" — we never fall back to a looser scan that
+  // would contradict the engine.
+  const topPattern = coinAnalysis
+    ? (coinAnalysis.chartPattern ?? coinAnalysis.candlestick ?? "No clear pattern")
+    : "…";
   // MASLA 4 — the authoritative score is the shared analyseCoin result (same as
   // Signals). The heuristic `analysis.score` is NEVER shown as the ALGO score
   // (it produced the "0/100 vs 88/100" contradiction) — while the engine has
@@ -485,7 +559,7 @@ function TradeChart() {
             "relative w-full overflow-hidden rounded-2xl border " +
             (isFullscreen
               ? "min-h-0 flex-1"
-              : "h-[60vh] p-2 md:h-[500px] md:p-4")
+              : "h-[55vh] p-2 md:h-[500px] md:p-4")
           }
           style={{ backgroundColor: BG, borderColor: BORDER }}
         >
@@ -598,10 +672,28 @@ function TradeChart() {
             <span className="text-sm font-bold" style={{ color: verdictColor }}>{verdict}</span>
           </div>
         </div>
-        {/* Features 2-4 — confirmation indicators, expert panel, expert guidance. */}
-        {insights ? <ConfirmationSection report={insights.report} /> : null}
-        {insights ? <ExpertPanel educators={insights.educators} consensus={insights.consensus} /> : null}
-        {insights ? <GuidanceSection quotes={insights.guidance} /> : null}
+        {/* Features 2-4 — confirmation indicators, expert panel, expert guidance.
+            Collapsible on mobile so the chart stays clear and uncluttered. */}
+        {insights ? (
+          <div className="mt-3 border rounded-xl overflow-hidden" style={{ borderColor: BORDER }}>
+            <button
+              type="button"
+              onClick={() => setShowInsights((prev) => !prev)}
+              className="w-full flex items-center justify-between px-4 py-3 text-sm font-semibold"
+              style={{ backgroundColor: "#181A20", borderColor: BORDER }}
+            >
+              <span style={{ color: TEXT }}>📊 Indicators & Experts (tap to expand)</span>
+              <span style={{ color: MUTED }}>{showInsights ? "▲" : "▼"}</span>
+            </button>
+            {showInsights && (
+              <div className="px-4 py-3 border-t" style={{ borderColor: BORDER }}>
+                <ConfirmationSection report={insights.report} />
+                <ExpertPanel educators={insights.educators} consensus={insights.consensus} />
+                <GuidanceSection quotes={insights.guidance} />
+              </div>
+            )}
+          </div>
+        ) : null}
         <p className="mt-3 text-xs" style={{ color: MUTED }}>⚠️ Educational only. Not financial advice.</p>
       </section>
 

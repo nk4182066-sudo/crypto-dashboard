@@ -5,9 +5,8 @@
 // Both pages now call THIS function, which runs the strict 8-condition engine on
 // the same candle set, so Trade and Signals can never disagree.
 //
-// score = TIERED by conditions_passed (spec: "6/8 = 75+, 7/8 = 85+, 8/8 = 90+"):
-//   8/8 = 93-100 PERFECT, 7/8 = 88-92 STRONG, 6/8 = 75-84 GOOD,
-//   <6/8 = 0 REJECT (the quality floor — nothing below 6/8 is ever shown).
+// score = (conditions_passed / 8) * 100 exactly (1/8=12, 5/8=62, 6/8=75, 7/8=87, 8/8=100).
+// <6/8 = quality null (REJECT tier) but score still shows the real value.
 //
 // Educational analysis only — not financial advice.
 import type { Candle } from "@/src/analysis/types";
@@ -15,13 +14,12 @@ import { zigZag } from "@/src/analysis/structure";
 import {
   assessTrend,
   computeIndicators,
-  detectCandlePatternLast3,
-  detectChartPattern,
   scoreFromConditions,
   type ConditionId,
   type StrictIndicators,
   type StrictTrend,
 } from "@/src/lib/strictSignalEngine";
+import { detectCandlestickPattern, detectSwingChartPattern } from "@/src/lib/chart/detectPattern";
 import { calculateIndicators, indicatorsAgreed, type IndicatorRow } from "@/src/lib/indicatorEngine";
 import { buildAtrPlan, estimateAtr, tfMinutesFromCandles } from "@/src/lib/atrPlan";
 
@@ -39,14 +37,14 @@ export const CONDITION_ORDER: ConditionId[] = [
 
 /** Human-readable label per condition id. */
 export const CONDITION_LABELS: Record<ConditionId, string> = {
-  chartPattern: "Chart pattern (70%+ reliability)",
-  candlestick: "Candlestick confirmation (65%+)",
-  trend: "Trend aligned 1h+4h+1d",
-  rsi: "RSI momentum aligned with trend",
-  macd: "MACD crossover confirmed",
+  chartPattern: "Double Top/Bottom only (ultra-strict)",
+  candlestick: "Morning/Evening Star only (ultra-strict)",
+  trend: "Trend aligned 1h+4h+1d (3/3 match)",
+  rsi: "RSI <30 (buy) / >70 (sell)",
+  macd: "MACD histogram zero-cross + 4H/1D same direction",
   emaAlignment: "EMA 20/50/200 aligned",
-  volume: "Volume 120%+ above average",
-  riskReward: "R:R 1:3+ (SL max 3%)",
+  volume: "Volume 200%+ above average (2.0x)",
+  riskReward: "R:R 1:3.5+ (SL max 3%)",
 };
 
 /** Per-condition pass/fail + detail line for the UI. */
@@ -147,8 +145,22 @@ export function analyzeCoin(input: AnalyzeCoinInput): AnalyzeResult {
       ? "bullish"
       : "bearish";
 
-  const chartHit = detectChartPattern(input.h4 ?? candles, 200);
-  const candleHit = detectCandlePatternLast3(candles);
+  // ── REAL PATTERN DETECTION (detectPattern.ts) ──────────────────────────────
+  // chartHit  = classical swing shape from 5/5 ZigZag pivots (Triple/Double
+  //             Top/Bottom, Head & Shoulders) — threshold-matched, recent only.
+  // candleHit = 2/3-bar OHLC geometry of the FINAL bars (Morning/Evening Star,
+  //             Engulfing, Hammer, Shooting Star, Doji) with fixed directions.
+  // Both return null when nothing qualifies — a pattern is NEVER invented to
+  // fill the condition. chartHit reads the 4h series when supplied (the same
+  // series condition 1 historically judged) else the primary candles.
+  const swingHit = detectSwingChartPattern(input.h4 ?? candles);
+  const chartHit = swingHit?.pattern
+    ? { name: swingHit.pattern, type: swingHit.type, confidence: swingHit.confidence }
+    : null;
+  const candlePatternHit = detectCandlestickPattern(candles);
+  const candleHit = candlePatternHit?.pattern
+    ? { name: candlePatternHit.pattern, type: candlePatternHit.type, confidence: candlePatternHit.confidence }
+    : null;
 
   // Latest swing levels from the SAME candles both pages read — the Signals
   // card and the Trade chart can never show different support/resistance.
@@ -273,7 +285,7 @@ export function analyzeCoin(input: AnalyzeCoinInput): AnalyzeResult {
             ? `${Math.round(plan.timeframeMinutes / 60)}h`
             : `${Math.round(plan.timeframeMinutes)}m`;
       return {
-        pass: plan.rr3 >= 3 - 0.005 && plan.slPct <= 3,
+        pass: plan.rr3 >= 3.5 - 0.005 && plan.slPct <= 3,
         detail: `ATR plan ${tfLabel} (ATR ${plan.atr.toPrecision(4)}, ${plan.atrBasis}) — SL ${plan.slPct.toFixed(1)}% (max 3%), TP3 R:R 1:${plan.rr3.toFixed(2)}`,
       };
     })(),

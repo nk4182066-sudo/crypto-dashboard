@@ -122,8 +122,62 @@ export function buildSetup(context: SetupContext, bias: TrendBias): SetupReport 
     breakEven: "After TP1 fills, move the stop loss to your entry price so the trade can no longer lose.",
     trailingStop: `Trail the stop behind price by about 2 x ATR (${(atr * 2).toFixed(digit)}). On a ${bullish ? "long" : "short"}, trail below the ${bullish ? "lows" : "highs"}.`,
     rewardRisk: Number(rewardRisk.toFixed(2)),
-    reason: `A ${bullish ? "bullish" : "bearish"} structure with a defined invalidation zone offers roughly ${rewardRisk.toFixed(1)}R to the first target.`,
+    reason: buildReason(context, bullish, rewardRisk),
   };
+}
+
+function buildReason(context: SetupContext, bullish: boolean, rr: number): string {
+  const { indicators, structure, volume, regime } = context;
+  const rsi = indicators.rsi14 ?? null;
+  const macd = indicators.macd;
+  const sma50 = indicators.movingAverages.sma50;
+  const sma200 = indicators.movingAverages.sma200;
+  const price = context.price;
+
+  const parts: string[] = [];
+
+  // Trend / structure
+  parts.push(
+    bullish
+      ? `Price above ${structure.lastSwingLow?.price?.toFixed(2) ?? "recent"} swing low; bullish structure intact.`
+      : `Price below ${structure.lastSwingHigh?.price?.toFixed(2) ?? "recent"} swing high; bearish structure intact.`
+  );
+
+  // RSI
+  if (rsi != null) {
+    if (bullish) {
+      parts.push(rsi < 35 ? `RSI ${rsi.toFixed(1)} — oversold, bounce zone.` : rsi > 70 ? `RSI ${rsi.toFixed(1)} — overbought, caution.` : `RSI ${rsi.toFixed(1)} — neutral momentum.`);
+    } else {
+      parts.push(rsi > 65 ? `RSI ${rsi.toFixed(1)} — overbought, rejection zone.` : rsi < 35 ? `RSI ${rsi.toFixed(1)} — oversold, caution.` : `RSI ${rsi.toFixed(1)} — neutral momentum.`);
+    }
+  }
+
+  // MACD
+  if (macd) {
+    parts.push(
+      bullish
+        ? macd.histogram > 0 ? "MACD histogram expanding bullish." : "MACD histogram contracting — weak bullish momentum."
+        : macd.histogram < 0 ? "MACD histogram expanding bearish." : "MACD histogram contracting — weak bearish momentum."
+    );
+  }
+
+  // EMA alignment
+  if (sma50 != null && sma200 != null) {
+    const aligned = bullish ? price! > sma50 && sma50 > sma200 : price! < sma50 && sma50 < sma200;
+    parts.push(aligned ? `EMA20/50/200 aligned ${bullish ? "bullish" : "bearish"}.` : "EMA stack not aligned — mixed trend signal.");
+  }
+
+  // Volume
+  if (volume.vwapBias) {
+    parts.push(`Volume VWAP bias: ${volume.vwapBias}.`);
+  }
+
+  // Regime
+  if (regime.type === "Trending") parts.push("Regime: trending.");
+  else if (regime.type === "Ranging") parts.push("Regime: ranging — wider stops advised.");
+
+  parts.push(`First target at ${rr.toFixed(2)}R.`);
+  return parts.join(" ");
 }
 
 export function computeBias(analysis: Pick<MarketAnalysis, "structure" | "indicators" | "regime">): TrendBias {

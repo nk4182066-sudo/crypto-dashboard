@@ -1,4 +1,5 @@
 import { cached } from "@/src/lib/cache";
+import { fetchTwelveDataHistory } from "@/src/lib/data/twelveData";
 
 interface Candle {
   time: number;
@@ -383,6 +384,17 @@ export async function GET(request: Request) {
       degraded: true,
     };
   };
+
+  // ---- TwelveData (spec A/B): PRIMARY real source for forex/stocks/metals/oil.
+  // Crypto is deliberately excluded — Binance remains the ONLY crypto source.
+  // Falls through to Frankfurter/Yahoo below whenever TwelveData is
+  // unconfigured, rate-limited or has no data for the symbol.
+  if (market !== "crypto") {
+    const twelve = await fetchTwelveDataHistory(symbol, timeframe, quoteOnly, before, now);
+    if (twelve && (quoteOnly || twelve.candles.length > 0)) {
+      return Response.json(twelve, { headers: { "Cache-Control": "no-store, max-age=0" } });
+    }
+  }
 
   if (market === "crypto") {
     // Binance first — reached through the geo-safe data-api.binance.vision spot

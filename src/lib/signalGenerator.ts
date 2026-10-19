@@ -238,15 +238,6 @@ export function generateFullSignal(input: FullSignalInput): FullSignal {
   const price = Number.isFinite(input.price) && input.price > 0 ? input.price : 0;
   if (price <= 0) throw new Error(`[signalGenerator] REJECT: price ${input.price} <= 0 for ${symbol}`);
 
-  // Resolve chart + candlestick patterns (Rule 1: pattern should not be empty;
-  // we always return a value or a clear fallback string).
-  const chartPattern = input.chartPattern ?? pattern ?? null;
-  const chartPatternNote = input.chartPatternNote ?? null;
-  const candle = input.candlestick ?? null;
-  const candlestickPattern = candle?.name ?? null;
-  const candlestickConfidence = candle?.confidence ?? 0;
-  const candlestickType = candle?.type ?? null;
-
   // Derive support / resistance so they are never empty (Rule 5).
   const support = input.support && input.support > 0 ? input.support : roundPrice(price * 0.97);
   const resistance = input.resistance && input.resistance > 0 ? input.resistance : roundPrice(price * 1.03);
@@ -280,6 +271,43 @@ export function generateFullSignal(input: FullSignalInput): FullSignal {
   const rr = (tp: number) => Math.round((Math.abs(tp - entry1) / riskAbs) * 10) / 10;
   const riskPercent = plan.slPercent;
 
+    // MASLA 3: MTF pattern filtering - reject contradictory patterns
+  const trendDirection = direction === "bullish" ? "bullish" : direction === "bearish" ? "bearish" : "neutral";
+  let filteredChartPattern = pattern;
+  if (pattern && trendDirection !== "neutral") {
+    const cp = pattern.toLowerCase();
+    const bullishPatterns = ["double bottom", "bullish engulfing", "bullish harami", "hammer", "morning star", "tweezer bottom", "bull flag", "ascending triangle", "cup and handle"];
+    const bearishPatterns = ["triple top", "evening star", "bearish engulfing", "shooting star", "bearish harami", "hanging man", "dark cloud cover", "bear flag", "descending triangle", "head & shoulders"];
+    const isBullish = bullishPatterns.some((p) => cp.includes(p));
+    const isBearish = bearishPatterns.some((p) => cp.includes(p));
+    if (trendDirection === "bullish" && !isBullish) filteredChartPattern = null;
+    else if (trendDirection === "bearish" && !isBearish) filteredChartPattern = null;
+  }
+  const chartPattern = filteredChartPattern ?? input.chartPattern ?? null;
+  const chartPatternNote = input.chartPatternNote ?? null;
+  const candle = input.candlestick ?? null;
+  const candlestickPattern = candle?.name ?? null;
+  const candlestickConfidence = candle?.confidence ?? 0;
+  const candlestickType = candle?.type ?? null;
+
+  // MASLA 4: Ensure SL is strictly below Support by 1.5x ATR buffer
+  let finalStopLoss = stopLoss;
+  if (support > 0 && finalStopLoss >= support) {
+    const atrBuffer = plan.slPercent != null ? (plan.entry * plan.slPercent / 100) * 1.5 : 0.01;
+    const slBelowSupport = Math.max(support - atrBuffer, 0.0001);
+    const entryDist = Math.abs(plan.entry - support);
+    if (entryDist > 0) {
+      const slOffsetFromEntry = entryDist + atrBuffer;
+      const desiredSl = plan.entry - slOffsetFromEntry;
+      finalStopLoss = Math.min(slBelowSupport, desiredSl);
+      if (finalStopLoss >= support) { finalStopLoss = support - 0.0001; }
+      const entryToTp3 = Math.abs(plan.tp3 - plan.entry);
+      const entryToSl = Math.abs(finalStopLoss - plan.entry);
+      if (entryToSl > 0 && entryToTp3 / entryToSl < 3) { finalStopLoss = plan.entry - (entryToTp3 / 3); }
+    }
+  }
+  const stopLossFinal = finalStopLoss;
+
   const dirWord = bearish ? "Bearish" : bullish ? "Bullish" : "Neutral";
   const trend = trendOf(direction, bias);
   const chartLine = chartPattern ? `${chartPattern}` : "koi saaf chart pattern nahi";
@@ -297,7 +325,7 @@ export function generateFullSignal(input: FullSignalInput): FullSignal {
     `${symbol} abhi ${dirWord} bias mein hai — ${trend}. ` +
     `${money(resistance)} pe resistance aur ${money(support)} pe support hai. ` +
     `Pattern: ${patternLine}. Aggressive entry ${money(entry1)}, conservative ${money(entry2)}. ` +
-    `Stop loss ${money(stopLoss)} (risk ~${riskPercent}%). ` +
+    `Stop loss ${money(stopLossFinal)} (risk ~${riskPercent}%). ` +
     `Targets: ${money(tp1)} / ${money(tp2)} / ${money(tp3)}. ` +
     (reason ? `Scanner note: ${reason}. ` : "") +
     `⚠️ Ye guaranteed nahi — apni research khud karein.`;
@@ -373,7 +401,7 @@ export function generateFullSignal(input: FullSignalInput): FullSignal {
     trend,
     entry1,
     entry2,
-    stopLoss,
+    stopLoss: stopLossFinal,
     riskPercent,
     tp1,
     tp2,

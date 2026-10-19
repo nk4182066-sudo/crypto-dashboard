@@ -28,20 +28,34 @@ function conditionSupportResistance(candles4h: Candle[], indicators: StrictIndic
 function conditionRsi(indicators: StrictIndicators, direction: Direction): ConditionChecks["rsi"] {
   const rsi = indicators.rsi ?? 0;
   if (direction === "bullish") {
-    if (rsi < 35) return { pass: true, detail: `RSI ${rsi.toFixed(1)} oversold (<35)`, rsi };
-    return { pass: false, detail: `RSI ${rsi.toFixed(1)} not oversold (<35 required)`, rsi };
+    if (rsi < 30) return { pass: true, detail: `RSI ${rsi.toFixed(1)} oversold (<30)`, rsi };
+    return { pass: false, detail: `RSI ${rsi.toFixed(1)} not oversold (<30 required)`, rsi };
   }
-  if (rsi > 65) return { pass: true, detail: `RSI ${rsi.toFixed(1)} overbought (>65)`, rsi };
-  return { pass: false, detail: `RSI ${rsi.toFixed(1)} not overbought (>65 required)`, rsi };
+  if (rsi > 70) return { pass: true, detail: `RSI ${rsi.toFixed(1)} overbought (>70)`, rsi };
+  return { pass: false, detail: `RSI ${rsi.toFixed(1)} not overbought (>70 required)`, rsi };
 }
 
 function conditionMacd(indicators: StrictIndicators, direction: Direction): ConditionChecks["macd"] {
   const m = indicators.macd;
+  const prev = indicators.macdPrev;
   if (!m) return { pass: false, detail: "No MACD data", direction: null };
   const { line, signal, histogram } = m;
-  if (line <= signal) return { pass: false, detail: `MACD line ${line.toFixed(1)} <= signal ${signal.toFixed(1)}`, direction: null };
-  if (histogram <= 0) return { pass: false, detail: `Histogram not expanding (${(histogram).toFixed(2)})`, direction: null };
-  return { pass: true, detail: `MACD ${direction === "bullish" ? "bullish" : "bearish"} crossover + expanding histogram`, direction };
+  // Histogram must cross zero: prev and current histogram on opposite sides of 0.
+  if (!prev) return { pass: false, detail: "No previous MACD bar for zero-cross", direction: null };
+  const crossedUp = prev.histogram <= 0 && histogram > 0;
+  const crossedDown = prev.histogram >= 0 && histogram < 0;
+  const crossedZero = direction === "bullish" ? crossedUp : crossedDown;
+  if (!crossedZero) {
+    return { pass: false, detail: `MACD histogram did not cross zero (prev=${prev.histogram.toFixed(2)}, curr=${histogram.toFixed(2)})`, direction: null };
+  }
+  // MACD line must be on the correct side of signal for the direction.
+  if (direction === "bullish" && line <= signal) {
+    return { pass: false, detail: `MACD line ${line.toFixed(1)} <= signal ${signal.toFixed(1)}`, direction: null };
+  }
+  if (direction === "bearish" && line >= signal) {
+    return { pass: false, detail: `MACD line ${line.toFixed(1)} >= signal ${signal.toFixed(1)}`, direction: null };
+  }
+  return { pass: true, detail: `MACD histogram crossed zero + line ${direction === "bullish" ? "above" : "below"} signal`, direction };
 }
 
 function conditionEmaAlignment(indicators: StrictIndicators, direction: Direction): ConditionChecks["emaAlignment"] {
@@ -60,8 +74,8 @@ function conditionEmaAlignment(indicators: StrictIndicators, direction: Directio
 }
 
 function conditionVolume(indicators: StrictIndicators): ConditionChecks["volume"] {
-  if (indicators.volumeRatio <= 1.5) {
-    return { pass: false, detail: `Volume ${indicators.volumeRatio.toFixed(2)}x avg (>1.5x required)`, ratio: indicators.volumeRatio };
+  if (indicators.volumeRatio <= 2.0) {
+    return { pass: false, detail: `Volume ${indicators.volumeRatio.toFixed(2)}x avg (>2.0x required)`, ratio: indicators.volumeRatio };
   }
   return { pass: true, detail: `Volume ${indicators.volumeRatio.toFixed(2)}x avg + rising in trade direction`, ratio: indicators.volumeRatio };
 }
@@ -78,18 +92,28 @@ export function computeIndicators(candles: Candle[]): StrictIndicators {
 
   let rsiStatus: "oversold" | "neutral" | "overbought" = "neutral";
   if (rsi14 !== null) {
-    if (rsi14 < 35) rsiStatus = "oversold";
-    else if (rsi14 > 65) rsiStatus = "overbought";
+    if (rsi14 < 30) rsiStatus = "oversold";
+    else if (rsi14 > 70) rsiStatus = "overbought";
   }
 
   const volumeLast = volumes[volumes.length - 1] ?? 0;
   const avg20 = volumes.slice(-20).reduce((a, b) => a + (b ?? 0), 0) / 20;
   const volumeRatio = avg20 > 0 ? volumeLast / avg20 : 0;
 
+  const macdLastIdx = macd.line.length - 1;
+  const macdPrevIdx = macd.line.length - 2;
+  const macdCurrent = macd.line !== undefined && macd.line !== null && macdLastIdx >= 0
+    ? { line: macd.line[macdLastIdx]!, signal: macd.signal![macdLastIdx]!, histogram: macd.histogram![macdLastIdx]! }
+    : null;
+  const macdPrevious = macd.line !== undefined && macd.line !== null && macdPrevIdx >= 0
+    ? { line: macd.line[macdPrevIdx]!, signal: macd.signal![macdPrevIdx]!, histogram: macd.histogram![macdPrevIdx]! }
+    : null;
+
   return {
     rsi: rsi14,
     rsiStatus,
-    macd: macd.line !== undefined && macd.line !== null ? { line: macd.line![macd.line.length - 1]!, signal: macd.signal![macd.signal.length - 1]!, histogram: macd.histogram![macd.histogram.length - 1]! } : null,
+    macd: macdCurrent,
+    macdPrev: macdPrevious,
     ema20: seriesLast(ema(closes, 20)),
     ema50: seriesLast(ema(closes, 50)),
     ema200: seriesLast(ema(closes, 200)),
@@ -112,19 +136,36 @@ export interface ConditionChecks {
 
 function conditionChartPattern(candles4h: Candle[], direction: Direction): ConditionChecks["chartPattern"] {
   const hit = detectChartPattern(candles4h, 200);
-  if (!hit) return { pass: false, detail: "No chart pattern detected on 4h (>15 candles)", name: "", confidence: 0 };
-  if (hit.type !== direction) return { pass: false, detail: `Chart pattern ${hit.name} is ${hit.type} but setup is ${direction}`, name: hit.name, confidence: hit.confidence };
+  // ULTRA-STRICT: only Double Top / Double Bottom qualify, and only when the
+  // pattern's type matches the setup direction (4/4 gate input).
+  if (!hit || (hit.name !== "Double Top" && hit.name !== "Double Bottom") || hit.type !== direction) {
+    const seen = hit ? `${hit.name} (${hit.type})` : "none";
+    return { pass: false, detail: `No direction-matched Double Top/Bottom on 4h (saw: ${seen})`, name: "", confidence: 0 };
+  }
   return { pass: true, detail: `Chart pattern ${hit.name} @ ${hit.confidence}%`, name: hit.name, confidence: hit.confidence };
 }
 
 function conditionCandlestick(candles: Candle[], direction: Direction): ConditionChecks["candlestick"] {
+  // ULTRA-STRICT: only Morning Star / Evening Star qualify.
   const hit = detectCandlePatternLast3(candles);
   if (!hit) return { pass: false, detail: "No clear candlestick pattern in last 3 candles", name: "", confidence: 0 };
+  if (hit.name !== "Morning Star" && hit.name !== "Evening Star") {
+    return { pass: false, detail: `Candlestick ${hit.name} rejected (only Morning/Evening Star allowed)`, name: hit.name, confidence: hit.confidence };
+  }
   if (hit.type !== direction) return { pass: false, detail: `Candlestick ${hit.name} is ${hit.type} but setup is ${direction}`, name: hit.name, confidence: hit.confidence };
   return { pass: true, detail: `Candlestick ${hit.name} @ ${hit.confidence}%`, name: hit.name, confidence: hit.confidence };
 }
 
 function conditionTrend(trends: StrictTrend[]): ConditionChecks["trend"] {
+  // 3/3 required: 1h + 4h + 1d must all be present AND agree (ultra-strict).
+  if (trends.length < 3) {
+    return {
+      pass: false,
+      detail: `Multi-TF trend incomplete (need 1h+4h+1d, got ${trends.length}/3)`,
+      direction: null,
+      note: `timeframes=${trends.length}/3`,
+    };
+  }
   const directions = trends.map((t) => t.direction);
   const biases = trends.map((t) => t.bias);
   const allDefined = directions.every((d) => d !== null);
@@ -290,6 +331,7 @@ export interface StrictIndicators {
   rsi: number | null;
   rsiStatus: "oversold" | "neutral" | "overbought";
   macd: { line: number; signal: number; histogram: number } | null;
+  macdPrev: { line: number; signal: number; histogram: number } | null;
   ema20: number | null;
   ema50: number | null;
   ema200: number | null;
@@ -343,25 +385,13 @@ export interface StrictPattern {
 }
 
 export function scoreFromConditions(conditionsMet: number, indicatorsAgreedCount?: number): { score: number; quality: Quality | null } {
-  // TIERED SCORING (spec: "6/8 = 75+, 7/8 = 85+, 8/8 = 90+"):
-  //   8/8 conditions → 93-100 (PERFECT)
-  //   7/8 conditions → 88-92 (STRONG)
-  //   6/8 conditions → 75-84 (GOOD)
-  //   < 6/8          → score 0, REJECT — "6/8 se neeche kuch nahi": never
-  //                    shown, never saved, never flushed in as filler.
-  // The indicator agreement count (0-10) scales WITHIN each band so more
-  // confluence always scores strictly higher and the bands never overlap.
-  const ind = indicatorsAgreedCount ?? 0;
-  if (conditionsMet === 8) {
-    return { score: ind >= 10 ? 100 : ind >= 9 ? 97 : ind >= 8 ? 95 : 93, quality: "PERFECT" };
-  }
-  if (conditionsMet === 7) {
-    return { score: ind >= 9 ? 92 : ind >= 8 ? 90 : 88, quality: "STRONG" };
-  }
-  if (conditionsMet === 6) {
-    return { score: ind >= 9 ? 84 : ind >= 8 ? 80 : 75, quality: "GOOD" };
-  }
-  return { score: 0, quality: null }; // <6/8 → REJECT (no relaxation below the floor)
+  // STRICT FORMULA: Score = (Conditions_Passed / 8) * 100 — for ALL values
+  //   1/8 = 12, 5/8 = 62, 6/8 = 75, 7/8 = 87, 8/8 = 100
+  // No >= 6 gate on the score itself — the quality/tier gate (<6 → REJECT)
+  // is applied by computeSignalTier() and the page-level filters separately.
+  const score = Math.floor((conditionsMet / 8) * 100);
+  const quality: Quality | null = conditionsMet === 8 ? "PERFECT" : conditionsMet === 7 ? "STRONG" : conditionsMet === 6 ? "GOOD" : null;
+  return { score, quality };
 }
 
 
@@ -375,16 +405,16 @@ export interface SignalTierVerdict {
   color: "green" | "blue" | "yellow";
 }
 
-/** Hard-gated tier assignment. Every tier requires:
- *  - expertsAgreed >= 3  (2/4 or less → REJECT)
- *  - indicatorsAgreedCount >= 8  (7/10 or less → REJECT)
- *  - candlestickConfirmed === true  (Neutral candlestick → REJECT)
- *  - volumePassed === true  (Volume < 1.5x → REJECT)
- *  - chartPatternPassed === true  ("No clear pattern" → REJECT)
+/** Hard-gated tier assignment — ULTRA STRICT for 35/40 win rate.
+ * Every tier requires:
+ *  - expertsAgreed >= 4  (EXPERT GATE 4/4 — must pass all 4 experts)
+ *  - indicatorsAgreedCount >= 8 (8/10 indicators must agree)
+ *  - candlestickConfirmed === true (Morning/Evening Star only)
+ *  - volumePassed === true (Volume > 2.0x avg)
+ *  - chartPatternPassed === true (Double Top/Bottom only)
+ *  - conditionsPassed === 8 (score 100 >= 88 floor — nothing below 88 shown)
  *
- *  Tier 1 (PREMIUM):  8/8 conditions + 3/4 experts → score 93-100
- *  Tier 2 (STRONG):   7/8 conditions + 3/4 experts → score 88-92
- *  Tier 3 (GOOD):     6/8 conditions + 3/4 experts → score 75-84
+ *  Only Tier 1 (PREMIUM): 8/8 conditions + 4/4 experts → score 100.
  */
 export function computeSignalTier({
   conditionsPassed,
@@ -402,8 +432,8 @@ export function computeSignalTier({
   chartPatternPassed: boolean;
 }): SignalTierVerdict | null {
   // ─── REJECT RULES ───
-  if (expertsAgreed < 3) return null; // 2/4 experts or kam → REJECT
-  if (indicatorsAgreedCount <= 7) return null; // 7/10 indicators or kam → REJECT
+  if (expertsAgreed < 4) return null; // EXPERT GATE: 4/4 must agree → REJECT
+  if (indicatorsAgreedCount < 8) return null; // 8/10 indicators must agree → REJECT
   if (!candlestickConfirmed) return null; // Candlestick Neutral → REJECT
   if (!volumePassed) return null; // Volume 1.5x se kam → REJECT
   if (!chartPatternPassed) return null; // "No clear pattern" → REJECT
@@ -413,15 +443,8 @@ export function computeSignalTier({
     return { tier: "PREMIUM", label: "PREMIUM SETUP", color: "green" };
   }
 
-  // ─── TIER 2: STRONG (Blue) ───
-  if (conditionsPassed === 7) {
-    return { tier: "STRONG", label: "STRONG SETUP", color: "blue" };
-  }
-
-  // ─── TIER 3: GOOD / Minimum Allowed (Yellow) ───
-  if (conditionsPassed === 6) {
-    return { tier: "GOOD", label: "GOOD SETUP", color: "yellow" };
-  }
+  // Score floor: 88/100 -> only 8/8 conditions = score 100 qualifies
+  if (conditionsPassed < 8) return null;
 
   return null;
 }
@@ -465,6 +488,9 @@ function seriesLast(values: (number | null)[]): number | null {
   }
   return null;
 }
+
+
+
 
 
 

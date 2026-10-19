@@ -282,7 +282,7 @@ function SignalsPageContent() {
     // the old `Date.parse(null)` → NaN check silently DROPPED all 7 stored
     // pending signals, which is exactly why the page rendered "0 setups" while
     // the Results page showed 7 pending. Fall back to createdAt; a doc with
-    // neither timestamp is still kept (sweepExpired already deletes past TTL).
+    // neither timestamp is kept (the archive is append-only — nothing sweeps).
     const stampOf = (signal: MarketSignal): number => {
       const parsed = Date.parse(signal.analyzedAt || "");
       if (Number.isFinite(parsed)) return parsed;
@@ -333,6 +333,8 @@ function SignalsPageContent() {
   const displayed = useMemo(() => {
     const ranked = signals
       .filter((s) => s.score >= DISPLAY_MIN_SCORE)
+      // Experts gate: 0/4 and 2/4 consensus signals never reach the UI.
+      .filter((s) => s.experts != null && s.experts.consensus.agreed >= 3)
       .sort((first, second) => second.score - first.score);
     if (ranked.length > 0) return ranked;
     // TIER 3 (page-level) — the live scan + score floor produced nothing, but

@@ -43,10 +43,10 @@ export interface AtrLadder {
   tp3: number;
 }
 
-/** >=1h — spec: TP1 1.5x (2-3h), TP2 2.5x (4-5h), TP3 4x (6-8h). */
-export const DEFAULT_LADDER: AtrLadder = { sl: 1.0, tp1: 1.5, tp2: 2.5, tp3: 4.0 };
+/** >=1h — swing ladder: TP1 1.2x ATR, TP2 2.5x ATR, TP3 4.0x ATR. SL 0.5x ATR. */
+export const DEFAULT_LADDER: AtrLadder = { sl: 0.5, tp1: 1.2, tp2: 2.5, tp3: 4.0 };
 
-/** <=15m — spec: "Agar 15m chart hai to aur bhi tight (0.5x ATR)". */
+/** <=15m — tight scalping ladder. */
 export const TIGHT_LADDER: AtrLadder = { sl: 0.5, tp1: 0.5, tp2: 1.0, tp3: 1.5 };
 
 /** Timeframe class → ladder. 15 minutes or less = tight; 1h and above = default. */
@@ -178,6 +178,12 @@ export function buildAtrPlan(input: AtrPlanInput): AtrPlan {
   const tp2Dist = ladder.tp2 * atrValue;
   const tp3Dist = ladder.tp3 * atrValue;
 
+  // ── Swing minimum floors — ensure TP1/TP2/TP3 are meaningful % moves,
+  //    not just a few cents on low-volatility coins (e.g. EGLD at $3.55).
+  const minTp1 = price * 0.015; // 1.5%
+  const minTp2 = price * 0.030; // 3.0%
+  const minTp3 = price * 0.050; // 5.0%
+
   // ── SL — structural level behind price when it respects the invariants ────
   // Buffer 0.15 ATR beyond the level (away from entry) so a touch of support
   // doesn't knock the stop out on noise; accepted only while the plan keeps
@@ -186,7 +192,7 @@ export function buildAtrPlan(input: AtrPlanInput): AtrPlan {
   const structuralStop = bullish ? input.support : input.resistance;
   if (structuralStop != null && valid(structuralStop) && (bullish ? structuralStop < entry : structuralStop > entry)) {
     const levelDist = Math.abs(entry - structuralStop);
-    const buffered = levelDist + 0.15 * atrValue;
+    const buffered = levelDist + 0.5 * atrValue;
     const maxAllowed = Math.min(1.2 * baseSlDist, tp3Dist / 3);
     const minAllowed = 0.5 * baseSlDist;
     if (buffered >= minAllowed && buffered <= maxAllowed && (buffered / entry) * 100 <= 3) {
@@ -210,10 +216,15 @@ export function buildAtrPlan(input: AtrPlanInput): AtrPlan {
     }
   }
 
+  // Enforce swing minimum floors on all TP distances.
+  tp1Dist = Math.max(tp1Dist, minTp1);
+  const tp2DistFinal = Math.max(tp2Dist, minTp2);
+  const tp3DistFinal = Math.max(tp3Dist, minTp3);
+
   // ── Round + keep strict TP ordering (rounding on micro-caps can coalesce) ──
   let tp1 = roundPrice(entry + sign * tp1Dist);
-  let tp2 = roundPrice(entry + sign * tp2Dist);
-  let tp3 = roundPrice(entry + sign * tp3Dist);
+  let tp2 = roundPrice(entry + sign * tp2DistFinal);
+  let tp3 = roundPrice(entry + sign * tp3DistFinal);
   const wrongOrder = bullish ? !(tp1 < tp2 && tp2 < tp3) : !(tp1 > tp2 && tp2 > tp3);
   if (wrongOrder) {
     const minGap = Math.max(Math.abs(tp3 - entry) * 0.15, Number.EPSILON);

@@ -32,7 +32,7 @@ export type { ScanMarket };
 import { analyzeCoin } from "./analyzeCoin";
 import { buildConfirmations, buildEducators } from "./confirmations";
 import { calculateIndicators } from "./indicatorEngine";
-import { persistSignals, readAllSignals, type CloudDoc } from "./signalCloud";
+import { persistSignals, readAllSignals, karachiDateKey, type CloudDoc } from "./signalCloud";
 import type { Candle } from "@/src/analysis/types";
 
 /** Per-market live cap (Spec: 40 total = 10 + 10 + 10 + 10). */
@@ -180,13 +180,18 @@ export async function evaluateStrict(
   }
 
   // STRICT gate with exact tier hierarchy (quality floor = 6/8, nothing below):
-  //   Tier 1 (PREMIUM):  8/8 conditions + 4/4 experts + 93+ score
-  //   Tier 2 (STRONG):   7/8 conditions + 3/4 experts + 88+ score
-  //   Tier 3 (GOOD):     6/8 conditions + 3/4 experts + 75+ score
-  //   Below Tier 3 (<6/8 OR <3/4 experts) → REJECT (not shown, not buffered,
+  //   Tier 1 (PREMIUM):  8/8 conditions → score 100
+  //   Tier 2 (STRONG):   7/8 conditions → score 87
+  //   Tier 3 (GOOD):     6/8 conditions → score 75
+  //   Floor: conditions >= 6/8 AND experts >= 3/4 (delivery-grade consensus).
+  //   Below 6/8 OR <3/4 experts → REJECT (not shown, not buffered,
   //   not flushed as filler — a quiet market shows fewer signals instead).
   const conditionsOk = full.conditionsPassed >= 6;
-  const expertsOk = experts !== null && (experts as { consensus: { agreed: number; total: number } }).consensus.total === 4 && (experts as { consensus: { agreed: number; total: number } }).consensus.agreed >= 3;
+  // Experts gate: the panel must exist with at least 3/4 consensus — the
+  // committed delivery-grade floor (unanimity 4/4 was an uncommitted over-
+  // tighten that drove emission to 0). Null experts reject, so we never emit
+  // an unverifiable card.
+  const expertsOk = experts !== null && experts.consensus.agreed >= 3;
   if (!conditionsOk || !expertsOk) {
     // Below the Tier 3 minimum → reject. No near-miss buffering, no flush.
     console.log(
@@ -220,7 +225,7 @@ function selfOrigin(origin?: string): string {
  * the confidence-ordered candidates ensure the best setups are analysed first —
  * the same style of bound /api/market-signals uses (MAX_FULL_ANALYSES_PER_REQUEST).
  */
-const MAX_CANDIDATES_PER_CALL = 30;
+const MAX_CANDIDATES_PER_CALL = 100;
 
 /** How long one serverless instance reuses its cold-start market scan. */
 const COLD_SCAN_TTL_MS = 5 * 60 * 1000;
@@ -464,6 +469,7 @@ export function toCloudDoc(signal: EmittedMarketSignal): CloudDoc | null {
       experts: signal.experts,
       atr: signal.atr ?? null,
       timeframeMinutes: signal.timeframeMinutes ?? 60,
+      dateKey: karachiDateKey(),
       status: "PENDING",
       createdAt: Date.now(),
     };

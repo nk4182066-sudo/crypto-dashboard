@@ -161,18 +161,54 @@ export default function SignUpPage() {
     setSubmitting(true);
     try {
       if (!auth || !db) throw new Error("Firebase not configured");
-      const result = await createUserWithEmailAndPassword(auth, form.email, form.password);
-      await setDoc(doc(db, COLLECTION_USERS, result.user.uid), {
-        uid: result.user.uid,
-        name: form.name,
-        email: form.email,
-        phone: form.phone,
-        age: form.age,
-        city: form.city,
-        country: form.country,
-        fullAddress: form.fullAddress,
-        createdAt: serverTimestamp(),
-      });
+
+      // 1. Firebase Auth mein user create karein
+      let result: any;
+      try {
+        result = await createUserWithEmailAndPassword(auth, form.email, form.password);
+      } catch (authError: any) {
+        console.log("Signup Error:", authError.code, authError.message);
+        const code = authError?.code;
+        if (code === "auth/email-already-in-use") {
+          setSubmitError("Yeh email pehle se registered hai. Login karein.");
+        } else if (code === "auth/weak-password") {
+          setSubmitError("Password kam se kam 6 characters ka hona chahiye.");
+        } else if (code === "auth/network-request-failed") {
+          setSubmitError("Internet connection check karein.");
+        } else {
+          setSubmitError(authError.message || "Signup fail ho gaya. Dobara try karein.");
+        }
+        setSubmitting(false);
+        return;
+      }
+
+      // 2. Firestore mein user data save karein
+      try {
+        await setDoc(doc(db, COLLECTION_USERS, result.user.uid), {
+          uid: result.user.uid,
+          name: form.name,
+          email: form.email,
+          phone: form.phone,
+          age: form.age,
+          city: form.city,
+          country: form.country,
+          fullAddress: form.fullAddress,
+          createdAt: serverTimestamp(),
+        });
+      } catch (firestoreError: any) {
+        console.log("Signup Error:", firestoreError.code, firestoreError.message);
+        const code = firestoreError?.code;
+        if (code === "permission-denied") {
+          setSubmitError("Database mein save karne ki permission nahi hai. Firestore Rules check karein.");
+        } else if (code === "auth/network-request-failed") {
+          setSubmitError("Internet connection check karein.");
+        } else {
+          setSubmitError(firestoreError.message || "Firestore mein user save nahi hua. Dobara try karein.");
+        }
+        setSubmitting(false);
+        return;
+      }
+
       try {
         localStorage.setItem("onboarding-complete", "true");
       } catch {
@@ -180,19 +216,16 @@ export default function SignUpPage() {
       }
       redirecting.current = true;
       router.push("/");
-    } catch (err) {
-      console.error("[signup] error:", err);
-      const code = (err as AuthError | { code?: string })?.code;
-      if (code === "auth/email-already-in-use") {
-        setSubmitError("Email pehle se register hai. Sign In try karein.");
-      } else if (code === "auth/invalid-email") {
-        setSubmitError("Invalid email address.");
-      } else if (code === "auth/weak-password") {
-        setSubmitError("Password kam az kam 6 characters ka ho.");
-      } else if (err instanceof Error && err.message === "Firebase not configured") {
+    } catch (err: any) {
+      console.log("Signup Error:", err.code, err.message);
+      if (err instanceof Error && err.message === "Firebase not configured") {
         setSubmitError("Firebase configured nahi hai.");
+      } else if (err.code === "permission-denied") {
+        setSubmitError("Database mein save karne ki permission nahi hai. Firestore Rules check karein.");
+      } else if (err.code === "auth/network-request-failed") {
+        setSubmitError("Internet connection check karein.");
       } else {
-        setSubmitError("Signup fail ho gaya. Dobara try karein.");
+        setSubmitError(err.message || "Signup fail ho gaya. Dobara try karein.");
       }
       setSubmitting(false);
     }

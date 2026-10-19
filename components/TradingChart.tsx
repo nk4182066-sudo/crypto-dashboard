@@ -125,7 +125,7 @@ interface TradingChartProps {
   market?: string;
 }
 
-export default function TradingChart({ data, chartKey = "", signals = [], candlePatterns = [], levels = [], trendline = [], trendDirection = "Sideways", patternOutline = [], patternOutlines = [], patternName = "", structureMarkers = [], indicatorOverlays = [], drawingMode = null, drawings = [], onDrawingComplete, hasMoreHistory = false, loadingOlder = false, onLoadOlderData = () => {}, arrowMarkers = [], height = 400, autoAnalyze = true, market = "crypto" }: TradingChartProps) {
+export default function TradingChart({ data, chartKey = "", signals = [], candlePatterns = [], levels = [], trendline = [], trendDirection = "Sideways", patternOutline = [], patternOutlines = [], patternName = "", structureMarkers = [], indicatorOverlays = [], drawingMode = null, drawings = [], onDrawingComplete, hasMoreHistory = false, loadingOlder = false, onLoadOlderData = () => {}, arrowMarkers = [], height = 600, autoAnalyze = true, market = "crypto" }: TradingChartProps) {
   const chartContainerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const candlestickSeriesRef = useRef<ISeriesApi<'Candlestick', Time> | null>(null);
@@ -303,11 +303,11 @@ export default function TradingChart({ data, chartKey = "", signals = [], candle
         pinch: true,
       },
       handleScroll: {
-        // MASLA 3 — wheel zooms, pressed-drag moves the chart horizontally.
+        // wheel zooms, pressed-drag moves the chart horizontally and vertically.
         mouseWheel: true,
         pressedMouseMove: true,
         horzTouchDrag: true,
-        vertTouchDrag: false,
+        vertTouchDrag: true,
       },
       timeScale: {
         borderColor: '#2b3139',
@@ -325,14 +325,21 @@ export default function TradingChart({ data, chartKey = "", signals = [], candle
       },
       rightPriceScale: {
         borderColor: '#2b3139',
-        // MASLA 1 — autoScale ON with 15% padding so S/R / entry / SL / TP
-        // lines are never cut off at the top or bottom of the axis.
+        // autoScale ON with 10% padding so candles stay prominent and
+        // TP/SL lines don't force the chart to squish vertically.
         autoScale: true,
-        scaleMargins: { top: 0.15, bottom: 0.15 },
+        scaleMargins: { top: 0.1, bottom: 0.1 },
       },
     });
 
     chartRef.current = chart;
+
+    // Show only the last 100 candles by default so candles stay big and clear
+    // (fitContent squishes everything when there are 1000+ candles).
+    if (data.length > 0) {
+      const from = Math.max(0, data.length - 100);
+      chart.timeScale().setVisibleLogicalRange({ from, to: data.length });
+    }
 
     const candlestickSeries = chart.addSeries(CandlestickSeries, {
       upColor: '#26a69a',
@@ -359,11 +366,11 @@ export default function TradingChart({ data, chartKey = "", signals = [], candle
     candlestickSeriesRef.current = candlestickSeries;
     markersRef.current = createSeriesMarkers(candlestickSeries, []);
 
-    // MASLA 1 — series-level price scale: keep autoScale on with padding so
-    // lines + candles always stay visible after zoom / pan.
+    // MASLA 1 — series-level price scale: keep autoScale on with 10% padding
+    // so lines + candles always stay visible after zoom / pan, without squishing.
     candlestickSeries.priceScale().applyOptions({
       autoScale: true,
-      scaleMargins: { top: 0.15, bottom: 0.15 },
+      scaleMargins: { top: 0.1, bottom: 0.1 },
     });
 
     // Re-fit the price axis whenever the visible range changes (wheel zoom,
@@ -645,8 +652,8 @@ export default function TradingChart({ data, chartKey = "", signals = [], candle
   };
 
   return (
-    <div className="relative h-full min-h-0 w-full">
-      <div ref={chartContainerRef} className="h-full min-h-0 w-full" style={{ height: "100%" }} />
+    <div className="relative h-full min-h-0 w-full" style={{ touchAction: "none" }}>
+      <div ref={chartContainerRef} className="h-full min-h-0 w-full" style={{ height: "100%", touchAction: "none" }} />
       <svg
         viewBox="0 0 1000 1000"
         preserveAspectRatio="none"

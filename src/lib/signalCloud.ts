@@ -1,12 +1,11 @@
 /**
  * lib/signalCloud.ts — persistence for the /signals pipeline (MASLA 2).
  *
- * Layer 1 — Firestore (collection `signals`), shared across devices:
+ * Layer 1 — Firestore (collection `signals_archive`), shared across devices:
  *   - The market-signals API writes every emitted setup via `persistSignals()`.
- *   - One document per (market, symbol, timeframe): a document younger than
- *     SIGNAL_TTL_MS (4h) is never overwritten (dedupe window — same symbol +
- *     timeframe inside 4h is skipped), older ones refresh in place, and
- *     `sweepExpired()` deletes documents past the TTL.
+ *   - One document per signal, NEVER deleted (no deleteDoc, no TTL sweep).
+ *   - Each doc carries `dateKey` = Asia/Karachi date string (YYYY-MM-DD).
+ *   - Today's signals: where dateKey == today. Previous: orderBy createdAt.
  *   - The Signals page subscribes with `subscribeSignals()` (real-time).
  *   - Requires the NEXT_PUBLIC_FIREBASE_* env vars (mirrors src/lib/firebase.ts).
  *     When they are missing the whole cloud layer is a silent no-op — the
@@ -21,23 +20,25 @@
 import { getApps, initializeApp } from "firebase/app";
 import {
   collection,
-  deleteDoc,
   doc,
   getDoc,
   getDocs,
   getFirestore,
   onSnapshot,
+  orderBy,
+  query,
   setDoc,
+  where,
   type Firestore,
 } from "firebase/firestore";
 
 /** Same symbol+timeframe inside this window is skipped (dedupe, not expiry). */
 export const DEDUPE_WINDOW_MS = 4 * 60 * 60 * 1000;
-/** Signals older than this expire and are auto-deleted (KAAM 9 — 30 days). */
+/** Signals older than 30 days are marked EXPIRED but never deleted. */
 export const SIGNAL_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 
-/** Firestore collection. */
-export const SIGNALS_COLLECTION = "signals";
+/** Firestore archive collection — signals are appended, never deleted. */
+export const SIGNALS_COLLECTION = "signals_archive";
 
 /** localStorage backup key (always-on fallback when Firebase is absent). */
 export const SIGNAL_BACKUP_KEY = "signals-cloud-backup";
@@ -48,6 +49,8 @@ export type CloudDoc = Record<string, unknown> & {
   market: string;
   timeframe?: string;
   createdAt?: number;
+  /** Asia/Karachi date string YYYY-MM-DD for today/previous split. */
+  dateKey?: string;
 };
 
 // Mirrors src/lib/firebase.ts — kept local so this module works in the API
@@ -92,20 +95,74 @@ function docId(signal: CloudDoc): string {
 
 /** JSON round-trip drops undefined/functions and maps NaN/Infinity to null — all invalid in Firestore. */
 function cleanDoc(signal: CloudDoc, now: number): Record<string, unknown> {
-  const payload = { ...signal, timeframe: signal.timeframe ?? "1h", createdAt: now };
+  const pakistanOffset = 5 * 60; // UTC+5 (PKT)
+  const pakistanMs = now + pakistanOffset * 60 * 1000;
+  const dateKey = new Date(pakistanMs).toISOString().slice(0, 10);
+  const payload = { ...signal, dateKey, timeframe: signal.timeframe ?? "1h", createdAt: now };
   return JSON.parse(JSON.stringify(payload)) as Record<string, unknown>;
 }
 
-/** True while the stored signal is inside the 4h window. */
-export function isFresh(signal: CloudDoc, now = Date.now()): boolean {
-  if (typeof signal.createdAt === "number") return now - signal.createdAt < SIGNAL_TTL_MS;
-  const stamp = Date.parse(String(signal.analyzedAt ?? ""));
-  return Number.isFinite(stamp) ? now - stamp < SIGNAL_TTL_MS : false;
+/** Asia/Karachi date string YYYY-MM-DD for a given epoch ms. */
+export function karachiDateKey(ms = Date.now()): string {
+  const pakistanOffset = 5 * 60; // UTC+5 (PKT)
+  const pakistanMs = ms + pakistanOffset * 60 * 1000;
+  return new Date(pakistanMs).toISOString().slice(0, 10);
+}
+
+/**
+ * Read today's signals (dateKey == Asia/Karachi today). Used by the live page.
+ * Never throws.
+ */
+export async function readTodaySignals(): Promise<Array<CloudDoc & { id: string }>> {
+  const db = getCloudDb();
+  if (!db) {
+    console.info(`[signalCloud] readTodaySignals off (${initReason}).`);
+    return [];
+  }
+  try {
+    const today = karachiDateKey();
+    const q = query(
+      collection(db, SIGNALS_COLLECTION),
+      where("dateKey", "==", today),
+      orderBy("createdAt", "desc")
+    );
+    const snapshot = await getDocs(q);
+    return snapshot.docs.map((entry) => ({ id: entry.id, ...(entry.data() as CloudDoc) }));
+  } catch (error) {
+    console.warn("[signalCloud] readTodaySignals failed:", error instanceof Error ? error.message : error);
+    return [];
+  }
+}
+
+/**
+ * Read previous signals ordered by createdAt (all signals not from today).
+ * Used by the Results page history view. Never throws.
+ */
+export async function readPreviousSignals(): Promise<Array<CloudDoc & { id: string }>> {
+  const db = getCloudDb();
+  if (!db) {
+    console.info(`[signalCloud] readPreviousSignals off (${initReason}).`);
+    return [];
+  }
+  try {
+    const today = karachiDateKey();
+    const q = query(
+      collection(db, SIGNALS_COLLECTION),
+      where("dateKey", "!=", today),
+      orderBy("createdAt", "desc")
+    );
+    const snapshot = await getDocs(q);
+    return snapshot.docs.map((entry) => ({ id: entry.id, ...(entry.data() as CloudDoc) }));
+  } catch (error) {
+    console.warn("[signalCloud] readPreviousSignals failed:", error instanceof Error ? error.message : error);
+    return [];
+  }
 }
 
 /**
  * Server-side save (market-signals API). Skips documents already younger than
- * 4h (dedupe), refreshes older ones, then sweeps expired documents.
+ * 4h (dedupe), refreshes older ones. NEVER deletes — signals accumulate in
+ * signals_archive with dateKey for today/previous split.
  * Never throws — a cloud failure must not break the signal response.
  */
 export async function persistSignals(signals: CloudDoc[]): Promise<void> {
@@ -139,29 +196,12 @@ export async function persistSignals(signals: CloudDoc[]): Promise<void> {
     }
   }
   if (saved > 0) console.info(`[signalCloud] ${saved} saved, ${skipped} skipped (dedupe <4h).`);
-  if (saved > 0) await sweepExpired(db, now);
-}
-
-/** Auto-delete documents older than the 4h TTL (spec: expire → delete). */
-async function sweepExpired(db: Firestore, now: number): Promise<void> {
-  try {
-    const snapshot = await getDocs(collection(db, SIGNALS_COLLECTION));
-    const expired = snapshot.docs.filter((entry) => {
-      const createdAt = (entry.data() as { createdAt?: number }).createdAt;
-      return typeof createdAt === "number" && now - createdAt > SIGNAL_TTL_MS;
-    });
-    for (const entry of expired) {
-      await deleteDoc(entry.ref);
-      console.info(`[signalCloud] expired doc deleted: ${entry.id}`);
-    }
-  } catch (error) {
-    console.warn("[signalCloud] sweep failed:", error instanceof Error ? error.message : error);
-  }
 }
 
 /**
- * Client-side real-time listener. Returns an unsubscribe function.
- * Emits only fresh (<4h) documents; never throws (errors are logged).
+ * Client-side real-time listener (Signals page). Emits ONLY today's docs
+ * (dateKey == Asia/Karachi today) so the live pool never mixes days; the
+ * Results page history uses `subscribeAllSignals()`. Never throws.
  */
 export function subscribeSignals(onSignals: (signals: CloudDoc[]) => void): () => void {
   const db = getCloudDb();
@@ -170,13 +210,13 @@ export function subscribeSignals(onSignals: (signals: CloudDoc[]) => void): () =
     return () => {};
   }
   try {
+    const today = karachiDateKey();
     return onSnapshot(
       collection(db, SIGNALS_COLLECTION),
       (snapshot) => {
-        const now = Date.now();
         const fresh = snapshot.docs
           .map((entry) => entry.data() as CloudDoc)
-          .filter((signal) => isFresh(signal, now));
+          .filter((signal) => signal.dateKey === today);
         onSignals(fresh);
       },
       (error) => console.warn("[signalCloud] listener error:", error.message),
@@ -188,10 +228,9 @@ export function subscribeSignals(onSignals: (signals: CloudDoc[]) => void): () =
 }
 
 /**
- * Real-time listener for the Results page — same as `subscribeSignals()` but
- * WITHOUT the 4h freshness filter, so the full 30-day history shows up
- * (documents past the TTL are deleted by `sweepExpired()` anyway). Every doc
- * is returned with its Firestore id attached. Never throws.
+ * Real-time listener for the Results page — every doc in signals_archive
+ * (append-only: nothing is ever deleted), ordered by createdAt desc, each
+ * returned with its Firestore id attached. Never throws.
  */
 export function subscribeAllSignals(
   onSignals: (signals: Array<CloudDoc & { id: string }>) => void,
@@ -203,7 +242,7 @@ export function subscribeAllSignals(
   }
   try {
     return onSnapshot(
-      collection(db, SIGNALS_COLLECTION),
+      query(collection(db, SIGNALS_COLLECTION), orderBy("createdAt", "desc")),
       (snapshot) => {
         onSignals(snapshot.docs.map((entry) => ({ id: entry.id, ...(entry.data() as CloudDoc) })));
       },

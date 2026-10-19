@@ -63,7 +63,25 @@ function toCloudDoc(signal: MarketSignal, timeframe: string): CloudDoc | null {
       atr: signal.atr,
       timeframeMinutes: signal.timeframeMinutes,
       candlestick: signal.candlestick
-        ? { name: signal.candlestickPattern!, confidence: signal.candlestickConfidence, type: signal.candlestickType ?? signal.direction }
+        ? {
+            name: signal.candlestickPattern!,
+            confidence: signal.candlestickConfidence,
+            // Derive type from the pattern name so a bullish Morning Star is
+            // never mislabeled "Bearish" just because the setup direction is
+            // bearish. Falls back to signal.direction only when the name is
+            // unknown.
+            type:
+              signal.candlestickType ??
+              (/\b(bearish|double top|head and shoulders|shooting star|engulfing down)\b/i.test(
+                signal.candlestickPattern ?? ""
+              )
+                ? "bearish"
+                : /\b(bullish|double bottom|morning star|hammer|engulfing up)\b/i.test(
+                  signal.candlestickPattern ?? ""
+                )
+                  ? "bullish"
+                  : "neutral"),
+          }
         : null,
     });
   } catch (error) {
