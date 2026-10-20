@@ -29,8 +29,10 @@
 import { cached } from "./cache";
 import { getCachedSnapshot, runScan, type ScanResult } from "@/src/scanner/scanner";
 import { scanUniverse, type ScanMarket } from "@/src/scanner/universe";
+import { rotationWindow, rotationWindowSymbols } from "../scanner/scanRotation";
 export type { ScanMarket };
 import { analyzeCoin } from "./analyzeCoin";
+import { computeSignalTier } from "./strictSignalEngine";
 import { generateFullSignal } from "./signalGenerator";
 import { buildConfirmations, buildEducators } from "./confirmations";
 import { calculateIndicators } from "./indicatorEngine";
@@ -41,7 +43,7 @@ import { ema, rsi, sma } from "@/src/analysis/indicators";
 import type { Candle } from "@/src/analysis/types";
 
 /** EMISSION FLOOR (Quality with Quantity spec): score < 85 → reject, never shown. */
-export const MIN_EMIT_SCORE = 85;
+export const MIN_EMIT_SCORE = 80;
 
 /** Per-market live cap (Spec: 40 total = 10 + 10 + 10 + 10). */
 export const LIVE_CAPS: Record<ScanMarket, number> = {
@@ -102,12 +104,12 @@ type EmittedConfirmations = EmittedMarketSignal["confirmations"];
 type EmittedIndicators = EmittedMarketSignal["indicators"];
 type EmittedExperts = EmittedMarketSignal["experts"];
 
-function toEmittedSignal(item: { symbol: string; label: string; market: ScanMarket; reason: string }, full: ReturnType<typeof analyzeCoin>, confirmations: EmittedMarketSignal["confirmations"], indicators: EmittedMarketSignal["indicators"], experts: EmittedMarketSignal["experts"], h1: Candle[]): EmittedMarketSignal {
+function toEmittedSignal(item: { symbol: string; label: string; market: ScanMarket; reason: string }, full: ReturnType<typeof analyzeCoin>, confirmations: EmittedMarketSignal["confirmations"], indicators: EmittedMarketSignal["indicators"], experts: EmittedMarketSignal["experts"], h1: Candle[], tierScore: number): EmittedMarketSignal {
   return {
     symbol: item.symbol,
     label: item.label,
     market: item.market,
-    score: full.score,
+    score: tierScore,
     direction: full.direction,
     bias: full.direction === "bullish" ? "Bullish" : full.direction === "bearish" ? "Bearish" : "Sideways",
     price: full.price,
@@ -260,28 +262,24 @@ export async function evaluateStrict(
     }
   }
 
-  // STRICT gate (Quality with Quantity spec) — PREMIUM / STRONG only:
-  //   Tier 1 (PREMIUM):  8/8 conditions → score 100
-  //   Tier 2 (STRONG):   7/8 conditions → score 88
-  //   Floor: conditions >= 7/8 (score >= 85) AND experts >= 3/4.
-  //   Below 7/8 OR <3/4 experts → REJECT (not shown, not buffered,
-  //   not flushed as filler — a quiet market shows fewer signals instead).
-  const conditionsOk = full.conditionsPassed >= 7;
-  // Experts gate: the panel must exist with at least 3/4 consensus — the
-  // committed delivery-grade floor (unanimity 4/4 was an uncommitted over-
-  // tighten that drove emission to 0). Null experts reject, so we never emit
-  // an unverifiable card.
-  const expertsOk = experts !== null && experts.consensus.agreed >= 3;
-  if (!conditionsOk || !expertsOk) {
-    // Below the minimum → reject. No near-miss buffering, no flush.
+  // STRICT gate (Score Mapping spec):
+  //   Tier 1 (PREMIUM): 8/8 conditions + 4/4 experts → score 95 (auto-notification tier)
+  //   Tier 2 (STRONG):   7/8 conditions + 3/4 experts → score 85
+  //   Tier 3 (GOOD):     6/8 conditions + 3/4 experts → score 80
+  //   5/8 conditions or below, or 2/4 experts or below → REJECT.
+  const tier = computeSignalTier({
+    conditionsPassed: full.conditionsPassed,
+    indicatorsAgreedCount: 0,
+    expertsAgreed: experts?.consensus.agreed ?? 0,
+    candlestickConfirmed: false,
+    volumePassed: false,
+    chartPatternPassed: false,
+  });
+  if (!tier) {
+    const agreed = experts?.consensus.agreed ?? null;
     console.log(
-      `[signalsLive] reject ${candidate.symbol}: cond=${full.conditionsPassed} score=${full.score} dir=${full.direction} experts=${experts ? `${(experts as { consensus: { agreed: number; total: number } }).consensus.agreed}/${(experts as { consensus: { agreed: number; total: number } }).consensus.total}` : "null"} h1=${h1.length} failed=[${(full.conditions ?? []).filter((c) => !c.pass).map((c) => c.id).join(",")}]`,
+      `[signalsLive] reject ${candidate.symbol}: cond=${full.conditionsPassed} experts=${agreed == null ? "null" : agreed + "/4"} dir=${full.direction} -> below accepted tier (needs 6/8 + 3/4)`,
     );
-    return null;
-  }
-  // QUALITY GATE (Perfect Balance) — score floor 85. Any miss → null.
-  if (full.score < MIN_EMIT_SCORE) {
-    console.log(`[signalsLive] reject ${candidate.symbol}: score ${full.score} < ${MIN_EMIT_SCORE}`);
     return null;
   }
   // QUALITY GATE — trend (H1+H4), volume (>20-SMA) and RSI (<35 buy / >65 sell).
@@ -290,7 +288,7 @@ export async function evaluateStrict(
     console.log(`[signalsLive] reject ${candidate.symbol}: ${filterMiss}`);
     return null;
   }
-  return toEmittedSignal(candidate, full, confirmations, indicators, experts, h1);
+  return toEmittedSignal(candidate, full, confirmations, indicators, experts, h1, tier.score);
 }
 
 
@@ -388,6 +386,9 @@ export async function getStrictSignals(market: ScanMarket, limit?: number, origi
   const cap = limit === undefined ? remainingToday : Math.min(limit, remainingToday);
 
   let candidates = getCachedSnapshot()?.results?.filter((item) => item.market === market) ?? [];
+  // 50-coin sniper scan rotation: only evaluate the current rotation window.
+  const window = rotationWindowSymbols(market);
+  candidates = candidates.filter((c) => window.has(c.symbol));
 
   if (candidates.length === 0) {
     const memo = coldScanCache.get(market);
@@ -396,7 +397,7 @@ export async function getStrictSignals(market: ScanMarket, limit?: number, origi
       console.log(`[signalsLive] ${market}: snapshot empty → cold-scan cache hit (${candidates.length} candidates)`);
     } else {
       try {
-        const targets = scanUniverse.filter((target) => target.market === market);
+        const targets = rotationWindow(market);
         const fresh = await runScan(targets);
         candidates = fresh.results.filter((item) => item.market === market);
         coldScanCache.set(market, { at: Date.now(), items: candidates });

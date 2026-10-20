@@ -398,23 +398,21 @@ export function scoreFromConditions(conditionsMet: number, indicatorsAgreedCount
 
 /** Strict tier verdict for a scanned setup. Returns null when the setup must
  *  be REJECTED (never shown, never saved, never alerted). No relaxation. */
-export type SignalTier = "PREMIUM" | "STRONG" | null;
+export type SignalTier = "PREMIUM" | "STRONG" | "GOOD" | null;
 
 export interface SignalTierVerdict {
   tier: SignalTier;
   label: string;
   color: "green" | "blue" | "yellow";
+  /** The exact fixed score for this tier — 95 / 85 / 80. */
+  score: number;
+}export function tierScore(conditionsPassed: number, expertsAgreed: number): number | null {
+  if (conditionsPassed >= 8 && expertsAgreed >= 4) return 95;
+  if (conditionsPassed >= 7 && expertsAgreed >= 3) return 85;
+  if (conditionsPassed >= 6 && expertsAgreed >= 3) return 80;
+  return null;
 }
 
-/** Hard-gated tier assignment (Quality with Quantity spec).
- * Every tier requires:
- *  - expertsAgreed >= 3  (EXPERT GATE 3/4 - at least 3 of 4 experts agree)
- *  - conditionsPassed >= 7 (score 88 >= the 85 emission floor - nothing below
- *    85 is ever emitted or shown; the old 6/8 = 75 GOOD band is gone)
- *
- *  Tier 1 (PREMIUM): 8/8 conditions + 3/4 experts -> score 100.
- *  Tier 2 (STRONG):  7/8 conditions + 3/4 experts -> score 88.
- */
 export function computeSignalTier({
   conditionsPassed,
   indicatorsAgreedCount,
@@ -430,18 +428,18 @@ export function computeSignalTier({
   volumePassed: boolean;
   chartPatternPassed: boolean;
 }): SignalTierVerdict | null {
-  // ─── REJECT RULES ───
-  if (expertsAgreed < 3) return null; // EXPERT GATE: 3/4 minimum → REJECT below
-  if (conditionsPassed < 7) return null; // Score floor: 7/8 = 88 >= the 85 emission floor
+  const score = tierScore(conditionsPassed, expertsAgreed);
+  if (score === null) return null;
 
-  // ─── TIER 1: PREMIUM (Green) ───
-  if (conditionsPassed === 8) {
-    return { tier: "PREMIUM", label: "PREMIUM SETUP", color: "green" };
+  if (conditionsPassed >= 8 && expertsAgreed >= 4) {
+    return { tier: "PREMIUM", label: "PREMIUM SETUP", color: "green", score };
   }
-
-  // TIER 2: STRONG (Blue) - 7/8 conditions, score 88
-  return { tier: "STRONG", label: "STRONG SETUP", color: "blue" };
+  if (conditionsPassed >= 7) {
+    return { tier: "STRONG", label: "STRONG SETUP", color: "blue", score };
+  }
+  return { tier: "GOOD", label: "GOOD SETUP", color: "yellow", score };
 }
+
 export function qualityLabel(quality: Quality | null): Quality | null {
   if (quality === "PERFECT") return "PERFECT";
   if (quality === "STRONG") return "STRONG";

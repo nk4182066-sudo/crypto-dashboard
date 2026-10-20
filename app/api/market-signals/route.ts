@@ -3,15 +3,17 @@ import { cached, cacheGet } from "@/src/lib/cache";
 import { getCachedSnapshot, runScan, type ScanResult, type ScanSnapshot } from "@/src/scanner/scanner";
 import { startScheduler } from "@/src/scanner/scheduler";
 import { scanUniverse, type ScanMarket, type ScanTarget } from "@/src/scanner/universe";
+import { rotationWindowSymbols } from "@/src/scanner/scanRotation";
 import type { Candle } from "@/src/analysis/types";
 import { generateFullSignal } from "@/src/lib/signalGenerator";
 import { buildConfirmations, buildEducators, type ConfirmationIndicator, type Consensus, type EducatorVerdict } from "@/src/lib/confirmations";
 import { calculateIndicators, indicatorsAgreed, type IndicatorRow } from "@/src/lib/indicatorEngine";
 import { persistSignals, persistToHistory, type CloudDoc } from "@/src/lib/signalCloud";
+import { recentlyFailedSymbols } from "@/src/lib/signalCloud";
 import { analyzeCoin, type ConditionLine } from "@/src/lib/analyzeCoin";
 import { computeSignalTier, type SignalTier } from "@/src/lib/strictSignalEngine";
 import { MAX_SIGNALS_PER_MARKET_PER_DAY, remainingEmitSlots, reserveEmitSlot } from "@/src/lib/dailyQuota";
-import { MIN_EMIT_SCORE, qualityFilterMiss } from "@/src/lib/signalsLive";
+import { qualityFilterMiss } from "@/src/lib/signalsLive";
 
 export const dynamic = "force-dynamic";
 
@@ -329,8 +331,12 @@ export async function GET(request: Request) {
   // signals are emitted. Anything else is dropped — the UI then shows
   // "No clear setup. Wait karein." Strict quality > quantity.
   const emitted: MarketSignal[] = [];
+  const window = rotationWindowSymbols(market);
+  const failedSymbols = await recentlyFailedSymbols(market);
   const ordered = [...merged.values()]
     .filter((item) => item.market === market)
+    .filter((item) => window.has(item.symbol))
+    .filter((item) => !failedSymbols.has(item.symbol))
     .sort((first, second) => second.confidence - first.confidence);
 
   // DAILY QUOTA — at most 10 emissions per market per Asia/Karachi day (shared
@@ -354,7 +360,8 @@ export async function GET(request: Request) {
     confirmations: MarketSignal["confirmations"],
     indicatorRows: IndicatorRow[] | null,
     experts: MarketSignal["experts"],
-  tier: SignalTier
+  tier: SignalTier,
+  score: number
   ): MarketSignal {
     const direction = full.direction;
     return {
@@ -364,7 +371,7 @@ export async function GET(request: Request) {
       tier,
       // MASLA 3 — score = (conditions_passed / 8) * 100 straight from the
       // shared engine (8/8=100, 7/8=88, 6/8=75): identical on Trade + Signals.
-      score: full.score,
+      score,
       direction,
       bias: direction === "bullish" ? "Bullish" : "Bearish",
       price: full.price,
@@ -479,12 +486,6 @@ export async function GET(request: Request) {
       continue;
     }
 
-    // QUALITY GATE (Quality with Quantity spec) — score 85 floor + the
-    // Perfect-Balance trend/volume/RSI filters. Any miss → reject (no fallback).
-    if (full.score < MIN_EMIT_SCORE) {
-      drops.conditions += 1;
-      continue;
-    }
     const filterMiss = qualityFilterMiss(h1, h4, full.direction);
     if (filterMiss) {
       console.log(`[market-signals] reject ${item.symbol}: ${filterMiss}`);
@@ -588,7 +589,7 @@ export async function GET(request: Request) {
     quotaLeft -= 1;
 
     drops.emitted += 1;
-    emitted.push(emitSignal(item, full, confirmations, indicatorRows, experts, tierVerdict.tier));
+    emitted.push(emitSignal(item, full, confirmations, indicatorRows, experts, tierVerdict.tier, tierVerdict.score));
   }
 
   // MASLA 2 — persist every emitted setup (Firestore `signals` collection) so

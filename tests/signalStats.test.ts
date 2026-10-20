@@ -150,9 +150,11 @@ test("score tiers follow the app's thresholds", () => {
   assert.equal(scoreTierKey(95), "premium");
   assert.equal(scoreTierKey(94), "strong");
   assert.equal(scoreTierKey(88), "strong");
-  assert.equal(scoreTierKey(87), "good");
-  assert.equal(scoreTierKey(85), "good");
-  assert.equal(scoreTierKey(84), "below");
+  assert.equal(scoreTierKey(87), "strong");
+  assert.equal(scoreTierKey(85), "strong");
+  assert.equal(scoreTierKey(80), "good");
+  assert.equal(scoreTierKey(84), "good");
+  assert.equal(scoreTierKey(79), "below");
 });
 
 test("the average score only counts resolved setups", () => {

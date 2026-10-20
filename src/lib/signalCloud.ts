@@ -367,6 +367,30 @@ export async function readAllSignals(): Promise<Array<CloudDoc & { id: string }>
 }
 
 /**
+ * Symbols whose most recent stored setup resolved to a loss/failure within
+ * the last 24h — these are skipped on the next scan (duplicate/ghost fix).
+ * When `market` is given, only that market's symbols are considered.
+ */
+export async function recentlyFailedSymbols(
+  market: string | undefined,
+  now = Date.now()
+): Promise<Set<string>> {
+  const docs = await readAllSignals();
+  const cutoff = now - SIGNAL_TTL_MS;
+  const settled = new Set(["WIN", "LOSS", "EXPIRED", "SUCCESS", "FAILED"]);
+  const failed = new Set<string>();
+  for (const d of docs) {
+    if (market !== undefined && d.market !== market) continue;
+    if (!settled.has(String(d.status ?? "").toUpperCase())) continue;
+    const isLoss = /^(LOSS|FAILED)$/i.test(String(d.status ?? ""));
+    if (!isLoss) continue;
+    const createdAt = typeof d.createdAt === "number" ? d.createdAt : 0;
+    if (createdAt >= cutoff) failed.add(String(d.symbol));
+  }
+  return failed;
+}
+
+/**
  * Merge-patch one stored signal — used by the tracking cron to write the
  * resolved `status` ("WIN" | "LOSS" | "EXPIRED" | "PENDING") and the
  * `currentPrice` it evaluated at. Merge so all trade-plan fields are kept.

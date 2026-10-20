@@ -79,9 +79,9 @@ export interface SignalStats {
 /** Score tier names used across the app. */
 export const SCORE_TIERS: Array<{ key: string; label: string; min: number; max: number }> = [
   { key: "premium", label: "PREMIUM (95+)", min: 95, max: Infinity },
-  { key: "strong", label: "STRONG (88-94)", min: 88, max: 94 },
-  { key: "good", label: "GOOD (85-87)", min: 85, max: 87 },
-  { key: "below", label: "BELOW 85", min: -Infinity, max: 84 },
+  { key: "strong", label: "STRONG (85-94)", min: 85, max: 94 },
+  { key: "good", label: "GOOD (80-84)", min: 80, max: 84 },
+  { key: "below", label: "BELOW 80", min: -Infinity, max: 79 },
 ];
 
 /** Outcome buckets — the four states a setup can be in. */
