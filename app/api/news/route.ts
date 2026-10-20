@@ -27,15 +27,18 @@ export async function GET(request: Request) {
   const tag = rawTag && VALID_TAGS.includes(rawTag as NewsTag) ? (rawTag as NewsTag) : null;
 
   try {
-    const items = await fetchAllNews(limit);
-    const filtered = tag ? items.filter((i) => i.tag === tag) : items;
+    // Fetch a wider pool first, then filter and slice, so a tag filter is not
+    // starved by the global newest-first cut.
+    const pool = await fetchAllNews(120);
+    const filtered = tag ? pool.filter((i) => i.tag === tag) : pool;
+    const items = filtered.slice(0, limit);
     return Response.json(
       {
         ok: true,
         generatedAt: new Date().toISOString(),
-        count: filtered.length,
+        count: items.length,
         sources: [...new Set(items.map((i) => i.source))],
-        items: filtered,
+        items,
       },
       { headers: { "Cache-Control": "no-store" } },
     );

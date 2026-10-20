@@ -32,6 +32,12 @@ export interface NewsFeed {
   url: string;
   /** Bucket headlines land in by default; title keywords can override it. */
   defaultTag: NewsTag;
+  /**
+   * Aggregator feeds (Google News) append the publisher to the headline as
+   * "Story headline - Publisher". When this is true we split that off and
+   * show the real publisher as the source.
+   */
+  sourceFromTitle?: boolean;
 }
 
 export const NEWS_FEEDS: NewsFeed[] = [
@@ -44,6 +50,36 @@ export const NEWS_FEEDS: NewsFeed[] = [
   { key: "investing-stocks", name: "Investing.com", url: "https://www.investing.com/rss/news_25.rss", defaultTag: "Stock" },
   { key: "marketwatch", name: "MarketWatch", url: "https://www.marketwatch.com/rss/topstories", defaultTag: "Stock" },
   { key: "bbc-business", name: "BBC Business", url: "https://www.bbc.com/news/business/rss.xml", defaultTag: "Stock" },
+  // Google News topic feeds act as a resilient backup: when a publisher's own
+  // RSS is throttled or down we still surface headlines for that market.
+  {
+    key: "gnews-crypto",
+    name: "Google News",
+    url: "https://news.google.com/rss/search?q=cryptocurrency+bitcoin+when:1d&hl=en-US&gl=US&ceid=US:en",
+    defaultTag: "Crypto",
+    sourceFromTitle: true,
+  },
+  {
+    key: "gnews-forex",
+    name: "Google News",
+    url: "https://news.google.com/rss/search?q=forex+currency+exchange+when:1d&hl=en-US&gl=US&ceid=US:en",
+    defaultTag: "Forex",
+    sourceFromTitle: true,
+  },
+  {
+    key: "gnews-stocks",
+    name: "Google News",
+    url: "https://news.google.com/rss/search?q=stock+market+when:1d&hl=en-US&gl=US&ceid=US:en",
+    defaultTag: "Stock",
+    sourceFromTitle: true,
+  },
+  {
+    key: "gnews-gold",
+    name: "Google News",
+    url: "https://news.google.com/rss/search?q=gold+price+when:1d&hl=en-US&gl=US&ceid=US:en",
+    defaultTag: "Gold",
+    sourceFromTitle: true,
+  },
 ];
 
 /** Keyword overrides - a headline that mentions gold lands in "Gold" even if it
@@ -127,6 +163,23 @@ function extractChannelTitle(xml: string): string {
   return stripHtml(decodeEntities(m[1])).replace(/\s+/g, " ").trim();
 }
 
+/**
+ * Google News appends the publisher to every headline as
+ * "Story headline - Publisher". Split that off so the UI can show the real
+ * publisher as the source instead of a generic "Google News".
+ */
+export function splitAggregatorSource(title: string): { title: string; source: string | null } {
+  const idx = title.lastIndexOf(" - ");
+  if (idx <= 0) return { title, source: null };
+  const publisher = title.slice(idx + 3).trim();
+  const headline = title.slice(0, idx).trim();
+  // Publisher names are short; a long tail is part of the headline itself.
+  if (!publisher || publisher.length > 40 || headline.length < 8) {
+    return { title, source: null };
+  }
+  return { title: headline, source: publisher };
+}
+
 /** "3 hours ago" / "just now" / "2 days ago" - English, matches the UI copy. */
 export function formatTimeAgo(iso: string | null): string {
   if (!iso) return "recently";
@@ -155,15 +208,21 @@ export function parseFeed(xml: string, feed: NewsFeed): NewsItem[] {
   const blocks = xml.match(/<item[\s>][\s\S]*?<\/item>/gi) ?? [];
 
   for (const block of blocks) {
-    const title = extractTitle(block);
+    let title = extractTitle(block);
     if (!title) continue;
+    let source = feed.name;
+    if (feed.sourceFromTitle) {
+      const split = splitAggregatorSource(title);
+      title = split.title;
+      if (split.source) source = split.source;
+    }
     const link = extractLink(block);
     if (!link) continue;
     const publishedAt = extractDate(block);
     items.push({
       id: `${feed.key}:${link}`,
       title,
-      source: feed.name,
+      source,
       link,
       publishedAt,
       timeAgo: formatTimeAgo(publishedAt),
@@ -215,16 +274,36 @@ export async function fetchFeed(feed: NewsFeed, attempt = 0): Promise<NewsItem[]
   }
 }
 
-/** Fetch every feed (small batches to avoid tripping per-host rate limits) and
- *  merge into one time-sorted, de-duplicated list. */
+/** Fetch every feed and merge into one time-sorted, de-duplicated list.
+ *
+ *  Feeds are grouped by host and each host's feeds are fetched one after the
+ *  other. Publishers such as Investing.com, FXStreet and Google News throttle
+ *  or block concurrent requests coming from a datacenter IP, so hitting them
+ *  in parallel silently drops whole feeds. Serialising per host keeps every
+ *  source alive while still letting different hosts load in parallel. */
 export async function fetchAllNews(limit = 60): Promise<NewsItem[]> {
-  const results: NewsItem[][] = [];
-  const BATCH = 3;
-  for (let i = 0; i < NEWS_FEEDS.length; i += BATCH) {
-    const batch = NEWS_FEEDS.slice(i, i + BATCH);
-    const settled = await Promise.all(batch.map((f) => fetchFeed(f)));
-    results.push(...settled);
+  const byHost = new Map<string, NewsFeed[]>();
+  for (const feed of NEWS_FEEDS) {
+    let host = "unknown";
+    try {
+      host = new URL(feed.url).host;
+    } catch {
+      /* keep "unknown" */
+    }
+    const list = byHost.get(host) ?? [];
+    list.push(feed);
+    byHost.set(host, list);
   }
+
+  const hostQueues = Array.from(byHost.values()).map(async (feeds) => {
+    const out: NewsItem[][] = [];
+    for (const feed of feeds) {
+      out.push(await fetchFeed(feed));
+    }
+    return out;
+  });
+
+  const results = (await Promise.all(hostQueues)).flat();
   const merged = results.flat();
   // Newest first. Items without a date sink to the bottom.
   merged.sort((a, b) => {
@@ -232,22 +311,35 @@ export async function fetchAllNews(limit = 60): Promise<NewsItem[]> {
     const tb = b.publishedAt ? Date.parse(b.publishedAt) : 0;
     return tb - ta;
   });
-  // Cap the number of items per source so one fast-publishing feed (BBC,
-  // Investing.com) cannot crowd out the rest of the world's news.
-  const PER_SOURCE = 8;
+  // Cap items per source and per feed so a fast publisher (BBC, Investing.com)
+  // or a wide aggregator feed (Google News, 100+ items) cannot crowd out the
+  // rest of the world's news.
+  const PER_SOURCE = 6;
+  const PER_FEED = 6;
   const perSource = new Map<string, number>();
+  const perFeed = new Map<string, number>();
   const capped = merged.filter((item) => {
-    const seen = perSource.get(item.source) ?? 0;
-    if (seen >= PER_SOURCE) return false;
-    perSource.set(item.source, seen + 1);
+    const feedKey = item.id.split(":")[0] ?? "";
+    const feedSeen = perFeed.get(feedKey) ?? 0;
+    if (feedSeen >= PER_FEED) return false;
+    perFeed.set(feedKey, feedSeen + 1);
+
+    const sourceSeen = perSource.get(item.source) ?? 0;
+    if (sourceSeen >= PER_SOURCE) return false;
+    perSource.set(item.source, sourceSeen + 1);
     return true;
   });
 
-  // Dedupe by link (the same story can appear in two feeds).
+  // Dedupe by link (the same story can appear in two feeds) and by headline
+  // (the same story often appears with a different tracking URL).
   const seen = new Set<string>();
+  const seenTitles = new Set<string>();
   const unique = capped.filter((item) => {
     if (seen.has(item.link)) return false;
     seen.add(item.link);
+    const titleKey = item.title.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+    if (titleKey.length > 20 && seenTitles.has(titleKey)) return false;
+    if (titleKey.length > 20) seenTitles.add(titleKey);
     return true;
   });
   return unique.slice(0, limit);
