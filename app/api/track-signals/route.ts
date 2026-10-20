@@ -1,8 +1,10 @@
 // GET /api/track-signals — server-side auto-tracking cron (MASLA 5).
 //
-// Vercel calls this every 15 minutes (see vercel.json `crons`). It reads every
-// stored setup from Firestore, fetches the CURRENT price for each market, and
-// resolves the outcome (Quality spec, item 4):
+// Scheduled every 15 minutes by GitHub Actions (.github/workflows/
+// signal-cron.yml — the Vercel Hobby plan only allows daily crons, so the
+// repo workflow drives the real cadence; Vercel's daily cron stays as a
+// fallback). It reads every stored setup from Firestore, fetches the CURRENT
+// price for each market, and resolves the outcome (Quality spec, item 4):
 //   - price reaches TP1/2/3 -> status = "WIN"   (SUCCESS — records which target)
 //   - price hits SL         -> status = "LOSS"  (FAILED)
 //   - older than 24 hours   -> status = "EXPIRED"

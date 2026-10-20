@@ -1,0 +1,56 @@
+name: Signal Engine Cron
+
+# The Vercel Hobby plan only allows DAILY cron jobs, so the real 5-minute
+# scanning / 15-minute tracking cadence is driven from GitHub Actions instead.
+# Both endpoints are public (the optional CRON_SECRET is only enforced when
+# the environment variable is set on the deployment), so a plain HTTPS call is
+# enough. Vercel's daily crons stay in vercel.json as a safety net.
+on:
+  schedule:
+    # Every 5 minutes — live scan + pool refresh (Quality with Quantity).
+    - cron: "*/5 * * * *"
+    # Every 15 minutes — signal tracking (WIN / LOSS / EXPIRED resolution).
+    - cron: "*/15 * * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: signal-engine-cron
+  cancel-in-progress: false
+
+jobs:
+  trigger:
+    name: Trigger signal endpoints
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Fire live-scan + tracking endpoints
+        env:
+          SITE_URL: ${{ vars.SITE_URL }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          set -uo pipefail
+
+          # Fall back to the project's production alias when the repo variable
+          # has not been set yet.
+          BASE="${SITE_URL:-https://crypto-dashboard-tau-cyan.vercel.app}"
+          BASE="${BASE%/}"
+
+          call() {
+            path="$1"
+            url="${BASE}${path}"
+            if [ -n "${CRON_SECRET}" ]; then
+              code=$(curl -sS -o /tmp/cron-body.txt -w '%{http_code}' \
+                -H "Authorization: Bearer ${CRON_SECRET}" \
+                --max-time 240 "$url" || echo "000")
+            else
+              code=$(curl -sS -o /tmp/cron-body.txt -w '%{http_code}' \
+                --max-time 240 "$url" || echo "000")
+            fi
+            echo "::notice title=signal-cron::${path} -> HTTP ${code}"
+            head -c 400 /tmp/cron-body.txt || true
+            echo ""
+            [ "$code" = "200" ] || exit 1
+          }
+
+          call "/api/signals/live?market=all"
+          call "/api/track-signals"

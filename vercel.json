@@ -18,8 +18,8 @@
     }
   },
   "crons": [
-    { "path": "/api/signals/live", "schedule": "*/5 * * * *" },
-    { "path": "/api/track-signals", "schedule": "*/15 * * * *" }
+    { "path": "/api/signals/live", "schedule": "0 3 * * *" },
+    { "path": "/api/track-signals", "schedule": "30 15 * * *" }
   ]
 }
 
