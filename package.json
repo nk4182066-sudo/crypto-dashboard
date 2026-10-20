@@ -7,7 +7,9 @@
     "dev:next": "set TURBOPACK_REMOTE_CACHE=0&& set NEXT_TELEMETRY_DISABLED=1&& next dev --webpack",
     "build": "next build",
     "start": "NODE_ENV=production node --experimental-strip-types server.ts",
-    "lint": "eslint"
+    "lint": "eslint",
+    "test": "node --import ./tests/register.mjs --test tests/*.test.ts",
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "@google/genai": "^2.27.0",

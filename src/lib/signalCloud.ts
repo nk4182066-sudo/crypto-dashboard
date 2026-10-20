@@ -31,6 +31,7 @@ import {
   where,
   type Firestore,
 } from "firebase/firestore";
+import { signalDateKey, signalDocId } from "./signalIdentity";
 
 /** Same symbol+timeframe inside this window is skipped (dedupe, not expiry). */
 export const DEDUPE_WINDOW_MS = 4 * 60 * 60 * 1000;
@@ -40,6 +41,9 @@ export const SIGNAL_TTL_MS = 24 * 60 * 60 * 1000;
 /** Firestore archive collection — signals are appended, never deleted. */
 export const SIGNALS_COLLECTION = "signals_archive";
 export const SIGNALS_HISTORY_COLLECTION = "signals_history";
+
+/** Statuses that mean "this setup already settled" — never re-written. */
+const SETTLED_STATUSES = new Set(["WIN", "LOSS", "EXPIRED", "SUCCESS", "FAILED"]);
 
 /** localStorage backup key (always-on fallback when Firebase is absent). */
 export const SIGNAL_BACKUP_KEY = "signals-cloud-backup";
@@ -88,26 +92,52 @@ function getCloudDb(): Firestore | null {
   return cloudDb;
 }
 
-/** Firestore doc ids cannot contain / . # [ ] */
-function docId(signal: CloudDoc): string {
-  const safe = (value: string) => value.replace(/[/\\.#\[\]]/g, "_");
-  return [signal.market, signal.symbol, signal.timeframe ?? "1h"].map(safe).join("_");
+/**
+ * The Asia/Karachi dateKey a document belongs to. The incoming signal's own
+ * dateKey wins; otherwise it is derived from `now`. The doc id and the stored
+ * field are derived from the SAME value, so they can never disagree.
+ */
+function effectiveDateKey(signal: CloudDoc, now: number): string {
+  const own = typeof signal.dateKey === "string" ? signal.dateKey.trim() : "";
+  return own ? own : karachiDateKey(now);
 }
 
-/** JSON round-trip drops undefined/functions and maps NaN/Infinity to null — all invalid in Firestore. */
+/**
+ * Firestore doc ids cannot contain / . # [ ].
+ *
+ * The id carries the dateKey so a new day NEVER overwrites the previous day's
+ * record (the old market_symbol_timeframe id did exactly that). Identity is
+ * market + canonical symbol + timeframe + dateKey (src/lib/signalIdentity.ts).
+ */
+function docId(signal: CloudDoc, now: number): string {
+  return signalDocId({
+    market: signal.market,
+    symbol: signal.symbol,
+    timeframe: signal.timeframe ?? "1h",
+    dateKey: effectiveDateKey(signal, now),
+  });
+}
+
+/**
+ * JSON round-trip drops undefined/functions and maps NaN/Infinity to null — all
+ * invalid in Firestore.
+ *
+ * The dateKey is preserved from the incoming signal when it has one, so the
+ * doc id (which embeds the dateKey) and the stored field can never disagree.
+ */
 function cleanDoc(signal: CloudDoc, now: number): Record<string, unknown> {
-  const pakistanOffset = 5 * 60; // UTC+5 (PKT)
-  const pakistanMs = now + pakistanOffset * 60 * 1000;
-  const dateKey = new Date(pakistanMs).toISOString().slice(0, 10);
+  const dateKey = effectiveDateKey(signal, now);
   const payload = { ...signal, dateKey, timeframe: signal.timeframe ?? "1h", createdAt: now };
   return JSON.parse(JSON.stringify(payload)) as Record<string, unknown>;
 }
 
-/** Asia/Karachi date string YYYY-MM-DD for a given epoch ms. */
+/**
+ * Asia/Karachi date string YYYY-MM-DD for a given epoch ms.
+ * Delegates to the ONE implementation in signalIdentity.ts so the date key can
+ * never differ between the layers.
+ */
 export function karachiDateKey(ms = Date.now()): string {
-  const pakistanOffset = 5 * 60; // UTC+5 (PKT)
-  const pakistanMs = ms + pakistanOffset * 60 * 1000;
-  return new Date(pakistanMs).toISOString().slice(0, 10);
+  return signalDateKey(ms);
 }
 
 /**
@@ -177,14 +207,21 @@ export async function persistSignals(signals: CloudDoc[]): Promise<void> {
   let saved = 0;
   let skipped = 0;
   for (const signal of signals) {
-    const id = docId(signal);
+    const id = docId(signal, now);
     try {
       const ref = doc(db, SIGNALS_COLLECTION, id);
       const existing = await getDoc(ref);
       if (existing.exists()) {
-        const previous = existing.data() as { createdAt?: number };
+        const previous = existing.data() as { createdAt?: number; status?: string };
+        // A SETTLED setup (WIN / LOSS / EXPIRED) is final for the day — a later
+        // re-emission of the same asset must NOT reset it back to PENDING,
+        // otherwise the archive would flip-flop and the win rate would drift.
+        if (SETTLED_STATUSES.has(String(previous.status ?? ""))) {
+          skipped += 1;
+          continue;
+        }
         if (typeof previous.createdAt === "number" && now - previous.createdAt < DEDUPE_WINDOW_MS) {
-          skipped += 1; // dedupe: same symbol+timeframe inside 4h → skip
+          skipped += 1; // dedupe: same asset+timeframe inside 4h → skip
           continue;
         }
       }
@@ -213,7 +250,7 @@ export async function persistToHistory(signals: CloudDoc[]): Promise<void> {
   const now = Date.now();
   let saved = 0;
   for (const signal of signals) {
-    const id = docId(signal);
+    const id = docId(signal, now);
     try {
       const ref = doc(db, SIGNALS_HISTORY_COLLECTION, id);
       await setDoc(ref, cleanDoc(signal, now));

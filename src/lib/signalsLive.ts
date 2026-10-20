@@ -31,10 +31,12 @@ import { getCachedSnapshot, runScan, type ScanResult } from "@/src/scanner/scann
 import { scanUniverse, type ScanMarket } from "@/src/scanner/universe";
 export type { ScanMarket };
 import { analyzeCoin } from "./analyzeCoin";
+import { generateFullSignal } from "./signalGenerator";
 import { buildConfirmations, buildEducators } from "./confirmations";
 import { calculateIndicators } from "./indicatorEngine";
 import { persistSignals, persistToHistory, readAllSignals, karachiDateKey, SIGNAL_TTL_MS, type CloudDoc } from "./signalCloud";
 import { MAX_SIGNALS_PER_MARKET_PER_DAY, remainingEmitSlots, reserveEmitSlot } from "./dailyQuota";
+import { assetKey } from "./signalIdentity";
 import { ema, rsi, sma } from "@/src/analysis/indicators";
 import type { Candle } from "@/src/analysis/types";
 
@@ -513,11 +515,25 @@ export async function refresh(market: ScanMarket, origin?: string): Promise<Emit
   const allDocs = await readAllSignals();
   const pool: EmittedMarketSignal[] = [];
   const liveBySymbol = new Map<string, EmittedMarketSignal>();
+  // ONLY today's setups may join the live pool. Without this, a PENDING record
+  // left over from yesterday (never resolved, e.g. the cron was down) would be
+  // merged in as a "live" signal with a stale entry/SL/TP.
+  const today = karachiDateKey();
+  const now = Date.now();
 
   for (const d of allDocs) {
     if (typeof d.market !== "string" || d.market !== market) continue;
     if (RESOLVED_STATUSES.has(String(d.status ?? ""))) continue;
-    if (liveBySymbol.has(String(d.symbol))) continue;
+    // Canonical symbol key — "BTC-USD" and "BTCUSDT" are the same asset, but
+    // the same ticker in ANOTHER market is a different setup.
+    const symbolKey = assetKey(String(d.symbol), market);
+    if (liveBySymbol.has(symbolKey)) continue;
+    // Freshness gate: today's dateKey AND inside the 24h TTL. Older docs stay
+    // in the archive/history but never re-enter the live pool.
+    const docDateKey = typeof d.dateKey === "string" && d.dateKey ? d.dateKey : "";
+    const createdAt = typeof d.createdAt === "number" ? d.createdAt : 0;
+    if (docDateKey && docDateKey !== today) continue;
+    if (!docDateKey && createdAt > 0 && now - createdAt > SIGNAL_TTL_MS) continue;
     // QUALITY GATE (Quality with Quantity spec) — a STORED doc only joins the
     // live pool when it clears the same 85+ floor and the 3/4 expert gate as a
     // fresh scan. Legacy cards (75-84) from an older build are skipped so the
@@ -568,7 +584,7 @@ export async function refresh(market: ScanMarket, origin?: string): Promise<Emit
       patternPoints: hydratePatternPoints(d.patternPoints),
     };
     pool.push(signal);
-    liveBySymbol.set(signal.symbol, signal);
+    liveBySymbol.set(symbolKey, signal);
   }
 
   pool.sort((a, b) => b.score - a.score || (a.symbol < b.symbol ? -1 : 1));
@@ -576,7 +592,9 @@ export async function refresh(market: ScanMarket, origin?: string): Promise<Emit
   const toFill = Math.max(0, LIVE_CAPS[market] - pool.length);
   if (toFill === 0) return pool;
 
-  const candidates = (await getStrictSignals(market, toFill, origin)).filter((s) => !liveBySymbol.has(s.symbol));
+  const candidates = (await getStrictSignals(market, toFill, origin)).filter(
+    (s) => !liveBySymbol.has(assetKey(s.symbol, market)),
+  );
   const toAdd = candidates.slice(0, toFill);
 
   // DAILY QUOTA — reserve a slot for each signal that is REALLY emitted (the
@@ -624,9 +642,99 @@ export async function refresh(market: ScanMarket, origin?: string): Promise<Emit
   return pool.slice(0, LIVE_CAPS[market]);
 }
 
-/** Build a Firestore CloudDoc (symbol + market + timeframe "1h" + persistence metadata). */
+/**
+ * Build the SAME trade plan the Signals page renders — via generateFullSignal(),
+ * so the cloud doc, the /signals card, the /results card and the tracking cron
+ * all agree on entry / SL / TP levels. Falls back to the ATR plan when the
+ * generator throws (e.g. a non-positive price), never throws itself.
+ */
+function buildTradePlan(signal: EmittedMarketSignal): {
+  entry1: number;
+  entry2: number;
+  stopLoss: number;
+  tp1: number;
+  tp2: number;
+  tp3: number;
+  riskPercent: number;
+  rr1: number;
+  rr2: number;
+  rr3: number;
+  leverage: number;
+} {
+  const empty = {
+    entry1: signal.price,
+    entry2: signal.price,
+    stopLoss: 0,
+    tp1: 0,
+    tp2: 0,
+    tp3: 0,
+    riskPercent: 0,
+    rr1: 0,
+    rr2: 0,
+    rr3: 0,
+    leverage: 10,
+  };
+  if (!(signal.price > 0)) return empty;
+  try {
+    const full = generateFullSignal({
+      symbol: signal.symbol,
+      market: signal.market,
+      price: signal.price,
+      direction: signal.direction === "bearish" ? "bearish" : "bullish",
+      support: signal.support,
+      resistance: signal.resistance,
+      pattern: signal.pattern,
+      score: signal.score,
+      bias: signal.bias,
+      reason: signal.reason,
+      chartPattern: signal.chartPattern,
+      chartPatternNote: signal.chartPatternNote,
+      atr: signal.atr ?? null,
+      timeframeMinutes: signal.timeframeMinutes ?? null,
+      candles: signal.candles ?? null,
+      candlestick: signal.candlestickPattern
+        ? {
+            name: signal.candlestickPattern,
+            confidence: signal.candlestickConfidence,
+            type: signal.candlestickType ?? "neutral",
+          }
+        : null,
+    });
+    return {
+      entry1: full.entry1,
+      entry2: full.entry2,
+      stopLoss: full.stopLoss,
+      tp1: full.tp1,
+      tp2: full.tp2,
+      tp3: full.tp3,
+      riskPercent: full.riskPercent,
+      rr1: full.rr1,
+      rr2: full.rr2,
+      rr3: full.rr3,
+      leverage: full.leverage,
+    };
+  } catch (error) {
+    console.warn(
+      `[signalsLive] trade plan failed for ${signal.symbol}:`,
+      error instanceof Error ? error.message : error,
+    );
+    return empty;
+  }
+}
+
+/**
+ * Build a Firestore CloudDoc (symbol + market + timeframe "1h" + persistence metadata).
+ *
+ * The doc carries the FULL trade plan (entry1/entry2/SL/TP1-3 + R:R) so the
+ * server-side /api/track-signals cron can resolve WIN/LOSS without waiting for
+ * a browser to rebuild the plan. The plan is built with the SAME
+ * generateFullSignal() the Signals page renders, so cloud and local cards can
+ * never disagree.
+ */
 export function toCloudDoc(signal: EmittedMarketSignal): CloudDoc | null {
   try {
+    const now = Date.now();
+    const plan = buildTradePlan(signal);
     return {
       symbol: signal.symbol,
       label: signal.label,
@@ -635,6 +743,18 @@ export function toCloudDoc(signal: EmittedMarketSignal): CloudDoc | null {
       score: signal.score,
       direction: signal.direction,
       price: signal.price,
+      // ── Trade plan (REQUIRED by /api/track-signals to resolve the outcome) ──
+      entry1: plan.entry1,
+      entry2: plan.entry2,
+      stopLoss: plan.stopLoss,
+      tp1: plan.tp1,
+      tp2: plan.tp2,
+      tp3: plan.tp3,
+      riskPercent: plan.riskPercent,
+      rr1: plan.rr1,
+      rr2: plan.rr2,
+      rr3: plan.rr3,
+      leverage: plan.leverage,
       pattern: signal.pattern,
       support: signal.support,
       resistance: signal.resistance,
@@ -659,10 +779,10 @@ export function toCloudDoc(signal: EmittedMarketSignal): CloudDoc | null {
       analyzedAt: signal.analyzedAt,
       // Mirror of the track-signals 24h rule (SIGNAL_TTL_MS) for consumers
       // that need a hard expiry stamp without re-deriving it from createdAt.
-      expiresAt: Date.now() + SIGNAL_TTL_MS,
-      dateKey: karachiDateKey(),
+      expiresAt: now + SIGNAL_TTL_MS,
+      dateKey: karachiDateKey(now),
       status: "PENDING",
-      createdAt: Date.now(),
+      createdAt: now,
     };
   } catch {
     return null;

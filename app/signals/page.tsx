@@ -17,6 +17,7 @@ import { TrendBadge, ConfirmationSection, IndicatorPanel, ExpertPanel, GuidanceS
 import { buildGuidance, type ConfirmationIndicator, type Consensus, type EducatorVerdict } from "@/src/lib/confirmations";
 import type { IndicatorRow } from "@/src/lib/indicatorEngine";
 import type { CloudDoc } from "@/src/lib/signalCloud";
+import { assetKey } from "@/src/lib/signalIdentity";
 
 interface Candle {
   time: number;
@@ -308,7 +309,10 @@ function SignalsPageContent() {
     const fresh = (signal: MarketSignal): boolean => now - stampOf(signal) < SIGNAL_TTL_MS;
     const byKey = new Map<string, MarketSignal>();
     const put = (signal: MarketSignal) => {
-      const key = `${signal.market}:${signal.symbol}`;
+      // Canonical asset key (market + canonical symbol) so one asset never
+      // appears twice because two sources spelled it differently ("BTC-USD"
+      // from the API vs "BTCUSDT" from the cloud).
+      const key = assetKey(signal.symbol, signal.market);
       const previous = byKey.get(key);
       if (!previous) {
         byKey.set(key, signal);
@@ -335,7 +339,7 @@ function SignalsPageContent() {
     // computed but never read). Fresh API rows are untouched: they were never
     // targeted (they already ship conditionsPassed + atr).
     const merged = [...byKey.values()].map((signal): MarketSignal => {
-      const patch = rescoring[`${signal.market}:${signal.symbol}`];
+      const patch = rescoring[assetKey(signal.symbol, signal.market)];
       return patch ? { ...signal, ...patch } : signal;
     });
     return merged;
@@ -366,7 +370,7 @@ function SignalsPageContent() {
   useEffect(() => {
     const targets = displayed.filter((signal) => {
       if (signal.conditionsPassed != null && signal.atr != null) return false;
-      const key = `${signal.market}:${signal.symbol}`;
+      const key = assetKey(signal.symbol, signal.market);
       if (rescoringTriedRef.current.has(key)) return false;
       rescoringTriedRef.current.add(key);
       return true;
@@ -393,7 +397,7 @@ function SignalsPageContent() {
             d1: await fetchCandles(target.market, target.symbol, "1d"),
           });
           entries.push([
-            `${target.market}:${target.symbol}`,
+            assetKey(target.symbol, target.market),
             {
               score: full.score,
               conditionsPassed: full.conditionsPassed,
@@ -423,7 +427,7 @@ function SignalsPageContent() {
       // marked forever — that is what breaks any re-fetch cycle. Only a
       // non-empty result touches state (no re-render → no loop).
       for (const target of targets) {
-        const key = `${target.market}:${target.symbol}`;
+        const key = assetKey(target.symbol, target.market);
         if (!entries.some(([entryKey]) => entryKey === key)) rescoringTriedRef.current.delete(key);
       }
       if (entries.length > 0) {

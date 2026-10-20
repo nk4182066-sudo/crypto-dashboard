@@ -1,10 +1,21 @@
 import { cached } from "@/src/lib/cache";
 import { callAI, type AIMessage, type AIResult } from "@/src/lib/aiProvider";
 import { analyzeSymbol, type AutoAnalysis } from "@/src/lib/autoAnalysis";
-import { analyzeCoin } from "@/src/lib/analyzeCoin";
+import { analyzeCoin, type AnalyzeResult } from "@/src/lib/analyzeCoin";
+import {
+  ACCEPTED_CONDITIONS_PASSED,
+  ACCEPTED_EXPERT_AGREED,
+  CONDITIONS_TOTAL,
+  describeConsensus,
+  parseConditionsPassed,
+  parseExpertCounts,
+  resolveChatConsensus,
+} from "@/src/lib/consensusCounts";
 import type { EmittedMarketSignal } from "@/src/lib/signalsLive";
 import { calculateIndicators, type IndicatorRow } from "@/src/lib/indicatorEngine";
 import { generateFullSignal } from "@/src/lib/signalGenerator";
+import { assetKey } from "@/src/lib/signalIdentity";
+import type { SignalStats } from "@/src/lib/signalStats";
 import { compactMarketContext, selectTier, systemPromptFor } from "@/src/lib/llm";
 import { buildProTraderPrompt } from "@/src/lib/proTraderPrompt";
 import { getCachedSnapshot } from "@/src/scanner/scanner";
@@ -279,17 +290,17 @@ async function getAutoSearchReply(message: string, origin: string): Promise<stri
   lines.push(blocks.join("\n\n"));
   lines.push(
     romanUrdu
-      ? "\n⚠️ Ye sirf real engine scan hai (Trade page wala 8-condition system). Koi copy-paste reason nahi. Educational only, not financial advice."
-      : "\n⚠️ Real engine scan only (the Trade page's 8-condition system) — no copy-paste reasons. Educational only, not financial advice.",
+      ? "\n⚠️ Ye sirf real rule-based scan hai (15m/1h/4h/1d live data) — koi copy-paste reason nahi. Educational only, not financial advice."
+      : "\n⚠️ Real rule-based scan only (15m/1h/4h/1d live data) — no copy-paste reasons. Educational only, not financial advice.",
   );
   return lines.join("\n");
 }
 
 
-// ── per-asset REAL engine block helpers (8-condition engine, LIVE numbers) ────
+// ── per-asset REAL scan block helpers (rule-based engine, LIVE numbers) ──────
 type EngineBlockOptions = { detail: boolean };
 
-/** One asset's real 8-condition engine block — live numbers only, no copy-paste reasons. */
+/** One asset's real rule-based scan block — live numbers only, no copy-paste reasons. */
 async function buildEngineBlock(target: { symbol: string; label: string; market: ScanMarket }, origin?: string, _opts?: EngineBlockOptions): Promise<string | null> {
   let analysis: AutoAnalysis;
   try {
@@ -300,7 +311,9 @@ async function buildEngineBlock(target: { symbol: string; label: string; market:
   }
   if (!analysis || !Number.isFinite(analysis.current) || analysis.current <= 0) return null;
   const topPatterns = analysis.patterns.slice(0, 2).map((p) => `${p.name} (${p.type}, ${p.confidence}%)`).join(", ") || "none";
-  const status = analysis.verdict === "STRONG_SETUP" ? "✅ Strong (8/8)" : analysis.verdict === "MODERATE" ? "⚠️ Moderate" : "⏸️ Low confluence — Wait";
+  // No "(8/8)"-style badge — this block is the 5-check heuristic scan, NOT the
+  // strict 8-condition engine, so no condition count may be claimed here.
+  const status = analysis.verdict === "STRONG_SETUP" ? "✅ Strong" : analysis.verdict === "MODERATE" ? "⚠️ Moderate" : "⏸️ Low confluence — Wait";
   return [
     `🔹 ${target.label} — ${status} (${analysis.score}/100)`,
     `Price: $${analysis.current.toFixed(2)} | Trend: ${analysis.trend} | Timeframe: ${analysis.timeframeAlignment}`,
@@ -312,9 +325,11 @@ async function buildEngineBlock(target: { symbol: string; label: string; market:
 }
 
 
-/** Real 8-condition engine scan for one market — the chat answer for "Forex",
+/** Real rule-based scan for one market — the chat answer for "Forex",
  *  "crypto market", "gold", "stocks". No AI guessing, no scanner copy-paste
- *  reasons; 100/100 appears only when 8/8 real conditions pass. */
+ *  reasons. This scan scores 5 weighted checks (autoAnalysis), NOT the strict
+ *  8-condition engine, so it never claims an X/8 count — genuine X/8 numbers
+ *  only ever come from buildFullAnalysisReply's real-candle analyzeCoin run. */
 async function getMarketAnalysisReply(scope: ScanMarket, romanUrdu: boolean, origin?: string): Promise<string | null> {
   const targets = scanUniverse.filter((t) => t.market === scope);
   const picked = targets.slice(0, 3);
@@ -322,9 +337,9 @@ async function getMarketAnalysisReply(scope: ScanMarket, romanUrdu: boolean, ori
   if (blocks.length === 0) return null;
   const lines: string[] = [];
   const scopeLabel = scope.toUpperCase();
-  lines.push(romanUrdu ? `🏆 ${scopeLabel} ka real engine scan (8-condition, LIVE data):` : `🏆 ${scopeLabel} — REAL engine scan (8 conditions, live data):`);
+  lines.push(romanUrdu ? `🏆 ${scopeLabel} ka real rule-based scan (15m/1h/4h/1d, LIVE data):` : `🏆 ${scopeLabel} — REAL rule-based scan (15m/1h/4h/1d, live data):`);
   lines.push(blocks.join("\n\n"));
-  lines.push(romanUrdu ? "\n⚠️ Ye sirf live engine scan hai (8-condition engine, LIVE data) — levels chart pe verify karein. Educational only, not financial advice." : "\n⚠️ Real engine scan only (8-condition engine, live data) — verify levels on the chart yourself. Educational only, not financial advice.");
+  lines.push(romanUrdu ? "\n⚠️ Ye sirf live rule-based scan hai — levels chart pe verify karein. Educational only, not financial advice." : "\n⚠️ Real rule-based scan only — verify levels on the chart yourself. Educational only, not financial advice.");
   return lines.join("\n");
 }
 
@@ -413,6 +428,12 @@ export async function POST(request: Request) {
     }
 
     const requestOrigin = new URL(request.url).origin;
+
+    // ── HISTORICAL PERFORMANCE — real archive numbers, never the model ───────
+    if (!greetingOnly && !signalData && localIntent === "PERFORMANCE") {
+      const perfReply = await buildPerformanceReply(String(message), requestOrigin);
+      if (perfReply) return Response.json({ reply: perfReply, provider: "local-stats" });
+    }
 
     // ── REAL-DATA ENGINE FIRST — market scans + asset analysis never guess ────
     // "Forex" / "crypto market" / "gold" → that market's REAL scan; "BTC
@@ -603,6 +624,107 @@ function detectAssetSymbol(message: string): AssetTarget | null {
   return null;
 }
 
+// ── HISTORICAL PERFORMANCE — /api/signals/stats ──────────────────────────────
+
+/**
+ * Answer "kitne signals jeete / win rate kya hai / how accurate are you?"
+ * from the REAL archive numbers (Firestore `signals_archive` via
+ * /api/signals/stats). Never from the model — the numbers must be the ones the
+ * tracking cron actually resolved.
+ */
+async function buildPerformanceReply(message: string, origin: string): Promise<string | null> {
+  const urdu = isRomanUrdu(message);
+  // "30 days" / "pichle 7 din" style window — default to the API default.
+  let days = 90;
+  const dayMatch = message.match(/(\d{1,3})\s*(?:day|days|din|days?)/i);
+  if (dayMatch) {
+    const parsed = Number(dayMatch[1]);
+    if (Number.isFinite(parsed) && parsed > 0) days = Math.min(365, parsed);
+  }
+
+  let payload: { stats?: SignalStats } | null = null;
+  try {
+    const response = await fetch(`${origin}/api/signals/stats?days=${days}&include=daily`, {
+      cache: "no-store",
+      signal: AbortSignal.timeout(10_000),
+    });
+    if (!response.ok) return null;
+    payload = (await response.json()) as { stats?: SignalStats };
+  } catch {
+    return null;
+  }
+
+  const stats = payload?.stats;
+  if (!stats) return null;
+  if (stats.total === 0) {
+    return urdu
+      ? "Abhi tak koi resolved historical setup nahi hai, is liye win rate nahi calculate ho sakta. Thori der baad dobara poochein."
+      : "There are no resolved historical setups yet, so a win rate cannot be calculated yet. Please ask again shortly.";
+  }
+
+  const lines: string[] = [];
+  lines.push(urdu ? "📊 Historical Performance (setups)" : "📊 Historical Performance (setups)");
+  lines.push("━━━━━━━━━━━━━━━━━━");
+  lines.push(
+    urdu
+      ? `Pichle ${stats.retentionDays} din: ${stats.total} setup(s)`
+      : `Last ${stats.retentionDays} days: ${stats.total} setup(s)`,
+  );
+  lines.push(
+    urdu
+      ? `✅ ${stats.wins} win  ❌ ${stats.losses} loss  ⌛ ${stats.expired} expired  ⏳ ${stats.pending} pending`
+      : `✅ ${stats.wins} win  ❌ ${stats.losses} loss  ⌛ ${stats.expired} expired  ⏳ ${stats.pending} pending`,
+  );
+  lines.push(
+    urdu
+      ? `Win rate (settled setups): ${stats.winRate}%`
+      : `Win rate (settled setups): ${stats.winRate}%`,
+  );
+  if (stats.expired > 0) {
+    lines.push(
+      urdu
+        ? `Expired ko loss gin ke win rate: ${stats.winRateWithExpired}%`
+        : `Win rate counting expired as losses: ${stats.winRateWithExpired}%`,
+    );
+  }
+  if (stats.averageScore > 0) {
+    lines.push(
+      urdu
+        ? `Average score (resolved): ${stats.averageScore}/100`
+        : `Average score (resolved): ${stats.averageScore}/100`,
+    );
+  }
+
+  // Per-market breakdown — the most useful slice for the user.
+  if (stats.byMarket.length > 0) {
+    lines.push("");
+    lines.push(urdu ? "Market-wise:" : "By market:");
+    for (const bucket of stats.byMarket.slice(0, 6)) {
+      lines.push(
+        `• ${bucket.key}: ${bucket.wins}W / ${bucket.losses}L / ${bucket.expired}E` +
+          (bucket.wins + bucket.losses > 0 ? ` (${bucket.winRate}%)` : ""),
+      );
+    }
+  }
+
+  // Best / worst score tier.
+  const premium = stats.byScoreTier.find((b) => b.key === "premium");
+  if (premium && premium.total > 0) {
+    lines.push("");
+    lines.push(
+      urdu
+        ? `PREMIUM (95+) setups: ${premium.wins}W / ${premium.losses}L` +
+            (premium.wins + premium.losses > 0 ? ` (${premium.winRate}%)` : "")
+        : `PREMIUM (95+) setups: ${premium.wins}W / ${premium.losses}L` +
+            (premium.wins + premium.losses > 0 ? ` (${premium.winRate}%)` : ""),
+    );
+  }
+
+  lines.push("");
+  lines.push("⚠️ Educational only — not financial advice.");
+  return lines.join("\n");
+}
+
 // ── MASLA 4 — live engine analysis injected into the AI prompt ────────────────
 
 /** Per-symbol cache so repeat coin questions don't refetch 4 timeframes. */
@@ -684,7 +806,11 @@ async function findLiveSignal(symbol: string, market: string, origin?: string): 
     if (!response.ok) return null;
     const payload = (await response.json()) as { results?: EmittedMarketSignal[] };
     const results = Array.isArray(payload.results) ? payload.results : [];
-    return results.find((s) => s.symbol === symbol && s.market === market) ?? null;
+    // Match on the CANONICAL identity, not the raw string. The pool stores
+    // "GC=F" for gold while the user asks for "XAU-USD", and crypto is
+    // "BTCUSDT" in the pool but "BTC-USD" in the question — the same asset.
+    const wanted = assetKey(symbol, market);
+    return results.find((s) => assetKey(s.symbol, s.market) === wanted) ?? null;
   } catch {
     return null;
   }
@@ -722,6 +848,11 @@ function buildLiveSignalAnalysisReply(asset: AssetTarget, signal: EmittedMarketS
   lines.push(`Score: ${signal.score}/100 (${scoreWord})`);
   lines.push(`Trend: ${signal.bias} · Price: ${money(signal.price)}`);
   lines.push(`Support: ${money(signal.support)} · Resistance: ${money(signal.resistance)}`);
+  // Genuine consensus counts only (evaluated 4-educator panel + 8-condition
+  // engine), exact accepted thresholds 2/4 experts · 6/8 conditions — printed
+  // with the verdict, or NOT AT ALL when no genuine evaluation exists.
+  const consensus = describeConsensus(resolveChatConsensus(signal));
+  if (consensus) lines.push(`Consensus: ${consensus}`);
   lines.push("");
   lines.push("Real Indicators (TwelveData + Binance):");
   if (rsi) lines.push(`  RSI (14): ${rsi}`);
@@ -763,7 +894,7 @@ A TO Z EXPLAIN KARO (jis pe poochha jaye):
 
 RULES:
 - Roman Urdu + English mix — user ki language match karo.
-- HONEST raho: agar signal weak hai (score < 75, consensus 2/4 ya us se kam, indicators against) to clearly bolo aur wajah do. Kabhi force mat karo.
+- HONEST raho: agar signal weak hai (score < 75, experts consensus 2/4 se kam, conditions 6/8 se kam, indicators against) to clearly bolo aur wajah do. Kabhi force mat karo.
 - Sirf isi signal ke levels use karo; agar LIVE ENGINE DATA bhi diya ho to current price zaroor mention karo aur batao price ab entry/SL/target se kahan hai.
 - Short sawal ka chhota jawab do; "full analysis" pe detailed A→Z breakdown.
 - Educational only — not financial advice. Guarantee kabhi mat do.`;
@@ -801,7 +932,13 @@ function sanitizeSignalContext(raw: unknown): Record<string, unknown> | null {
   put("tp3", num(raw.tp3));
   put("support", num(raw.support));
   put("resistance", num(raw.resistance));
-  put("consensus", str(raw.consensus));
+  // Genuine consensus counts only — the evaluated 4-educator rollup / strict
+  // 8-condition engine output, exact "X/4" + "X/8". Fabricated or malformed
+  // client strings ("75%", "3 of 4", a hardcoded "8/8") are dropped instead of
+  // being passed through (src/lib/consensusCounts.ts).
+  const consensus = resolveChatConsensus(raw);
+  if (consensus?.experts) put("consensus", `${consensus.experts.agreed}/${consensus.experts.total}`);
+  if (consensus?.conditionsPassed != null) put("conditionsPassed", consensus.conditionsPassed);
   put("reasoning", str(raw.reasoning) ?? str(raw.reason));
   put("status", str(raw.status));
   put("createdAt", num(raw.createdAt));
@@ -840,7 +977,10 @@ function buildSignalFallbackReply(signal: Record<string, unknown>, message: stri
   const symbol = str("symbol") ?? "Signal";
   const pattern = str("chartPattern") ?? str("pattern") ?? "No clear pattern";
   const score = num("score");
-  const consensus = str("consensus");
+  // Genuine counts only — strict X/4 + X/8 parse (src/lib/consensusCounts.ts);
+  // parseInt() on an arbitrary string is never trusted again.
+  const consensus = parseExpertCounts(str("consensus"));
+  const conditionsPassed = parseConditionsPassed(num("conditionsPassed"));
   const direction = str("bias") ?? str("trend") ?? str("direction") ?? "—";
   const price = num("price");
   const entry1 = num("entry1");
@@ -856,13 +996,20 @@ function buildSignalFallbackReply(signal: Record<string, unknown>, message: stri
   const fmt = (value: number | null): string =>
     value === null ? "—" : value >= 1000 ? `$${value.toLocaleString("en-US", { maximumFractionDigits: 2 })}` : `$${value.toFixed(value >= 1 ? 2 : 4)}`;
 
-  const weak = (score !== null && score < 75) || (consensus !== null && parseInt(consensus, 10) < 3);
+  // Weak when the score or a GENUINE count sits below the exact accepted
+  // thresholds (2/4 experts, 6/8 conditions). A count that never parsed is
+  // simply absent — it can neither rescue nor condemn the setup.
+  const weak =
+    (score !== null && score < 75) ||
+    (consensus !== null && consensus.agreed < ACCEPTED_EXPERT_AGREED) ||
+    (conditionsPassed !== null && conditionsPassed < ACCEPTED_CONDITIONS_PASSED);
   const asksRisk = /\b(risk|sl|stop|loss|fail|wrong|invalid)\b/i.test(message);
   const asksExit = /\b(exit|target|tp|profit|close)\b/i.test(message);
 
   const lines: string[] = [];
   lines.push(`🎯 ${symbol} — Saved Signal Plan (engine data):`);
-  lines.push(`Direction: ${direction} | Pattern: ${pattern}${score !== null ? ` | Score: ${score}/100` : ""}${consensus ? ` | Consensus: ${consensus}` : ""}`);
+  const consensusLabel = consensus ? `${consensus.agreed}/${consensus.total}` : "";
+  lines.push(`Direction: ${direction} | Pattern: ${pattern}${score !== null ? ` | Score: ${score}/100` : ""}${consensusLabel ? ` | Consensus: ${consensusLabel}` : ""}${conditionsPassed !== null ? ` | Conditions: ${conditionsPassed}/${CONDITIONS_TOTAL}` : ""}`);
   if (price !== null) lines.push(`Price at signal: ${fmt(price)}${status ? ` | Status: ${status}` : ""}`);
   lines.push(`Entry: ${fmt(entry1)} / ${fmt(entry2)}`);
   lines.push(`Stop Loss: ${fmt(sl)} | Targets: ${fmt(tp1)} → ${fmt(tp2)} → ${fmt(tp3)}`);
@@ -923,6 +1070,23 @@ function whyTrendLine(asset: AssetTarget, analysis: AutoAnalysis, romanUrdu: boo
   return `${asset.name} is in ${trendWord}. ${level} ${volume} RSI ${analysis.indicators.rsi} is ${rsiWord(analysis.indicators.rsi)}. MACD is ${analysis.indicators.macd}.`;
 }
 
+/** Reads one timeframe from the shared /api/market/history route; [] on failure. */
+async function fetchHistoryCandles(market: string, symbol: string, timeframe: string, origin?: string): Promise<Candle[]> {
+  try {
+    const query = new URLSearchParams({ market, symbol, timeframe });
+    const path = `/api/market/history?${query}`;
+    const response = await fetch(origin ? `${origin}${path}` : path, {
+      cache: "no-store",
+      signal: AbortSignal.timeout(15_000),
+    });
+    if (!response.ok) return [];
+    const payload = (await response.json()) as { candles?: Candle[] };
+    return Array.isArray(payload.candles) ? payload.candles : [];
+  } catch {
+    return [];
+  }
+}
+
 /** Full A→Z analysis from real data: score, levels, pattern, and a full trade plan. */
 async function buildFullAnalysisReply(asset: AssetTarget, romanUrdu: boolean, origin?: string): Promise<string | null> {
   let analysis: AutoAnalysis;
@@ -935,6 +1099,27 @@ async function buildFullAnalysisReply(asset: AssetTarget, romanUrdu: boolean, or
   // No candles / no price -> nothing honest to show.
   if (!Number.isFinite(analysis.current) || analysis.current <= 0) return null;
 
+  // Authoritative 8-condition engine — the SAME analyzeCoin() + the SAME
+  // /api/market/history candles the Trade/Signals pages score with, so the
+  // score and the exact X/8 count printed here are GENUINE evaluation results
+  // (the old `analyzeCoin({ primary: [] })` call ran on zero candles and could
+  // not evaluate anything). Skipped quietly when candles are down; the reply
+  // then falls back to the 5-check heuristic score and prints NO count.
+  let engine: AnalyzeResult | null = null;
+  try {
+    const [h1, h4, d1] = await Promise.all([
+      fetchHistoryCandles(asset.market, asset.symbol, "1h", origin),
+      fetchHistoryCandles(asset.market, asset.symbol, "4h", origin),
+      fetchHistoryCandles(asset.market, asset.symbol, "1d", origin),
+    ]);
+    if (h1.length > 0) {
+      engine = analyzeCoin({ symbol: asset.symbol, market: asset.market, primary: h1, h1, h4, d1 });
+    }
+  } catch {
+    engine = null;
+  }
+  const score = engine ? engine.score : analysis.score;
+
   const direction = analysis.trend === "bullish" || analysis.trend === "bearish" ? analysis.trend : "neutral";
   const topPattern = analysis.patterns[0]?.name ?? "No clear pattern";
   const full = generateFullSignal({
@@ -945,14 +1130,22 @@ async function buildFullAnalysisReply(asset: AssetTarget, romanUrdu: boolean, or
     support: analysis.support,
     resistance: analysis.resistance,
     pattern: topPattern,
-    score: analysis.score,
+    score,
   });
 
   const trendLabel = analysis.trend === "bullish" ? "Bullish" : analysis.trend === "bearish" ? "Bearish" : "Sideways";
   const lines: string[] = [];
   lines.push(`${asset.label} Analysis:`);
   lines.push("");
-  lines.push(`📊 Score: ${analysis.score}/100 ${scoreTierLabel(analysis.score)}`);
+  lines.push(`📊 Score: ${score}/100 ${scoreTierLabel(score)}`);
+  // Exact X/8 — GENUINE engine counts only (accepted threshold: 6/8 conditions;
+  // below that is flagged, and NO count at all when the engine didn't run).
+  if (engine) {
+    const accepted = engine.conditionsPassed >= ACCEPTED_CONDITIONS_PASSED;
+    lines.push(
+      `⚙️ Conditions: ${engine.conditionsPassed}/${CONDITIONS_TOTAL} passed${accepted ? " ✅" : " ⚠️ below accepted threshold (6/8)"}`,
+    );
+  }
   lines.push(`📈 Trend: ${trendLabel}`);
   lines.push(`🎯 Support: ${money(analysis.support)}`);
   lines.push(`🎯 Resistance: ${money(analysis.resistance)}`);

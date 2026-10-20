@@ -13,6 +13,14 @@
  * Educational analysis only — not financial advice.
  */
 
+import {
+  ACCEPTED_CONDITIONS_PASSED,
+  ACCEPTED_EXPERT_AGREED,
+  CONDITIONS_TOTAL,
+  parseConditionsPassed,
+  parseExpertCounts,
+} from "./consensusCounts";
+
 export type LocalIntent =
   | "GREETING"
   | "HOW_ARE_YOU"
@@ -25,6 +33,7 @@ export type LocalIntent =
   | "RISK_HELP"
   | "MARKET_OVERVIEW"
   | "MARKET_ANALYSIS"
+  | "PERFORMANCE"
   | "HELP"
   | "UNKNOWN";
 
@@ -94,6 +103,8 @@ export interface DiscussionSignal {
   support?: number;
   resistance?: number;
   consensus?: string;
+  /** Genuine 8-condition engine pass count (0..8) — exact "X/8" only. */
+  conditionsPassed?: number;
   reasoning?: string;
   status?: string;
   createdAt?: number;
@@ -296,6 +307,20 @@ const MARKET_WORDS = [
   "market overview", "market kya kar raha", "sentiment", "overall market",
   "market condition", "market kesa hai",
 ];
+/**
+ * Historical-performance questions ("kitne signals jeete?", "win rate kya hai?",
+ * "how accurate are your signals?"). The chat route answers these from the
+ * Firestore archive via /api/signals/stats — never from the model.
+ */
+const PERFORMANCE_WORDS = [
+  "win rate", "winrate", "hit rate", "kitne jeete", "kitne jeet",
+  "kitna jeeta", "kitne win", "kitne haar", "kya performance", "performance",
+  "past signals", "purane signals", "how many wins", "how accurate",
+  "signal stats", "signal statistics", "signal history", "signals history",
+  "total signals", "kitne signals", "signal results", "results of signals",
+  "accuracy of signals", "signal accuracy", "track record", "trackrecord",
+  "kya accuracy", "kitne percent", "win/loss", "profitability",
+];
 const HELP_WORDS = [
   "help", "madad", "kya kar sakte", "what can you do", "menu", "options", "kaise use",
 ];
@@ -312,6 +337,12 @@ export function detectIntent(message: string): LocalIntent {
   if (GREETINGS.includes(compact)) return "GREETING";
   if (hasWord(m, HOW_ARE_YOU)) return "HOW_ARE_YOU";
   if (hasWord(m, SIGNAL_DISCUSSION_WORDS)) return "SIGNAL_DISCUSSION";
+  // Historical-performance questions are checked BEFORE the signal query rules:
+  // "pichle 30 din ke signals ka win rate" contains "ke signals" and would
+  // otherwise be answered with a fresh shortlist instead of the real history.
+  // The PERFORMANCE words are specific enough ("win rate", "kitne signals",
+  // "signal stats"…) that "aaj ke signals dikhao" still reaches SIGNAL_QUERY.
+  if (hasWord(m, PERFORMANCE_WORDS)) return "PERFORMANCE";
   if (hasWord(m, SIGNAL_QUERY_WORDS)) return "SIGNAL_QUERY";
 
   const symbol = extractSymbol(message);
@@ -633,7 +664,23 @@ async function signalDiscussionReply(message: string, sig: DiscussionSignal | nu
   if (sig.pattern) lines.push(`   Pattern: ${sig.pattern}`);
   if (sig.candlestick) lines.push(`   Candlestick: ${sig.candlestick}`);
   if (score > 0) lines.push(`   Score: ${score}/100 (${qualityWord(score)})`);
-  if (sig.consensus) lines.push(`   Consensus: ${sig.consensus} experts`);
+  // Consensus counts — GENUINE evaluations only. A malformed/fabricated value
+  // ("75%", "3 of 4", …) prints NO count instead of an invented one, and the
+  // exact accepted thresholds are 2/4 experts + 6/8 conditions.
+  const expertCounts = parseExpertCounts(sig.consensus);
+  if (expertCounts) {
+    const accepted = expertCounts.agreed >= ACCEPTED_EXPERT_AGREED;
+    lines.push(
+      `   Consensus: ${expertCounts.agreed}/${expertCounts.total} experts${accepted ? " ✅" : " ⚠️ below accepted threshold (2/4)"}`,
+    );
+  }
+  const conditionCounts = parseConditionsPassed(sig.conditionsPassed);
+  if (conditionCounts !== null) {
+    const accepted = conditionCounts >= ACCEPTED_CONDITIONS_PASSED;
+    lines.push(
+      `   Conditions: ${conditionCounts}/${CONDITIONS_TOTAL} passed${accepted ? " ✅" : " ⚠️ below accepted threshold (6/8)"}`,
+    );
+  }
   if (typeof sig.createdAt === "number") lines.push(`   Signal came: ${timeAgo(sig.createdAt)}`);
   lines.push("");
 

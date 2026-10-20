@@ -53,8 +53,58 @@ function toBybitPair(symbol: string): string | null {
   return `${base}USDT`;
 }
 
-/** True when a stored symbol is a non-crypto instrument priced by Yahoo. */
-function isYahooSymbol(symbol: string): boolean {
+/**
+ * The Yahoo symbol a stored setup must be priced with.
+ *
+ * The scanner stores Yahoo symbols for forex/stocks/metals, but a setup can
+ * also arrive with a display notation ("XAU-USD" for gold, "EUR-USD" for the
+ * euro). Yahoo only knows "GC=F" and "EURUSD=X", so the notation is mapped
+ * back to the ticker the provider actually quotes. Without this the cron
+ * silently fails to price gold/forex setups and they stay PENDING forever.
+ */
+function toYahooSymbol(symbol: string, market: string): string {
+  const raw = String(symbol ?? "").trim().toUpperCase();
+  const m = market.trim().toLowerCase();
+
+  if (m === "metals") {
+    // The scanner trades the futures contract; the user asks for the spot
+    // notation. Both must be priced with the SAME Yahoo futures ticker.
+    const metal: Record<string, string> = {
+      XAU: "GC=F",
+      GOLD: "GC=F",
+      XAG: "SI=F",
+      SILVER: "SI=F",
+      XPT: "PL=F",
+      XPD: "PA=F",
+      XCU: "HG=F",
+      CU: "HG=F",
+      USOIL: "CL=F",
+      OIL: "CL=F",
+      WTI: "CL=F",
+      NATGAS: "NG=F",
+    };
+    const body = raw.replace(/[-/]?USD$/, "").replace(/=F$/, "");
+    return metal[body] ?? raw;
+  }
+
+  if (m === "forex") {
+    if (raw.endsWith("=X")) return raw;
+    const body = raw.replace(/[-/]/g, "").replace(/USD$/, "USD");
+    return body.length === 6 ? `${body}=X` : raw;
+  }
+
+  return raw;
+}
+
+/**
+ * True when a stored setup is a non-crypto instrument priced by Yahoo.
+ *
+ * The market decides: a metals setup ("XAU-USD") must NEVER be sent to Bybit
+ * as the fake pair "XAUUSDT", and a crypto setup must never be sent to Yahoo.
+ */
+function isYahooSymbol(symbol: string, market: string): boolean {
+  const m = market.trim().toLowerCase();
+  if (m === "metals" || m === "forex" || m === "stocks") return true;
   return toBybitPair(symbol) === null;
 }
 
@@ -116,7 +166,14 @@ async function yahooPrices(symbols: string[]): Promise<Map<string, number>> {
   return map;
 }
 
-/** Resolve one signal's outcome against the current price (incl. which target). */
+/**
+ * Resolve one signal's outcome against the current price (incl. which target).
+ *
+ * A doc written BEFORE the trade plan was persisted has no SL/TP at all. Such
+ * a doc can never be resolved against its plan, so it is treated as
+ * un-resolvable (PENDING) until the 24h expiry marks it EXPIRED — reporting a
+ * "loss" for a setup that never had a stop loss would be a lie.
+ */
 function resolve(signal: CloudDoc, price: number | undefined): { status: Outcome; hitTarget: HitTarget } {
   const bearish = String(signal.direction) === "bearish";
   const sl = Number(signal.stopLoss);
@@ -124,6 +181,11 @@ function resolve(signal: CloudDoc, price: number | undefined): { status: Outcome
   const tp2 = Number(signal.tp2);
   const tp3 = Number(signal.tp3);
   if (price === undefined) return { status: "PENDING", hitTarget: null };
+
+  // No plan stored → nothing to resolve against.
+  const hasPlan = Number.isFinite(sl) && sl > 0;
+  const hasTarget = [tp1, tp2, tp3].some((v) => Number.isFinite(v) && v > 0);
+  if (!hasPlan && !hasTarget) return { status: "PENDING", hitTarget: null };
 
   const slHit = Number.isFinite(sl) && sl > 0 ? (bearish ? price >= sl : price <= sl) : false;
   // Stop loss takes priority so a loss is never reported as a win.
@@ -169,8 +231,12 @@ export async function GET(request: Request) {
   );
 
   // Only pay for the price sources we actually need this run.
-  const needsCrypto = needsPrice.some((s) => !isYahooSymbol(s.symbol));
-  const yahooSymbols = needsPrice.filter((s) => isYahooSymbol(s.symbol)).map((s) => String(s.symbol));
+  const needsCrypto = needsPrice.some((s) => !isYahooSymbol(String(s.symbol), String(s.market ?? "")));
+  // Yahoo is asked with the symbol the PROVIDER quotes (GC=F, EURUSD=X), not
+  // with the display notation the setup may carry (XAU-USD, EUR-USD).
+  const yahooSymbols = needsPrice
+    .filter((s) => isYahooSymbol(String(s.symbol), String(s.market ?? "")))
+    .map((s) => toYahooSymbol(String(s.symbol), String(s.market ?? "")));
 
   const [cryptoMap, yahooMap] = await Promise.all([
     needsCrypto ? cryptoPrices() : Promise.resolve(new Map<string, number>()),
@@ -203,7 +269,9 @@ export async function GET(request: Request) {
 
     // Price lookup: crypto via Bybit, everything else via Yahoo.
     const pair = toBybitPair(signal.symbol);
-    const price = pair ? cryptoMap.get(pair) : yahooMap.get(String(signal.symbol));
+    const price = pair
+      ? cryptoMap.get(pair)
+      : yahooMap.get(toYahooSymbol(String(signal.symbol), String(signal.market ?? "")));
     const { status: outcome, hitTarget } = resolve(signal, price);
 
     await updateSignal(signal.id, {

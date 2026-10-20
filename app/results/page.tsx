@@ -24,6 +24,8 @@ import {
   type HitTarget,
 } from "@/src/lib/signalStorage";
 import { subscribeAllSignals, type CloudDoc } from "@/src/lib/signalCloud";
+import { assetKey, signalDateKey } from "@/src/lib/signalIdentity";
+import { cloudIdentity } from "@/src/lib/signalMerge";
 
 const GREEN = "#00C087";
 const CARD = "#181A20";
@@ -36,15 +38,15 @@ const AMBER = "#F0B90B";
 type StatusFilter = "all" | SignalStatus;
 type TimeFilter = "today" | "week" | "month" | "all";
 
-/** Normalize any symbol to a base key so "BTC-USD"/"BTCUSDT" match. */
-function baseKey(symbol: string): string {
-  return symbol
-    .toUpperCase()
-    .replace(/[/\s]/g, "")
-    .replace(/-USD$/, "")
-    .replace(/USD$/, "")
-    .replace(/USDT$/, "")
-    .replace(/=X$/, "");
+/**
+ * Market-aware price key. The quote feed labels crypto futures as "futures"
+ * while the app's market union calls it "crypto" — they are the same market.
+ * Keying the price map by market + canonical symbol stops a stock "AAPL" and
+ * a crypto "AAPL" from sharing a price.
+ */
+function priceKey(symbol: string, market: string): string {
+  const m = market === "futures" ? "crypto" : market;
+  return assetKey(symbol, m);
 }
 
 /** BTC-USD -> BTC/USD, EURUSD=X -> EUR/USD, GC=F -> GC. */
@@ -177,25 +179,49 @@ function ResultsPageContent() {
     function mergeCloud(docs: Array<CloudDoc & { id: string }>) {
       if (cancelled || docs.length === 0) return;
       setRecords((prev) => {
-        // Index cloud docs by normalized symbol → most recent wins.
-        const bySymbol = new Map<string, CloudDoc & { id: string }>();
+        // Index cloud docs by CANONICAL identity (market + canonical symbol +
+        // timeframe + dateKey) → most recent wins. Symbol-only keys used to
+        // collide across markets and split one asset across notations.
+        const byIdentity = new Map<string, CloudDoc & { id: string }>();
         for (const doc of docs) {
           if (typeof doc?.symbol !== "string") continue;
-          const key = baseKey(doc.symbol);
-          const existing = bySymbol.get(key);
+          const key = cloudIdentity({
+            market: doc.market,
+            symbol: doc.symbol,
+            timeframe: doc.timeframe ?? "1h",
+            dateKey: doc.dateKey ?? undefined,
+            createdAt: doc.createdAt ?? undefined,
+          });
+          const existing = byIdentity.get(key);
           const ts = typeof doc.createdAt === "number" ? doc.createdAt : 0;
           if (!existing || ts > (typeof existing.createdAt === "number" ? existing.createdAt : 0)) {
-            bySymbol.set(key, doc);
+            byIdentity.set(key, doc);
           }
         }
 
         let changed = false;
-        const knownKeys = new Set(prev.map((r) => baseKey(r.symbol)));
+        const knownKeys = new Set(
+          prev.map((r) =>
+            cloudIdentity({
+              market: r.market,
+              symbol: r.symbol,
+              timeframe: "1h",
+              dateKey: signalDateKey(r.createdAt),
+            }),
+          ),
+        );
 
-        // (1) Overlay cloud outcome onto existing PENDING records.
+        // (1) Overlay cloud outcome onto matching local records.
+        //     The cloud is authoritative; a PENDING cloud doc never downgrades a
+        //     locally resolved setup.
         const merged = prev.map((r) => {
-          if (r.status !== "PENDING") return r;
-          const doc = bySymbol.get(baseKey(r.symbol));
+          const key = cloudIdentity({
+            market: r.market,
+            symbol: r.symbol,
+            timeframe: "1h",
+            dateKey: signalDateKey(r.createdAt),
+          });
+          const doc = byIdentity.get(key);
           if (!doc) return r;
           const next = applyCloudOutcome(r, {
             status: String(doc.status ?? ""),
@@ -208,7 +234,7 @@ function ResultsPageContent() {
 
         // (2) Add cloud signals missing locally (this device never saved them).
         const additions: StoredSignal[] = [];
-        for (const [key, doc] of bySymbol) {
+        for (const [key, doc] of byIdentity) {
           if (knownKeys.has(key)) continue;
           const record = cloudToStored(doc);
           if (record) additions.push(record);
@@ -244,16 +270,16 @@ function ResultsPageContent() {
       try {
         const res = await fetch("/api/market/all-coins", { cache: "no-store" });
         const data = await res.json();
-        const coins: Array<{ symbol: string; currentPrice: number }> = Array.isArray(data?.coins) ? data.coins : [];
+        const coins: Array<{ symbol: string; market?: string; currentPrice: number }> = Array.isArray(data?.coins) ? data.coins : [];
         const priceMap = new Map<string, number>();
         for (const c of coins) {
           if (typeof c?.symbol === "string" && Number.isFinite(c?.currentPrice)) {
-            priceMap.set(baseKey(c.symbol), c.currentPrice);
+            priceMap.set(priceKey(c.symbol, String(c.market ?? "crypto")), c.currentPrice);
           }
         }
 
         const updated = current.map((r) => {
-          const price = priceMap.get(baseKey(r.symbol));
+          const price = priceMap.get(priceKey(r.symbol, r.market));
           // No quote for this symbol → keep stored state, still refresh nothing.
           return price === undefined ? r : evaluateSignal(r, price);
         });

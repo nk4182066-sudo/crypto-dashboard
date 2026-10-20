@@ -16,6 +16,8 @@
  */
 
 import { formatPrice } from "@/src/lib/formatPrice";
+import { assetKey, signalDocId } from "@/src/lib/signalIdentity";
+import { mergeOutcome, normalizeOutcome } from "@/src/lib/signalMerge";
 
 export type SignalStatus = "PENDING" | "SUCCESS" | "FAILED" | "EXPIRED";
 /** Which level resolved the trade (TP1/TP2/TP3 = success, SL = failure). */
@@ -313,12 +315,17 @@ export function saveSignals(list: StoredSignal[]): void {
   }
 }
 
-/** Remove duplicate records, keeping only the newest per symbol. */
+/**
+ * Remove duplicate records, keeping only the newest per ASSET (canonical
+ * symbol + market). Previously the key was the raw upper-cased symbol, so
+ * "BTC-USD" and "BTCUSDT" were treated as two different coins while the same
+ * ticker in two markets collided.
+ */
 export function cleanDuplicates(): StoredSignal[] {
   const existing = getSignals();
   const seen = new Set<string>();
   const cleaned = existing.filter((r) => {
-    const key = r.symbol.toUpperCase().trim();
+    const key = assetKey(r.symbol, r.market);
     if (seen.has(key)) return false;
     seen.add(key);
     return true;
@@ -485,17 +492,17 @@ export function saveSignal(input: SignalSaveInput): StoredSignal | null {
   // STRONG duplicate guard ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â one record per symbol per rolling 24h window,
   // regardless of status. Stops the same coin piling up (e.g. XRP saved 6x).
   const oneDayAgo = Date.now() - 24 * 60 * 60 * 1000;
-  const key = input.symbol.toUpperCase().trim();
-  if (existing.some((r) => r.symbol.toUpperCase().trim() === key && r.createdAt > oneDayAgo)) {
+  const key = assetKey(input.symbol, input.market);
+  if (existing.some((r) => assetKey(r.symbol, r.market) === key && r.createdAt > oneDayAgo)) {
     return null; // Same symbol already saved within 24 hours ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â skip.
   }
 
   // No record for this symbol within 24h, so add a fresh one and drop any older
   // record for the same symbol to keep at most one entry per coin.
-  const kept = existing.filter((r) => r.symbol.toUpperCase().trim() !== key);
+  const kept = existing.filter((r) => assetKey(r.symbol, r.market) !== key);
 
   const base: StoredSignal = {
-    id: `${input.symbol}-${input.market}-${Date.now()}`,
+    id: signalDocId({ market: input.market, symbol: input.symbol, timeframe: "1h" }),
     symbol: input.symbol,
     market: input.market,
     score: Math.round(input.score),
@@ -631,27 +638,46 @@ function pickHitTarget(raw: string | undefined, status: SignalStatus): HitTarget
 
 /**
  * Overlay a server-cron outcome onto a local record so the Results page shows
- * the SAME WIN/LOSS/EXPIRED the Firestore cron wrote â€” on every device, even
- * setups that resolved while this browser was closed. Only overrides records
- * still PENDING locally (never un-resolves a local win/loss). Regenerates both
- * narratives so the card explains the outcome.
+ * the SAME WIN/LOSS/EXPIRED the Firestore cron wrote — on every device, even
+ * setups that resolved while this browser was closed.
+ *
+ * The policy lives in src/lib/signalMerge.ts (mergeOutcome) so this page, the
+ * live refresh and the chat can never disagree:
+ *   - the cloud is authoritative once it has RESOLVED the setup;
+ *   - a PENDING cloud doc never downgrades a locally resolved record.
+ * Regenerates both narratives so the card explains the outcome.
  */
 export function applyCloudOutcome(
   record: StoredSignal,
-  cloud: { status: string; currentPrice?: number; hitTarget?: string }
+  cloud: { status: string; currentPrice?: number; hitTarget?: string },
 ): StoredSignal {
-  const price =
-    typeof cloud.currentPrice === "number" && cloud.currentPrice > 0 ? cloud.currentPrice : record.currentPrice;
-  const local = cloudStatusToLocal(String(cloud.status));
-  if (!local || record.status !== "PENDING") {
-    return price !== record.currentPrice ? { ...record, currentPrice: price } : record;
-  }
+  const merged = mergeOutcome(
+    { status: record.status, hitTarget: record.hitTarget, currentPrice: record.currentPrice },
+    {
+      status: String(cloud.status),
+      hitTarget: cloud.hitTarget ?? null,
+      currentPrice:
+        typeof cloud.currentPrice === "number" && cloud.currentPrice > 0 ? cloud.currentPrice : 0,
+    },
+  );
+
+  const localStatus = normalizeOutcome(merged.status);
+  const statusChanged = localStatus !== record.status;
+  const priceChanged = merged.currentPrice !== record.currentPrice;
+
+  if (!statusChanged && !priceChanged) return record;
+
   const next: StoredSignal = {
     ...record,
-    status: local,
-    hitTarget: pickHitTarget(cloud.hitTarget, local),
-    currentPrice: price,
+    status: localStatus,
+    hitTarget:
+      merged.hitTarget === "TP1" || merged.hitTarget === "TP2" || merged.hitTarget === "TP3" || merged.hitTarget === "SL"
+        ? merged.hitTarget
+        : pickHitTarget(merged.hitTarget ?? undefined, localStatus),
+    currentPrice: merged.currentPrice,
   };
+  if (!statusChanged) return next;
+
   const why = buildWhy(next);
   const lesson = buildLesson(next.status, next.pattern, next.candlestick);
   return {
