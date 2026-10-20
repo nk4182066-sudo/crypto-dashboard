@@ -145,10 +145,23 @@ function HomeContent() {
     });
   }, [coins, debouncedQuery]);
 
-  /** Top 5 movers - biggest absolute 24h move across the whole universe. */
+  /** Top 5 movers - biggest absolute 24h move across the whole universe.
+   *  The universe contains the same asset in both spot and futures (e.g.
+   *  EPICUSDT), so we collapse those twins and keep the stronger move. */
   const movers = useMemo(() => {
-    return [...coins]
-      .filter((c) => Number.isFinite(c.priceChangePercent) && c.priceChangePercent !== 0)
+    const best = new Map<string, AllCoin>();
+    for (const c of coins) {
+      if (!Number.isFinite(c.priceChangePercent) || c.priceChangePercent === 0) continue;
+      const key = (c.symbol ?? "").replace(/usdt$/i, "").toUpperCase() || c.id;
+      const current = best.get(key);
+      if (
+        !current ||
+        Math.abs(c.priceChangePercent) > Math.abs(current.priceChangePercent)
+      ) {
+        best.set(key, c);
+      }
+    }
+    return [...best.values()]
       .sort((a, b) => Math.abs(b.priceChangePercent) - Math.abs(a.priceChangePercent))
       .slice(0, 5);
   }, [coins]);

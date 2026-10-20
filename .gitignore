@@ -54,3 +54,6 @@ next-env.d.ts
 start-dev.pid
 .vercel
 .env*
+
+# local verification screenshots (not part of the app)
+/shots/
