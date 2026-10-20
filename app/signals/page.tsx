@@ -104,8 +104,8 @@ const REFRESH_MS = 30 * 1000;
  * so the pool appears the moment the first strict pass emits.
  */
 const COLD_RETRY_MS = 8 * 1000;
-/** Stored setups (cloud/backup) older than this expire — 30-day retention (KAAM 9). */
-const SIGNAL_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+/** Stored setups (cloud/backup) older than this expire — 24h retention (Quality spec). */
+const SIGNAL_TTL_MS = 24 * 60 * 60 * 1000;
 
 function fmtPrice(p: number | null): string {
   if (p == null || !Number.isFinite(p) || p === 0) return "—";
@@ -326,23 +326,18 @@ function SignalsPageContent() {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- `tick` intentionally re-triggers the TTL filter
   }, [apiSignals, cloudSignals, backupSignals, tick, market, rescoring]);
 
-  // Quality floor = 6/8 (score 75+). The list renders from DISPLAY_MIN_SCORE
-  // (75) and sorts highest score first, so 85+ (Strong/Premium) ranks above
-  // 75-84 (Good). No sub-6/8 signal is ever shown — a quiet market simply
-  // shows fewer cards instead of ghatiya fillers.
-  const displayed = useMemo(() => {
-    const ranked = signals
-      .filter((s) => s.score >= DISPLAY_MIN_SCORE)
-      // Experts gate: 0/4 and 2/4 consensus signals never reach the UI.
-      .filter((s) => s.experts != null && s.experts.consensus.agreed >= 3)
-      .sort((first, second) => second.score - first.score);
-    if (ranked.length > 0) return ranked;
-    // TIER 3 (page-level) — the live scan + score floor produced nothing, but
-    // stored PENDING setups exist (Firestore / localStorage backup). Show them
-    // anyway: a tab must NEVER render an empty screen while old pending
-    // signals are available.
-    return [...signals].sort((first, second) => second.score - first.score);
-  }, [signals]);
+  // Quality floor (Quality with Quantity spec): score 85+ AND experts >= 3/4.
+  // NO page-level fallback — sub-floor stored cards are NEVER shown; a quiet
+  // market renders the "Aaj ke liye best setups pure ho gaye hain" empty state.
+  const displayed = useMemo(
+    () =>
+      signals
+        .filter((s) => s.score >= DISPLAY_MIN_SCORE)
+        // Experts gate: 0/4 and 2/4 consensus signals never reach the UI.
+        .filter((s) => s.experts != null && s.experts.consensus.agreed >= 3)
+        .sort((first, second) => second.score - first.score),
+    [signals],
+  );
 
   // MASLA 1 — stored setups (Firestore + localStorage backup) carried OLD
   // confidence-style scores. Re-run the SHARED analyzeCoin() on the SAME
@@ -538,9 +533,9 @@ function SignalsPageContent() {
       ) : displayed.length === 0 ? (
         fiveSecDone && !loading ? (
           <div className="rounded-2xl border p-6 text-center text-sm" style={{ backgroundColor: CARD, borderColor: BORDER, color: MUTED }}>
-            <p>Wait for high-quality setup</p>
-            <p className="mt-1">Market scan chal raha hai — sirf Tier 1/2/3 setups (85+ score) yahan dikhenge.</p>
-            <p className="mt-2 text-xs opacity-70">(No relaxation. No garbage signals. 85+ score, 3/4+ experts, confirmed candlestick, 1.5x+ volume required.)</p>
+            <p>Aaj ke liye best setups pure ho gaye hain. Market ka intezar karein.</p>
+            <p className="mt-1">Today&apos;s best setups are used up — please wait for the market.</p>
+            <p className="mt-2 text-xs opacity-70">(Max 10 per market per day · 85+ score, 3/4+ experts, H1+H4 trend, volume &gt; 20-SMA, RSI 35/65 filter. No garbage signals.)</p>
           </div>
         ) : (
           <div className="animate-pulse rounded-2xl border p-6 text-center text-sm" style={{ backgroundColor: CARD, borderColor: BORDER, color: MUTED }} role="status">

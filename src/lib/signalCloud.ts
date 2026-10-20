@@ -34,8 +34,8 @@ import {
 
 /** Same symbol+timeframe inside this window is skipped (dedupe, not expiry). */
 export const DEDUPE_WINDOW_MS = 4 * 60 * 60 * 1000;
-/** Signals older than 30 days are marked EXPIRED but never deleted. */
-export const SIGNAL_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+/** Signals older than 24 hours are marked EXPIRED but never deleted. */
+export const SIGNAL_TTL_MS = 24 * 60 * 60 * 1000;
 
 /** Firestore archive collection — signals are appended, never deleted. */
 export const SIGNALS_COLLECTION = "signals_archive";
@@ -343,6 +343,25 @@ export async function updateSignal(id: string, patch: Record<string, unknown>): 
     return true;
   } catch (error) {
     console.warn(`[signalCloud] updateSignal failed (${id}):`, error instanceof Error ? error.message : error);
+    return false;
+  }
+}
+
+/**
+ * Merge-patch the signals_history TWIN of a stored signal — the tracking cron
+ * writes the final WIN/LOSS/EXPIRED outcome here so the append-only history
+ * keeps the resolution next to the emission (spec item 4: "history mein bhej
+ * do", never deleteDoc). Uses the same doc-id scheme as the archive.
+ * Never throws.
+ */
+export async function updateHistoryDoc(id: string, patch: Record<string, unknown>): Promise<boolean> {
+  const db = getCloudDb();
+  if (!db) return false;
+  try {
+    await setDoc(doc(db, SIGNALS_HISTORY_COLLECTION, id), patch, { merge: true });
+    return true;
+  } catch (error) {
+    console.warn(`[signalCloud] history patch failed (${id}):`, error instanceof Error ? error.message : error);
     return false;
   }
 }

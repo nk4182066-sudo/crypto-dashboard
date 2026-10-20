@@ -6,15 +6,16 @@
  * (the Signals page, the new /api/signals/live endpoint, and the background
  * refill after a loss/expiry) reads ONE code path and computes ONE score.
  *
- * Emission rules (spec: quality floor = 6/8 — "6/8 se neeche kuch nahi"):
- *   - Tier 1 (PREMIUM):  8/8 conditions + 3/4 experts → score 93-100.
- *   - Tier 2 (STRONG):   7/8 conditions + 3/4 experts → score 88-92.
- *   - Tier 3 (GOOD):     6/8 conditions + 3/4 experts → score 75-84.
- *   - Below Tier 3 (<6/8 OR <3/4 experts) → REJECT. There is NO relaxation
- *     flush and no near-miss filler — a quiet market simply shows fewer
- *     signals rather than ghatiya cards ("40 se kam, magar saaf").
- *   - score 85+ earns the High-Confidence badge (signalStorage.MIN_SCORE);
- *     the page list renders from DISPLAY_MIN_SCORE (75 = the 6/8 floor).
+ * Emission rules (Quality with Quantity spec — "85+ se neeche kuch nahi"):
+ *   - Tier 1 (PREMIUM):  8/8 conditions → score 100.
+ *   - Tier 2 (STRONG):   7/8 conditions → score 88.
+ *   - score < 85 → REJECT (Tier 3's 75-84 band no longer emits).
+ *   - Experts >= 3/4 required on every tier.
+ *   - PLUS the Perfect-Balance filters: H1+H4 same direction, volume > 20-SMA,
+ *     RSI < 35 for Buy / > 65 for Sell. Any miss → null.
+ *   - MAX 10 emitted signals per market per Asia/Karachi day (dailyQuota.ts);
+ *     at quota the market goes quiet until midnight — NO fallback filler.
+ *   - score 85+ earns the High-Confidence badge (signalStorage.MIN_SCORE).
  *
  * Auto-refill:
  *   - /api/track-signals resolves a setup to WIN / LOSS / EXPIRED and then
@@ -33,7 +34,12 @@ import { analyzeCoin } from "./analyzeCoin";
 import { buildConfirmations, buildEducators } from "./confirmations";
 import { calculateIndicators } from "./indicatorEngine";
 import { persistSignals, persistToHistory, readAllSignals, karachiDateKey, SIGNAL_TTL_MS, type CloudDoc } from "./signalCloud";
+import { MAX_SIGNALS_PER_MARKET_PER_DAY, remainingEmitSlots, reserveEmitSlot } from "./dailyQuota";
+import { ema, rsi, sma } from "@/src/analysis/indicators";
 import type { Candle } from "@/src/analysis/types";
+
+/** EMISSION FLOOR (Quality with Quantity spec): score < 85 → reject, never shown. */
+export const MIN_EMIT_SCORE = 85;
 
 /** Per-market live cap (Spec: 40 total = 10 + 10 + 10 + 10). */
 export const LIVE_CAPS: Record<ScanMarket, number> = {
@@ -132,11 +138,67 @@ function toEmittedSignal(item: { symbol: string; label: string; market: ScanMark
   };
 }
 
+/** Last finite value of an indicator series (null when the series never fills). */
+function lastOf(series: (number | null)[]): number | null {
+  for (let index = series.length - 1; index >= 0; index -= 1) {
+    const value = series[index];
+    if (value !== null && Number.isFinite(value)) return value;
+  }
+  return null;
+}
+
+/** EMA20-vs-EMA50 trend side of one candle series ("neutral" when too short). */
+function trendSide(candles: Candle[]): "bullish" | "bearish" | "neutral" {
+  const closes = candles.map((c) => c.close);
+  if (closes.length < 50) return "neutral";
+  const fast = lastOf(ema(closes, 20));
+  const slow = lastOf(ema(closes, 50));
+  if (fast === null || slow === null) return "neutral";
+  if (fast > slow) return "bullish";
+  if (fast < slow) return "bearish";
+  return "neutral";
+}
+
+/**
+ * PERFECT-BALANCE quality filters (Quality with Quantity spec, item 1):
+ *   - Trend filter: H1 and H4 must BOTH point the same way as the signal.
+ *   - Volume filter: last bar volume > its 20-SMA.
+ *   - RSI filter: Buy only below 35, Sell only above 65.
+ * Returns a short miss reason, or null when ALL filters pass.
+ */
+export function qualityFilterMiss(
+  h1: Candle[],
+  h4: Candle[],
+  direction: "bullish" | "bearish",
+): string | null {
+  const h1Side = trendSide(h1);
+  const h4Side = trendSide(h4);
+  if (h4Side === "neutral" || h1Side !== direction || h4Side !== direction) {
+    return `trendFilter: h1=${h1Side} h4=${h4Side} dir=${direction}`;
+  }
+  const volumeAvg = lastOf(sma(h1.map((c) => c.volume ?? 0), 20));
+  const volumeLast = h1[h1.length - 1]?.volume ?? 0;
+  if (volumeAvg === null || !(volumeLast > volumeAvg)) {
+    return `volumeFilter: last=${volumeLast.toFixed(0)} sma20=${volumeAvg === null ? "n/a" : volumeAvg.toFixed(0)}`;
+  }
+  const rsiValue = lastOf(rsi(h1.map((c) => c.close), 14));
+  if (rsiValue === null) return "rsiFilter: no RSI data";
+  if (direction === "bullish" && rsiValue >= 35) {
+    return `rsiFilter: buy needs RSI<35 (got ${rsiValue.toFixed(1)})`;
+  }
+  if (direction === "bearish" && rsiValue <= 65) {
+    return `rsiFilter: sell needs RSI>65 (got ${rsiValue.toFixed(1)})`;
+  }
+  return null;
+}
+
 /** Evaluates ONE candidate against the strict tier gate.
  *  Tier 1 (8/8 + 3/4 + 93+): returns signal directly.
  *  Tier 2 (7/8 + 3/4 + 88+): returns signal directly.
- *  Tier 3 (6/8 + 3/4 + 75+): returns signal directly — the quality floor.
- *  Below Tier 3 (<6/8 OR <3/4 experts): returns null (rejected, never buffered). */
+ *  QUALITY GATE (all must hold, else null — no fallback):
+ *    score >= 85 · H1+H4 trend aligned with direction · volume > 20-SMA ·
+ *    RSI < 35 (Buy) / > 65 (Sell).
+ *  Below the gate: returns null (rejected, never buffered). */
 export async function evaluateStrict(
   candidate: { symbol: string; label: string; market: ScanMarket; reason: string },
   h1: Candle[],
@@ -195,24 +257,34 @@ export async function evaluateStrict(
     }
   }
 
-  // STRICT gate with exact tier hierarchy (quality floor = 6/8, nothing below):
+  // STRICT gate (Quality with Quantity spec) — PREMIUM / STRONG only:
   //   Tier 1 (PREMIUM):  8/8 conditions → score 100
-  //   Tier 2 (STRONG):   7/8 conditions → score 87
-  //   Tier 3 (GOOD):     6/8 conditions → score 75
-  //   Floor: conditions >= 6/8 AND experts >= 3/4 (delivery-grade consensus).
-  //   Below 6/8 OR <3/4 experts → REJECT (not shown, not buffered,
+  //   Tier 2 (STRONG):   7/8 conditions → score 88
+  //   Floor: conditions >= 7/8 (score >= 85) AND experts >= 3/4.
+  //   Below 7/8 OR <3/4 experts → REJECT (not shown, not buffered,
   //   not flushed as filler — a quiet market shows fewer signals instead).
-  const conditionsOk = full.conditionsPassed >= 6;
+  const conditionsOk = full.conditionsPassed >= 7;
   // Experts gate: the panel must exist with at least 3/4 consensus — the
   // committed delivery-grade floor (unanimity 4/4 was an uncommitted over-
   // tighten that drove emission to 0). Null experts reject, so we never emit
   // an unverifiable card.
   const expertsOk = experts !== null && experts.consensus.agreed >= 3;
   if (!conditionsOk || !expertsOk) {
-    // Below the Tier 3 minimum → reject. No near-miss buffering, no flush.
+    // Below the minimum → reject. No near-miss buffering, no flush.
     console.log(
       `[signalsLive] reject ${candidate.symbol}: cond=${full.conditionsPassed} score=${full.score} dir=${full.direction} experts=${experts ? `${(experts as { consensus: { agreed: number; total: number } }).consensus.agreed}/${(experts as { consensus: { agreed: number; total: number } }).consensus.total}` : "null"} h1=${h1.length} failed=[${(full.conditions ?? []).filter((c) => !c.pass).map((c) => c.id).join(",")}]`,
     );
+    return null;
+  }
+  // QUALITY GATE (Perfect Balance) — score floor 85. Any miss → null.
+  if (full.score < MIN_EMIT_SCORE) {
+    console.log(`[signalsLive] reject ${candidate.symbol}: score ${full.score} < ${MIN_EMIT_SCORE}`);
+    return null;
+  }
+  // QUALITY GATE — trend (H1+H4), volume (>20-SMA) and RSI (<35 buy / >65 sell).
+  const filterMiss = qualityFilterMiss(h1, h4, full.direction);
+  if (filterMiss) {
+    console.log(`[signalsLive] reject ${candidate.symbol}: ${filterMiss}`);
     return null;
   }
   return toEmittedSignal(candidate, full, confirmations, indicators, experts, h1);
@@ -301,6 +373,17 @@ async function fetchHistoryCandles(
  * chat route uses — memoised per instance so one request only pays for one scan.
  */
 export async function getStrictSignals(market: ScanMarket, limit?: number, origin?: string): Promise<EmittedMarketSignal[]> {
+  // DAILY QUOTA (max 10 per market per Asia/Karachi day — dailyQuota.ts): once
+  // today's 10 are emitted the market is DONE; skip the scan cost entirely.
+  const remainingToday = await remainingEmitSlots(market);
+  if (remainingToday <= 0) {
+    console.log(
+      `[LIVE] ${market} today ${MAX_SIGNALS_PER_MARKET_PER_DAY}/${MAX_SIGNALS_PER_MARKET_PER_DAY} — quota full, no new scans.`,
+    );
+    return [];
+  }
+  const cap = limit === undefined ? remainingToday : Math.min(limit, remainingToday);
+
   let candidates = getCachedSnapshot()?.results?.filter((item) => item.market === market) ?? [];
 
   if (candidates.length === 0) {
@@ -336,7 +419,7 @@ export async function getStrictSignals(market: ScanMarket, limit?: number, origi
   // Yahoo/Bybit rate limits; evaluateStrict() itself is CPU-cheap.
   const CANDIDATE_BATCH = 5;
   for (let start = 0; start < candidates.length; start += CANDIDATE_BATCH) {
-    if (limit !== undefined && results.length >= limit) break;
+    if (results.length >= cap) break;
     if (scanned >= MAX_CANDIDATES_PER_CALL) break; // cold-request latency bound
     const batch = candidates.slice(start, Math.min(start + CANDIDATE_BATCH, MAX_CANDIDATES_PER_CALL));
     const candleSets = await Promise.all(
@@ -350,7 +433,7 @@ export async function getStrictSignals(market: ScanMarket, limit?: number, origi
     );
 
     for (let index = 0; index < batch.length; index += 1) {
-      if (limit !== undefined && results.length >= limit) break;
+      if (results.length >= cap) break;
       if (scanned >= MAX_CANDIDATES_PER_CALL) break;
       const item = batch[index];
       const [h1, h4, d1] = candleSets[index];
@@ -358,10 +441,12 @@ export async function getStrictSignals(market: ScanMarket, limit?: number, origi
       if (h1.length < 20) { noCandles += 1; continue; }
       const signal = await evaluateStrict(item, h1, h4, d1);
       if (!signal) { rejected += 1; continue; }
-      // Tier 3 emission floor: the 6/8 quality floor (score 75+). Any signal
-      // that passes a quality tier lands here with its REAL condition count
-      // and honest score — signals below 6/8 never reach this point.
-      if (signal.score < 75) { belowFloor += 1; continue; }
+      // Emission floor (belt AND braces — evaluateStrict already enforces it).
+      if (signal.score < MIN_EMIT_SCORE) { belowFloor += 1; continue; }
+      // NOTE: the daily quota is NOT reserved here — this function only returns
+      // CANDIDATES. The slot is reserved at the actual emission point (see
+      // reserveEmitSlot in getLiveSignals and /api/market-signals) so a
+      // candidate that is later filtered out never burns a daily slot.
       results.push(signal);
     }
   }
@@ -370,7 +455,7 @@ export async function getStrictSignals(market: ScanMarket, limit?: number, origi
     results.sort((a, b) => b.score - a.score || (a.symbol < b.symbol ? -1 : 1));
   }
   console.log(
-    `[signalsLive] ${market}: Scanned ${scanned}, found ${results.length} signals (candidates=${candidates.length}, noCandles=${noCandles}, rejected=${rejected}, belowFloor=${belowFloor})`,
+    `[signalsLive] ${market}: Scanned ${scanned}, found ${results.length} signals (candidates=${candidates.length}, noCandles=${noCandles}, rejected=${rejected}, belowFloor=${belowFloor}, slotsLeft=${Math.max(0, remainingToday - results.length)})`,
   );
   return results;
 }
@@ -482,7 +567,22 @@ export async function refresh(market: ScanMarket, origin?: string): Promise<Emit
   const candidates = (await getStrictSignals(market, toFill, origin)).filter((s) => !liveBySymbol.has(s.symbol));
   const toAdd = candidates.slice(0, toFill);
 
+  // DAILY QUOTA — reserve a slot for each signal that is REALLY emitted (the
+  // reservation happens here, at the emission point, so a candidate that never
+  // reaches the pool never burns today's quota).
+  const emittedNow: EmittedMarketSignal[] = [];
   for (const sig of toAdd) {
+    const reserved = await reserveEmitSlot(market);
+    if (!reserved) {
+      console.log(
+        `[LIVE] ${market} today ${MAX_SIGNALS_PER_MARKET_PER_DAY}/${MAX_SIGNALS_PER_MARKET_PER_DAY} — quota full, refill stopped.`,
+      );
+      break;
+    }
+    emittedNow.push(sig);
+  }
+
+  for (const sig of emittedNow) {
     try {
       const cloudDoc = toCloudDoc(sig);
       if (cloudDoc) {
@@ -497,7 +597,17 @@ export async function refresh(market: ScanMarket, origin?: string): Promise<Emit
     }
   }
 
-  for (const sig of toAdd) pool.push(sig);
+  // QUALITY-WITH-QUANTITY spec log: `[LIVE] crypto today 7/10, emitting 2 high
+  // accuracy (BTC 89, ETH 87)` — one line per market per refill.
+  if (emittedNow.length > 0) {
+    const usedToday = MAX_SIGNALS_PER_MARKET_PER_DAY - (await remainingEmitSlots(market));
+    const emittedList = emittedNow.map((s) => `${s.symbol.split(/[-=]/)[0]} ${s.score}`).join(", ");
+    console.log(
+      `[LIVE] ${market} today ${usedToday}/${MAX_SIGNALS_PER_MARKET_PER_DAY}, emitting ${emittedNow.length} high accuracy (${emittedList})`,
+    );
+  }
+
+  for (const sig of emittedNow) pool.push(sig);
   pool.sort((a, b) => b.score - a.score || (a.symbol < b.symbol ? -1 : 1));
   return pool.slice(0, LIVE_CAPS[market]);
 }
@@ -535,7 +645,7 @@ export function toCloudDoc(signal: EmittedMarketSignal): CloudDoc | null {
       candles: Array.isArray(signal.candles) && signal.candles.length > 0 ? signal.candles : null,
       patternPoints: signal.patternPoints ?? null,
       analyzedAt: signal.analyzedAt,
-      // Mirror of the track-signals 30-day rule (SIGNAL_TTL_MS) for consumers
+      // Mirror of the track-signals 24h rule (SIGNAL_TTL_MS) for consumers
       // that need a hard expiry stamp without re-deriving it from createdAt.
       expiresAt: Date.now() + SIGNAL_TTL_MS,
       dateKey: karachiDateKey(),

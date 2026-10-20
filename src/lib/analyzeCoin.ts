@@ -5,8 +5,8 @@
 // Both pages now call THIS function, which runs the strict 8-condition engine on
 // the same candle set, so Trade and Signals can never disagree.
 //
-// score = (conditions_passed / 8) * 100 exactly (1/8=12, 5/8=62, 6/8=75, 7/8=87, 8/8=100).
-// <6/8 = quality null (REJECT tier) but score still shows the real value.
+// score = (conditions_passed / 8) * 100 exactly (1/8=13, 5/8=63, 6/8=75, 7/8=88, 8/8=100).
+// <7/8 = quality null (REJECT tier) but score still shows the real value.
 //
 // Educational analysis only — not financial advice.
 import type { Candle } from "@/src/analysis/types";
@@ -140,7 +140,7 @@ export function analyzeCoin(input: AnalyzeCoinInput): AnalyzeResult {
   // whole signal to "neutral". The old unanimous-across-1h/4h/1d rule dropped
   // ~70% of coins and emitted 0 signals on live markets.
   const primaryTrend = trends[0];
-  let direction: AnalyzeResult["direction"] =
+  const direction: AnalyzeResult["direction"] =
     primaryTrend.bias === "Sideways"
       ? "neutral"
       : primaryTrend.direction === "bullish"

@@ -28,21 +28,21 @@ export const SIGNAL_STORAGE_KEY = "signal-storage";
 export const LEGACY_SIGNAL_KEY = "signal-history";
 
 /** Score floor for what the Signals/results PAGE SHOWS.
- * 75 = Tier 3 minimum allowed score (6/8 conditions + 4/4 experts).
- * Anything below 75 is REJECTED — never shown, never saved, never alerted.
+ * 85 = Quality with Quantity spec (85+ only — Tier 2 STRONG minimum).
+ * Anything below 85 is REJECTED — never shown, never saved, never alerted.
  * No relaxation tier exists; a quiet market shows fewer cards instead of ghatiya fillers. */
-export const MIN_SCORE = 75;
+export const MIN_SCORE = 85;
 /**
- * Signals page LIST display floor. Same as MIN_SCORE (75 = the 6/8 floor) —
- * no relaxation, no fallback. If a market emits no Tier 3+ signals, the tab
- * shows the "Wait for high-quality setup" empty state instead of garbage cards.
+ * Signals page LIST display floor. Same as MIN_SCORE (85 = the Quality spec
+ * floor) — no relaxation, no fallback. If a market emits no 85+ signals, the
+ * tab shows the "Aaj ke liye best setups pure ho gaye hain" empty state.
  */
-export const DISPLAY_MIN_SCORE = 75;
+export const DISPLAY_MIN_SCORE = 85;
 /** Max records kept; oldest are dropped when this is exceeded.
- *  300 ≈ a full 30-day history (route emits ≤15/market/day, 4 markets). */
+ *  300 ≈ a full history (route emits ≤10/market/day, 4 markets). */
 export const MAX_SIGNALS = 300;
-/** 30 days â€” a setup that resolves nothing in this window is EXPIRED (MASLA 5). */
-export const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
+/** 24 HOURS — a setup that resolves nothing in this window is EXPIRED (MASLA 5). */
+export const SETUP_TTL_MS = 24 * 60 * 60 * 1000;
 /** Results page re-check interval (30 seconds, per spec). */
 export const REFRESH_MS = 30 * 1000;
 
@@ -560,9 +560,9 @@ function highestHit(record: StoredSignal, price: number, bearish: boolean): Excl
 export function evaluateSignal(record: StoredSignal, currentPrice: number): StoredSignal {
   const price = Number.isFinite(currentPrice) && currentPrice > 0 ? currentPrice : 0;
 
-  // 30-day expiry (mirrors the server cron): a PENDING setup that resolves
-  // nothing in 30 days becomes EXPIRED instead of staying pending forever.
-  if (record.status === "PENDING" && record.createdAt > 0 && Date.now() - record.createdAt > THIRTY_DAYS_MS) {
+  // 24h expiry (mirrors the server cron): a PENDING setup that resolves
+  // nothing in 24 hours becomes EXPIRED instead of staying pending forever.
+  if (record.status === "PENDING" && record.createdAt > 0 && Date.now() - record.createdAt > SETUP_TTL_MS) {
     const expired: StoredSignal = { ...record, status: "EXPIRED", ...(price ? { currentPrice: price } : {}) };
     const why = buildWhy(expired);
     const lesson = buildLesson(expired.status, expired.pattern, expired.candlestick);

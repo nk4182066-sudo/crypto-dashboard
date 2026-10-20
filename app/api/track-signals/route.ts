@@ -1,27 +1,30 @@
 // GET /api/track-signals — server-side auto-tracking cron (MASLA 5).
 //
-// Vercel calls this every 5 minutes (see vercel.json `crons`). It reads every
+// Vercel calls this every 15 minutes (see vercel.json `crons`). It reads every
 // stored setup from Firestore, fetches the CURRENT price for each market, and
-// resolves the outcome:
-//   - price reaches TP1/2/3 -> status = "WIN"   (records which target)
-//   - price hits SL         -> status = "LOSS"
-//   - older than 30 days    -> status = "EXPIRED"
-// so signals stop staying "PENDING" forever even when no browser is open.
+// resolves the outcome (Quality spec, item 4):
+//   - price reaches TP1/2/3 -> status = "WIN"   (SUCCESS — records which target)
+//   - price hits SL         -> status = "LOSS"  (FAILED)
+//   - older than 24 hours   -> status = "EXPIRED"
+// Every resolution is ALSO merge-patched into the signals_history twin
+// (updateHistoryDoc) so the append-only history keeps the outcome. Nothing is
+// ever deleted (no deleteDoc) — signals stop staying "PENDING" forever even
+// when no browser is open.
 //
 // Price sources per market (all free, no key, geo-safe on Vercel's US edge):
 //   - crypto  -> Bybit linear tickers (USDT perps)
 //   - forex / stocks / metals -> Yahoo chart meta (the stored symbols ARE Yahoo
 //     symbols: "EURUSD=X", "AAPL", "GC=F") — Yahoo accepts them directly.
 // Educational analysis only — not financial advice.
-import { readAllSignals, updateSignal, type CloudDoc } from "@/src/lib/signalCloud";
+import { readAllSignals, updateSignal, updateHistoryDoc, type CloudDoc } from "@/src/lib/signalCloud";
 import { refresh } from "@/src/lib/signalsLive";
 import { type ScanMarket } from "@/src/scanner/universe";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 30;
 
-/** Spec: a setup older than 30 days is EXPIRED. */
-const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
+/** Quality spec: a setup older than 24 HOURS is EXPIRED (was 30 days). */
+const SETUP_TTL_MS = 24 * 60 * 60 * 1000;
 
 type Outcome = "WIN" | "LOSS" | "EXPIRED" | "PENDING";
 type HitTarget = "TP1" | "TP2" | "TP3" | "SL" | null;
@@ -160,7 +163,7 @@ export async function GET(request: Request) {
   const needsPrice = signals.filter(
     (s) =>
       !SETTLED.has(String(s.status ?? "")) &&
-      !(typeof s.createdAt === "number" && s.createdAt > 0 && now - s.createdAt > THIRTY_DAYS_MS),
+      !(typeof s.createdAt === "number" && s.createdAt > 0 && now - s.createdAt > SETUP_TTL_MS),
   );
 
   // Only pay for the price sources we actually need this run.
@@ -180,13 +183,15 @@ export async function GET(request: Request) {
   for (const signal of signals) {
     const alreadySettled = SETTLED.has(String(signal.status ?? ""));
 
-    // 30-day expiry applies even to already-resolved records (marks them EXPIRED).
+    // 24h expiry applies even to already-resolved records (marks them EXPIRED).
     const createdAt = typeof signal.createdAt === "number" ? signal.createdAt : 0;
-    const tooOld = createdAt > 0 && now - createdAt > THIRTY_DAYS_MS;
+    const tooOld = createdAt > 0 && now - createdAt > SETUP_TTL_MS;
 
     if (tooOld) {
       if (!alreadySettled || String(signal.status) !== "EXPIRED") {
         await updateSignal(signal.id, { status: "EXPIRED" });
+        // Spec item 4 — expired setups are pushed to signals_history too.
+        await updateHistoryDoc(signal.id, { status: "EXPIRED", resolvedAt: now });
       }
       expired += 1;
       continue;
@@ -204,6 +209,15 @@ export async function GET(request: Request) {
       hitTarget,
       ...(price !== undefined ? { currentPrice: price } : {}),
     });
+    // Mirror the resolution into signals_history (append-only record).
+    if (outcome !== "PENDING") {
+      await updateHistoryDoc(signal.id, {
+        status: outcome,
+        hitTarget,
+        currentPrice: price ?? null,
+        resolvedAt: now,
+      });
+    }
     // Auto-refill: on win/loss/expiry, slot the next best 8/8+4/4 candidate
     // back into the same market to maintain the live pool.
     if (outcome !== "PENDING") {

@@ -10,6 +10,8 @@ import { calculateIndicators, indicatorsAgreed, type IndicatorRow } from "@/src/
 import { persistSignals, persistToHistory, type CloudDoc } from "@/src/lib/signalCloud";
 import { analyzeCoin, type ConditionLine } from "@/src/lib/analyzeCoin";
 import { computeSignalTier, type SignalTier } from "@/src/lib/strictSignalEngine";
+import { MAX_SIGNALS_PER_MARKET_PER_DAY, remainingEmitSlots, reserveEmitSlot } from "@/src/lib/dailyQuota";
+import { MIN_EMIT_SCORE, qualityFilterMiss } from "@/src/lib/signalsLive";
 
 export const dynamic = "force-dynamic";
 
@@ -154,17 +156,11 @@ export interface MarketSignal {
 }
 
 // ------------------------------------------------------------------ response cap
-// Strict quality > quantity. Return at most N setups per market on every
-// request so the list stays stable and we never flood the user.
-//
-// This used to be an in-memory per-symbol cooldown + daily counter, but those
-// live on the serverless instance — a warm instance that had already emitted
-// returned 0 on the next request, flip-flopping the page between N and 0.
-// 10-20 signals per market per day is the daily target (15 is the sweet spot).
-// The response is now capped by count only; duplicate-suppression across
-// refreshes is handled by persistSignals()'s 4h per-symbol guard (which reads
-// Firestore, shared across instances), so the browser always gets a full list.
-const MAX_SIGNALS_PER_MARKET_PER_DAY = 15;
+// Strict quality > quantity. At most MAX_SIGNALS_PER_MARKET_PER_DAY (10)
+// setups per market per request — the value now comes from the SHARED
+// Firestore daily quota (src/lib/dailyQuota.ts, Asia/Karachi reset), so the
+// in-memory flip-flop of the old per-instance counter is gone. Duplicate
+// suppression across refreshes stays with persistSignals()'s 4h guard.
 
 /**
  * How many candidates per request may pull the full 1h/4h/1d history for the
@@ -337,8 +333,17 @@ export async function GET(request: Request) {
     .filter((item) => item.market === market)
     .sort((first, second) => second.confidence - first.confidence);
 
+  // DAILY QUOTA — at most 10 emissions per market per Asia/Karachi day (shared
+  // Firestore counter, NO fallback). Short-circuit when today's quota is done.
+  let quotaLeft = await remainingEmitSlots(market);
+  if (quotaLeft <= 0) {
+    console.log(
+      `[LIVE] ${market} today ${MAX_SIGNALS_PER_MARKET_PER_DAY}/${MAX_SIGNALS_PER_MARKET_PER_DAY} — quota full, market-signals emitting nothing.`,
+    );
+  }
+
   // Audit — candidate pool per market + per-request emission cap.
-  console.log(`[signals ${market}] ${ordered.length} candidates, cap ${MAX_SIGNALS_PER_MARKET_PER_DAY}`);
+  console.log(`[signals ${market}] ${ordered.length} candidates, cap ${MAX_SIGNALS_PER_MARKET_PER_DAY}, quotaLeft ${quotaLeft}`);
 
   type Candidate = (typeof ordered)[number];
 
@@ -474,6 +479,19 @@ export async function GET(request: Request) {
       continue;
     }
 
+    // QUALITY GATE (Quality with Quantity spec) — score 85 floor + the
+    // Perfect-Balance trend/volume/RSI filters. Any miss → reject (no fallback).
+    if (full.score < MIN_EMIT_SCORE) {
+      drops.conditions += 1;
+      continue;
+    }
+    const filterMiss = qualityFilterMiss(h1, h4, full.direction);
+    if (filterMiss) {
+      console.log(`[market-signals] reject ${item.symbol}: ${filterMiss}`);
+      drops.conditions += 1;
+      continue;
+    }
+
     // Audit log — passing setups only (7/8+). Score 88 at 7/8; the page shows
     // the exact same X/8 conditions for Trade + Signals.
     if (full.conditionsPassed >= 7) {
@@ -495,20 +513,12 @@ export async function GET(request: Request) {
       full.score = Math.round((7 / 8) * 100);
     }
 
-    // ── Emission gate — show GOOD setups (≥6/8 = 75). The multi-TF direction is
-    // Strict emission gate (spec: "100% clear" = 8/8). The multi-TF direction
-    // is anchored on the primary chart TF (see analyzeCoin), so chart + trend
-    // always match; the honest condition count still prices in a disagreeing
-    // higher TF via the `trend` condition. 8/8 PASSes only when all 8
-    // conditions hold AND the 4/4 expert panel agrees fully. Anything below
-    // 8/8 is a near miss and only ships via the relaxation flush when the
-    // strict pass is empty. The no-pattern invariant still caps a pattern-less
-    // signal at 7/8.
-        // ── STRICT TIER EMISSION GATE ──
+    // ── QUALITY GATE (Quality with Quantity spec) ──
     // No relaxation, no fallback, no near-miss buffer. A setup is emitted
-    // only when it clears one of the three hard tiers (PREMIUM/STRONG/GOOD).
-    // Anything below Tier 3 is REJECTED — the market tab shows the
-    // "Wait for high-quality setup" empty state instead of garbage cards.
+    // only when it clears PREMIUM (8/8 = 100) or STRONG (7/8 = 88) with 3/4+
+    // experts AND the Perfect-Balance filters (trend/volume/RSI) above.
+    // Anything below is REJECTED — the market tab shows the "Aaj ke liye best
+    // setups pure ho gaye hain" empty state instead of garbage cards.
 
     const insightInput = {
       candles: h1,
@@ -560,13 +570,22 @@ export async function GET(request: Request) {
       chartPatternPassed,
     });
 
-    // REJECT — below Tier 3, never emit
+    // REJECT — below the gate, never emit
     if (!tierVerdict) {
       if (!candlestickConfirmed || !volumePassed || !chartPatternPassed) drops.conditions += 1;
       else if (expertsAgreed < 3) drops.experts += 1;
       else if (indicatorsAgreedCount <= 7) drops.indicators += 1;
       continue;
     }
+
+    // DAILY QUOTA — reserve the emit slot before accepting. When today's 10
+    // are used up, stop emitting for this market (no fallback filler).
+    if (emitted.length >= MAX_SIGNALS_PER_MARKET_PER_DAY || quotaLeft <= 0) break;
+    if (!(await reserveEmitSlot(item.market))) {
+      quotaLeft = 0;
+      break;
+    }
+    quotaLeft -= 1;
 
     drops.emitted += 1;
     emitted.push(emitSignal(item, full, confirmations, indicatorRows, experts, tierVerdict.tier));

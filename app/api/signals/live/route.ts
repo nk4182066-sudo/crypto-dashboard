@@ -1,8 +1,8 @@
 // GET /api/signals/live — the authoritative 40-signal LIVE POOL.
 //
 // Guarantees exactly 40 live signals (10 per market: Crypto / Forex / Metals /
-// Stocks), selected by the strict tier gate (Tier 3 floor: 6/8 + 3/4 + score
-// 85) and scored by the shared analyzeCoin() engine. Every signal carries the
+// Stocks), selected by the strict tier gate (PREMIUM 8/8 or STRONG 7/8,
+// 3/4 experts, score >= 85) and scored by the shared analyzeCoin() engine. Every signal carries the
 // full trade plan (entries, SL, TP1-3, support/resistance, R:R, chart pattern +
 // candlestick, 4-expert consensus) so the Signals page can render the exact
 // card. Stored PENDING setups from Firestore are always merged in first, so

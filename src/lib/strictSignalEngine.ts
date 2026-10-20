@@ -386,18 +386,19 @@ export interface StrictPattern {
 
 export function scoreFromConditions(conditionsMet: number, indicatorsAgreedCount?: number): { score: number; quality: Quality | null } {
   // STRICT FORMULA: Score = (Conditions_Passed / 8) * 100 — for ALL values
-  //   1/8 = 12, 5/8 = 62, 6/8 = 75, 7/8 = 87, 8/8 = 100
-  // No >= 6 gate on the score itself — the quality/tier gate (<6 → REJECT)
-  // is applied by computeSignalTier() and the page-level filters separately.
-  const score = Math.floor((conditionsMet / 8) * 100);
-  const quality: Quality | null = conditionsMet === 8 ? "PERFECT" : conditionsMet === 7 ? "STRONG" : conditionsMet === 6 ? "GOOD" : null;
+  //   1/8 = 13, 5/8 = 63, 6/8 = 75, 7/8 = 88, 8/8 = 100
+  // Rounded so 7/8 lands on 88 (the STRONG band shown in the UI), never 87.
+  // No >= 6 gate on the score itself — the quality/tier gate (conditions < 7
+  // → REJECT) is applied by computeSignalTier() and the page-level filters.
+  const score = Math.round((conditionsMet / 8) * 100);
+  const quality: Quality | null = conditionsMet === 8 ? "PERFECT" : conditionsMet === 7 ? "STRONG" : null;
   return { score, quality };
 }
 
 
 /** Strict tier verdict for a scanned setup. Returns null when the setup must
  *  be REJECTED (never shown, never saved, never alerted). No relaxation. */
-export type SignalTier = "PREMIUM" | "STRONG" | "GOOD" | null;
+export type SignalTier = "PREMIUM" | "STRONG" | null;
 
 export interface SignalTierVerdict {
   tier: SignalTier;
@@ -405,16 +406,14 @@ export interface SignalTierVerdict {
   color: "green" | "blue" | "yellow";
 }
 
-/** Hard-gated tier assignment — ULTRA STRICT for 35/40 win rate.
+/** Hard-gated tier assignment (Quality with Quantity spec).
  * Every tier requires:
- *  - expertsAgreed >= 4  (EXPERT GATE 4/4 — must pass all 4 experts)
- *  - indicatorsAgreedCount >= 8 (8/10 indicators must agree)
- *  - candlestickConfirmed === true (Morning/Evening Star only)
- *  - volumePassed === true (Volume > 2.0x avg)
- *  - chartPatternPassed === true (Double Top/Bottom only)
- *  - conditionsPassed === 8 (score 100 >= 88 floor — nothing below 88 shown)
+ *  - expertsAgreed >= 3  (EXPERT GATE 3/4 - at least 3 of 4 experts agree)
+ *  - conditionsPassed >= 7 (score 88 >= the 85 emission floor - nothing below
+ *    85 is ever emitted or shown; the old 6/8 = 75 GOOD band is gone)
  *
- *  Only Tier 1 (PREMIUM): 8/8 conditions + 4/4 experts → score 100.
+ *  Tier 1 (PREMIUM): 8/8 conditions + 3/4 experts -> score 100.
+ *  Tier 2 (STRONG):  7/8 conditions + 3/4 experts -> score 88.
  */
 export function computeSignalTier({
   conditionsPassed,
@@ -432,21 +431,16 @@ export function computeSignalTier({
   chartPatternPassed: boolean;
 }): SignalTierVerdict | null {
   // ─── REJECT RULES ───
-  if (expertsAgreed < 4) return null; // EXPERT GATE: 4/4 must agree → REJECT
-  if (indicatorsAgreedCount < 8) return null; // 8/10 indicators must agree → REJECT
-  if (!candlestickConfirmed) return null; // Candlestick Neutral → REJECT
-  if (!volumePassed) return null; // Volume 1.5x se kam → REJECT
-  if (!chartPatternPassed) return null; // "No clear pattern" → REJECT
+  if (expertsAgreed < 3) return null; // EXPERT GATE: 3/4 minimum → REJECT below
+  if (conditionsPassed < 7) return null; // Score floor: 7/8 = 88 >= the 85 emission floor
 
   // ─── TIER 1: PREMIUM (Green) ───
   if (conditionsPassed === 8) {
     return { tier: "PREMIUM", label: "PREMIUM SETUP", color: "green" };
   }
 
-  // Score floor: 88/100 -> only 8/8 conditions = score 100 qualifies
-  if (conditionsPassed < 8) return null;
-
-  return null;
+  // TIER 2: STRONG (Blue) - 7/8 conditions, score 88
+  return { tier: "STRONG", label: "STRONG SETUP", color: "blue" };
 }
 export function qualityLabel(quality: Quality | null): Quality | null {
   if (quality === "PERFECT") return "PERFECT";

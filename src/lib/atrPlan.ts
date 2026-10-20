@@ -7,8 +7,8 @@
  * a thin strip. Targets are now sized in ATR (Average True Range) so they scale
  * with the market AND the chart timeframe:
  *
- *   >=1h (default ladder)  SL 1.0x ATR · TP1 1.5x ATR (~2-3h) ·
- *                          TP2 2.5x ATR (~4-5h) · TP3 4.0x ATR (~6-8h)
+ *   >=1h (default ladder)  SL 0.4x ATR (+ swing buffer) · TP1 1.5x ATR ·
+ *                          TP2 3.0x ATR · TP3 4.5x ATR   (Quality spec)
  *   <=15m (tight ladder)   "aur bhi tight" spec — SL 0.5x · TP1 0.5x ·
  *                          TP2 1.0x · TP3 1.5x (the same ladder / 3)
  *
@@ -43,8 +43,8 @@ export interface AtrLadder {
   tp3: number;
 }
 
-/** >=1h — swing ladder: TP1 1.2x ATR, TP2 2.5x ATR, TP3 4.0x ATR. SL 0.5x ATR. */
-export const DEFAULT_LADDER: AtrLadder = { sl: 0.5, tp1: 1.2, tp2: 2.5, tp3: 4.0 };
+/** >=1h — Quality spec ladder: TP1 1.5x, TP2 3.0x, TP3 4.5x ATR. SL 0.4x ATR. */
+export const DEFAULT_LADDER: AtrLadder = { sl: 0.4, tp1: 1.5, tp2: 3.0, tp3: 4.5 };
 
 /** <=15m — tight scalping ladder. */
 export const TIGHT_LADDER: AtrLadder = { sl: 0.5, tp1: 0.5, tp2: 1.0, tp3: 1.5 };
@@ -185,15 +185,17 @@ export function buildAtrPlan(input: AtrPlanInput): AtrPlan {
   const minTp3 = price * 0.050; // 5.0%
 
   // ── SL — structural level behind price when it respects the invariants ────
-  // Buffer 0.15 ATR beyond the level (away from entry) so a touch of support
-  // doesn't knock the stop out on noise; accepted only while the plan keeps
-  // R:R(TP3) >= 3 and SL <= 3% of price (see module header).
+  // Quality spec: SL = Swing Low/High + 0.4 ATR buffer (away from entry) so a
+  // touch of support doesn't knock the stop out on noise. Accepted only while
+  // the plan keeps R:R(TP3) >= 3 and SL <= 3% of price (see module header).
   let slDist = baseSlDist;
   const structuralStop = bullish ? input.support : input.resistance;
   if (structuralStop != null && valid(structuralStop) && (bullish ? structuralStop < entry : structuralStop > entry)) {
     const levelDist = Math.abs(entry - structuralStop);
-    const buffered = levelDist + 0.5 * atrValue;
-    const maxAllowed = Math.min(1.2 * baseSlDist, tp3Dist / 3);
+    const buffered = levelDist + 0.4 * atrValue;
+    // Allow the buffered swing stop up to ~1 ATR (2.5x the pure-ATR base) so
+    // the spec's swing+buffer stop can actually take over from the base stop.
+    const maxAllowed = Math.min(2.5 * baseSlDist, tp3Dist / 3);
     const minAllowed = 0.5 * baseSlDist;
     if (buffered >= minAllowed && buffered <= maxAllowed && (buffered / entry) * 100 <= 3) {
       slDist = buffered;
