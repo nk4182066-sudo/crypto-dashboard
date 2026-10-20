@@ -18,6 +18,7 @@
     }
   },
   "crons": [
-    { "path": "/api/signals/live", "schedule": "*/15 * * * *" }
+    { "path": "/api/signals/live", "schedule": "0 0 * * *" }
   ]
 }
+

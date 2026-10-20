@@ -190,7 +190,7 @@ function HomeContent() {
         </div>
       </div>
 
-      {/* Enable browser alerts (90+ score signals) */}
+      {/* Enable browser alerts (95+ score signals) */}
       <div className="px-4 pt-4">
         <EnableNotifications />
       </div>

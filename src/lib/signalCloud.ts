@@ -39,6 +39,7 @@ export const SIGNAL_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 
 /** Firestore archive collection — signals are appended, never deleted. */
 export const SIGNALS_COLLECTION = "signals_archive";
+export const SIGNALS_HISTORY_COLLECTION = "signals_history";
 
 /** localStorage backup key (always-on fallback when Firebase is absent). */
 export const SIGNAL_BACKUP_KEY = "signals-cloud-backup";
@@ -197,6 +198,34 @@ export async function persistSignals(signals: CloudDoc[]): Promise<void> {
   }
   if (saved > 0) console.info(`[signalCloud] ${saved} saved, ${skipped} skipped (dedupe <4h).`);
 }
+/**
+ * Save signals to the signals_history collection (chart source + persistence).
+ * Append-only write to a separate history collection so the signal history
+ * store is never overwritten by archive status updates.
+ */
+export async function persistToHistory(signals: CloudDoc[]): Promise<void> {
+  if (signals.length === 0) return;
+  const db = getCloudDb();
+  if (!db) {
+    console.info(`[signalCloud] history off (no db) — ${signals.length} signal(s) not persisted to signals_history.`);
+    return;
+  }
+  const now = Date.now();
+  let saved = 0;
+  for (const signal of signals) {
+    const id = docId(signal);
+    try {
+      const ref = doc(db, SIGNALS_HISTORY_COLLECTION, id);
+      await setDoc(ref, cleanDoc(signal, now));
+      saved += 1;
+    } catch (error) {
+      console.warn(`[signalCloud] history save failed (${id}):`, error instanceof Error ? error.message : error);
+    }
+  }
+  if (saved > 0) console.info(`[signalCloud] signals_history saved: ${saved} document(s)`);
+}
+
+
 
 /**
  * Client-side real-time listener (Signals page). Emits ONLY today's docs

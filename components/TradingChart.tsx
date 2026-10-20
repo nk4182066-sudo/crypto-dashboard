@@ -119,13 +119,15 @@ interface TradingChartProps {
   onLoadOlderData?: () => void;
   /** Explicit arrow markers (buy/sell points) drawn on the series. */
   arrowMarkers?: ChartArrowMarker[];
+  /** Double Top/Bottom anchor points (p1/p2 + neckline) drawn as yellow circles. */
+  patternPoints?: { p1: ChartPoint; p2: ChartPoint; neckline: number } | null;
   height?: number;
   /** Fetch and show auto analysis on symbol change (default on). */
   autoAnalyze?: boolean;
   market?: string;
 }
 
-export default function TradingChart({ data, chartKey = "", signals = [], candlePatterns = [], levels = [], trendline = [], trendDirection = "Sideways", patternOutline = [], patternOutlines = [], patternName = "", structureMarkers = [], indicatorOverlays = [], drawingMode = null, drawings = [], onDrawingComplete, hasMoreHistory = false, loadingOlder = false, onLoadOlderData = () => {}, arrowMarkers = [], height = 600, autoAnalyze = true, market = "crypto" }: TradingChartProps) {
+export default function TradingChart({ data, chartKey = "", signals = [], candlePatterns = [], levels = [], trendline = [], trendDirection = "Sideways", patternOutline = [], patternOutlines = [], patternName = "", structureMarkers = [], indicatorOverlays = [], drawingMode = null, drawings = [], onDrawingComplete, hasMoreHistory = false, loadingOlder = false, onLoadOlderData = () => {}, arrowMarkers = [], patternPoints = null, height = 600, autoAnalyze = true, market = "crypto" }: TradingChartProps) {
   const chartContainerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const candlestickSeriesRef = useRef<ISeriesApi<'Candlestick', Time> | null>(null);
@@ -616,7 +618,26 @@ export default function TradingChart({ data, chartKey = "", signals = [], candle
         shape: marker.shape,
         text: marker.text,
       }));
-      markersRef.current.setMarkers(arrowSeriesMarkers);
+      // Double Top/Bottom anchors: yellow circles at p1/p2 (position inferred
+      // from whether the pivots sit above/below the neckline).
+      const patternPointMarkers: SeriesMarker<Time>[] = [];
+      if (patternPoints) {
+        const position = patternPoints.p1.price >= patternPoints.neckline ? "aboveBar" : "belowBar";
+        for (const pt of [patternPoints.p1, patternPoints.p2]) {
+          patternPointMarkers.push({
+            time: pt.time as UTCTimestamp,
+            position,
+            color: "#FFD700",
+            shape: "circle",
+            text: "",
+          });
+        }
+      }
+      // lightweight-charts requires markers in chronological order.
+      const combined = [...arrowSeriesMarkers, ...patternPointMarkers].sort(
+        (a, b) => Number(a.time) - Number(b.time),
+      );
+      markersRef.current.setMarkers(combined);
     }
 
     if (data.length > 0 && chartRef.current && (isNewChart || !previous?.data.length || !visibleRange)) {
@@ -632,7 +653,7 @@ export default function TradingChart({ data, chartKey = "", signals = [], candle
       });
     }
     previousDataRef.current = { chartKey, data };
-  }, [data, chartKey, signals, candlePatterns, levels, trendline, trendDirection, patternOutline, patternOutlines, patternName, structureMarkers, indicatorOverlays, arrowMarkers]);
+  }, [data, chartKey, signals, candlePatterns, levels, trendline, trendDirection, patternOutline, patternOutlines, patternName, structureMarkers, indicatorOverlays, arrowMarkers, patternPoints]);
 
   const handleDrawingClick = (event: React.MouseEvent<SVGSVGElement>) => {
     if (!drawingMode || !onDrawingComplete) return;

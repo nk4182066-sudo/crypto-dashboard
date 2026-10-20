@@ -7,7 +7,7 @@ import type { Candle } from "@/src/analysis/types";
 import { generateFullSignal } from "@/src/lib/signalGenerator";
 import { buildConfirmations, buildEducators, type ConfirmationIndicator, type Consensus, type EducatorVerdict } from "@/src/lib/confirmations";
 import { calculateIndicators, indicatorsAgreed, type IndicatorRow } from "@/src/lib/indicatorEngine";
-import { persistSignals, type CloudDoc } from "@/src/lib/signalCloud";
+import { persistSignals, persistToHistory, type CloudDoc } from "@/src/lib/signalCloud";
 import { analyzeCoin, type ConditionLine } from "@/src/lib/analyzeCoin";
 import { computeSignalTier, type SignalTier } from "@/src/lib/strictSignalEngine";
 
@@ -585,6 +585,13 @@ export async function GET(request: Request) {
       await persistSignals(cloudDocs);
     } catch (error) {
       console.warn("[market-signals] persist step failed (non-fatal):", error);
+    }
+    // Mirror into signals_history too, so the emission record survives archive
+    // status patches. Best-effort like the archive write above.
+    try {
+      await persistToHistory(cloudDocs);
+    } catch (error) {
+      console.warn("[market-signals] history persist failed (non-fatal):", error);
     }
   }
 

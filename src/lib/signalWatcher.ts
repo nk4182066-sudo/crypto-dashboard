@@ -1,11 +1,39 @@
 // Background signal watcher — polls /api/signals/check every 15 minutes and
-// raises a local notification for any NEW 90+ score setup. Educational only.
+// raises a local notification for any NEW 95+ score setup. Educational only.
 
 import { alertsEnabled, showNotification } from "@/src/lib/notifications";
 import { formatPrice } from "@/src/lib/formatPrice";
+import { db, COLLECTION_NOTIFICATIONS } from "@/src/lib/firebase";
+import { addDoc, collection, serverTimestamp } from "firebase/firestore";
 
-/** Only setups at or above this score raise an alert (Rule: 90+ only). */
-export const ALERT_MIN_SCORE = 90;
+/** Only setups at or above this score raise an alert (Rule: 95+ only). */
+export const ALERT_MIN_SCORE = 95;
+
+/**
+ * Persist a raised alert to Firestore `notifications` collection so the
+ * alert history survives across sessions/devices. Fails quietly when Firestore
+ * is not configured.
+ */
+async function saveNotificationToFirestore(signal: AlertSignal): Promise<void> {
+  if (!db) return;
+  try {
+    await addDoc(collection(db, COLLECTION_NOTIFICATIONS), {
+      symbol: signal.symbol,
+      score: signal.score,
+      pattern: signal.pattern ?? null,
+      candlestick: signal.candlestick ?? null,
+      direction: signal.direction,
+      entry: signal.entry,
+      stopLoss: signal.stopLoss ?? null,
+      tp1: signal.tp1 ?? null,
+      type: "signal_alert",
+      read: false,
+      createdAt: serverTimestamp(),
+    });
+  } catch {
+    /* Firestore unavailable — local notification still shown */
+  }
+}
 
 /** How often the watcher re-checks for new setups. */
 export const CHECK_INTERVAL_MS = 15 * 60 * 1000;
@@ -77,6 +105,8 @@ export async function checkForSignals(): Promise<number> {
       const title = `🚨 ${signal.symbol} Alert`;
       const body = `Score ${signal.score}/100 — ${patternWord} · Entry: ${money(signal.entry)} · Tap to open →`;
       await showNotification(title, body, `/trade?symbol=${encodeURIComponent(signal.symbol)}`);
+      // Persist to Firestore notifications collection (95+ auto-alert).
+      await saveNotificationToFirestore(signal);
     }
 
     if (fresh.length > 0) {

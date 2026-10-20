@@ -32,7 +32,7 @@ export type { ScanMarket };
 import { analyzeCoin } from "./analyzeCoin";
 import { buildConfirmations, buildEducators } from "./confirmations";
 import { calculateIndicators } from "./indicatorEngine";
-import { persistSignals, readAllSignals, karachiDateKey, type CloudDoc } from "./signalCloud";
+import { persistSignals, persistToHistory, readAllSignals, karachiDateKey, SIGNAL_TTL_MS, type CloudDoc } from "./signalCloud";
 import type { Candle } from "@/src/analysis/types";
 
 /** Per-market live cap (Spec: 40 total = 10 + 10 + 10 + 10). */
@@ -45,6 +45,13 @@ export const LIVE_CAPS: Record<ScanMarket, number> = {
 
 /** Which Cloud Firestore statuses are considered resolved (win/loss/expiry). */
 export const RESOLVED_STATUSES = new Set(["WIN", "LOSS", "EXPIRED"]);
+
+/** Double Top/Bottom anchors (p1/p2 + neckline) — mirrors detectPattern's `PatternResult.points`. */
+export interface SignalPatternPoints {
+  p1: { time: number; price: number };
+  p2: { time: number; price: number };
+  neckline: number;
+}
 
 export interface EmittedMarketSignal {
   symbol: string;
@@ -75,6 +82,10 @@ export interface EmittedMarketSignal {
   atr?: number | null;
   /** Timeframe class in minutes (60 = the 1h signal series). */
   timeframeMinutes?: number | null;
+  /** Frozen last-100 h1 bars the signal was scored on — the Trade page's single-truth chart source. */
+  candles?: Candle[] | null;
+  /** Double Top/Bottom anchors (p1/p2 + neckline) drawn as yellow circles on the Trade chart. */
+  patternPoints?: SignalPatternPoints | null;
 }
 
 // Type aliases to avoid TS indexed-access type resolution quirks.
@@ -82,7 +93,7 @@ type EmittedConfirmations = EmittedMarketSignal["confirmations"];
 type EmittedIndicators = EmittedMarketSignal["indicators"];
 type EmittedExperts = EmittedMarketSignal["experts"];
 
-function toEmittedSignal(item: { symbol: string; label: string; market: ScanMarket; reason: string }, full: ReturnType<typeof analyzeCoin>, confirmations: EmittedMarketSignal["confirmations"], indicators: EmittedMarketSignal["indicators"], experts: EmittedMarketSignal["experts"]): EmittedMarketSignal {
+function toEmittedSignal(item: { symbol: string; label: string; market: ScanMarket; reason: string }, full: ReturnType<typeof analyzeCoin>, confirmations: EmittedMarketSignal["confirmations"], indicators: EmittedMarketSignal["indicators"], experts: EmittedMarketSignal["experts"], h1: Candle[]): EmittedMarketSignal {
   return {
     symbol: item.symbol,
     label: item.label,
@@ -113,6 +124,11 @@ function toEmittedSignal(item: { symbol: string; label: string; market: ScanMark
     // DYNAMIC plan inputs — cards/docs rebuild the identical ATR-based TP/SL.
     atr: full.atr,
     timeframeMinutes: full.tfMinutes,
+    // SINGLE-TRUTH CHART SOURCE: freeze the last 100 h1 bars + the Double
+    // Top/Bottom anchors the detector saw, so the Trade page renders EXACTLY
+    // the series the score was computed on (no live re-fetch drift).
+    candles: h1.slice(-100),
+    patternPoints: full.chartPatternPoints ?? null,
   };
 }
 
@@ -199,7 +215,7 @@ export async function evaluateStrict(
     );
     return null;
   }
-  return toEmittedSignal(candidate, full, confirmations, indicators, experts);
+  return toEmittedSignal(candidate, full, confirmations, indicators, experts, h1);
 }
 
 
@@ -365,6 +381,42 @@ export async function getLiveSignals(market: ScanMarket, origin?: string): Promi
   return strict.slice(0, LIVE_CAPS[market]);
 }
 
+/** Re-read the frozen chart series from a stored doc (null when absent/corrupt). */
+function hydrateCandles(raw: unknown): Candle[] | null {
+  if (!Array.isArray(raw)) return null;
+  const out: Candle[] = [];
+  for (const entry of raw) {
+    if (!entry || typeof entry !== "object") continue;
+    const c = entry as Record<string, unknown>;
+    const time = Number(c.time);
+    const open = Number(c.open);
+    const high = Number(c.high);
+    const low = Number(c.low);
+    const close = Number(c.close);
+    if (![time, open, high, low, close].every(Number.isFinite)) continue;
+    out.push({ time, open, high, low, close, volume: Number(c.volume) || 0 });
+  }
+  return out.length > 0 ? out.slice(-100) : null;
+}
+
+/** Re-read the Double Top/Bottom anchors from a stored doc (null when absent/corrupt). */
+function hydratePatternPoints(raw: unknown): SignalPatternPoints | null {
+  if (!raw || typeof raw !== "object") return null;
+  const rec = raw as Record<string, unknown>;
+  const point = (value: unknown): { time: number; price: number } | null => {
+    if (!value || typeof value !== "object") return null;
+    const p = value as Record<string, unknown>;
+    const time = Number(p.time);
+    const price = Number(p.price);
+    return Number.isFinite(time) && Number.isFinite(price) ? { time, price } : null;
+  };
+  const p1 = point(rec.p1);
+  const p2 = point(rec.p2);
+  const neckline = Number(rec.neckline);
+  if (!p1 || !p2 || !Number.isFinite(neckline)) return null;
+  return { p1, p2, neckline };
+}
+
 
 /**
  * Ensures the live pool for `market` is capped at LIVE_CAPS[m].
@@ -413,6 +465,10 @@ export async function refresh(market: ScanMarket, origin?: string): Promise<Emit
       timeframeMinutes: Number.isFinite(Number(d.timeframeMinutes)) && Number(d.timeframeMinutes) > 0
         ? Number(d.timeframeMinutes)
         : 60,
+      // Chart-source fields (absent on legacy docs → the Trade page falls
+      // back to a live /api/market/history fetch).
+      candles: hydrateCandles(d.candles),
+      patternPoints: hydratePatternPoints(d.patternPoints),
     };
     pool.push(signal);
     liveBySymbol.set(signal.symbol, signal);
@@ -429,7 +485,13 @@ export async function refresh(market: ScanMarket, origin?: string): Promise<Emit
   for (const sig of toAdd) {
     try {
       const cloudDoc = toCloudDoc(sig);
-      if (cloudDoc) await persistSignals([cloudDoc]);
+      if (cloudDoc) {
+        await persistSignals([cloudDoc]);
+        // Mirror into signals_history — the chart-source store whose originals
+        // archive status updates (track-signals WIN/LOSS/EXPIRED patches) can
+        // never overwrite.
+        await persistToHistory([cloudDoc]);
+      }
     } catch (error) {
       console.warn(`[signalsLive] persist failed for ${sig.symbol}:`, error instanceof Error ? error.message : error);
     }
@@ -469,6 +531,13 @@ export function toCloudDoc(signal: EmittedMarketSignal): CloudDoc | null {
       experts: signal.experts,
       atr: signal.atr ?? null,
       timeframeMinutes: signal.timeframeMinutes ?? 60,
+      // Chart-source payload — what peek-signals.mjs verifies on the docs.
+      candles: Array.isArray(signal.candles) && signal.candles.length > 0 ? signal.candles : null,
+      patternPoints: signal.patternPoints ?? null,
+      analyzedAt: signal.analyzedAt,
+      // Mirror of the track-signals 30-day rule (SIGNAL_TTL_MS) for consumers
+      // that need a hard expiry stamp without re-deriving it from createdAt.
+      expiresAt: Date.now() + SIGNAL_TTL_MS,
       dateKey: karachiDateKey(),
       status: "PENDING",
       createdAt: Date.now(),

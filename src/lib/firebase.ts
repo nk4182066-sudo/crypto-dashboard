@@ -33,6 +33,7 @@ export const auth: Auth | null = app ? getAuth(app) : null;
 /** Firestore database instance (null when Firebase is not configured). */
 export const db = app ? getFirestore(app) : null;
 export const COLLECTION_USERS = "users";
+export const COLLECTION_NOTIFICATIONS = "notifications";
 
 /** Error code surfaced when sign-in is attempted without Firebase config. */
 export const NOT_CONFIGURED = "auth/not-configured";

@@ -76,7 +76,9 @@ async function fetchCandles(symbol: string, market: string, timeframe: string): 
     const query = new URLSearchParams({ market, symbol, timeframe });
     const response = await fetch(`/api/market/history?${query}`, { cache: "no-store" });
     if (!response.ok) return [];
-    const payload = (await response.json()) as { candles?: Candle[] };
+    const payload = (await response.json()) as { candles?: Candle[]; degraded?: boolean };
+    // Reject demo/synthetic data: a degraded body is NOT real market data.
+    if (payload.degraded) return [];
     return Array.isArray(payload.candles) ? payload.candles : [];
   } catch {
     return [];
@@ -197,11 +199,29 @@ function TradeChart() {
     return () => document.removeEventListener("fullscreenchange", onChange);
   }, []);
 
+  // Single-truth chart source: when the signal carries its saved 100-candle
+  // series and we're on the signal's own timeframe (1h), render EXACTLY those
+  // (no re-fetch) so the chart can never drift from what the signal was built on.
+  const savedSeries = timeframe === "1h" ? ((apiSignal?.candles ?? null) as Candle[] | null) : null;
+  const useSaved = Boolean(savedSeries && savedSeries.length > 0);
+
   // Candles for the selected timeframe (drives the chart + pattern scan).
   // Initial full load, then live polling that updates the last candle in place
   // and appends new ones — no full reset, so the chart keeps its position.
   useEffect(() => {
     let cancelled = false;
+    if (useSaved && savedSeries) {
+      // Deferred (async) like the fetch path below — applying state in a
+      // microtask keeps the effect body side-effect-light.
+      void Promise.resolve(savedSeries).then((rows) => {
+        if (cancelled) return;
+        setCandles(rows);
+        setLoading(false);
+      });
+      return () => {
+        cancelled = true;
+      };
+    }
     setLoading(true);
     void fetchCandles(symbol, dataMarket, timeframe).then((rows) => {
       if (cancelled) return;
@@ -211,7 +231,7 @@ function TradeChart() {
     return () => {
       cancelled = true;
     };
-  }, [symbol, dataMarket, timeframe]);
+  }, [symbol, dataMarket, timeframe, useSaved, savedSeries]);
 
   // MASLA 1 — the 1h/4h/1d series analyzeCoin() needs for the multi-timeframe
   // trend condition. Same endpoint, same candles the Signals route reads, so
@@ -232,6 +252,7 @@ function TradeChart() {
 
   // Real-time refresh: poll Binance/Yahoo on a timeframe-wise cadence and merge.
   useEffect(() => {
+    if (useSaved) return; // frozen signal basis: no live drift from the saved series
     const interval = setInterval(() => {
       void fetchCandles(symbol, dataMarket, timeframe).then((rows) => {
         if (rows.length === 0) return; // ignore empty/error polls, keep last state
@@ -239,7 +260,7 @@ function TradeChart() {
       });
     }, refreshMsFor(timeframe));
     return () => clearInterval(interval);
-  }, [symbol, dataMarket, timeframe]);
+  }, [symbol, dataMarket, timeframe, useSaved]);
 
   // Header quote only. Score/trend/SR/plan all come from the shared analyzeCoin()
   // engine (coinAnalysis below) so Trade and Signals can never disagree.
@@ -624,6 +645,9 @@ function TradeChart() {
               levels={levels}
               patternOutlines={visiblePatternOutlines}
               arrowMarkers={visibleArrowMarkers}
+              // Anchors live on the frozen 1h series — on other timeframes
+              // those bar times may not exist in the loaded data.
+              patternPoints={savedSeries ? (apiSignal?.patternPoints ?? null) : null}
               trendline={trendline}
               trendDirection={
                 coinAnalysis?.direction === "bullish" ? "Bullish"

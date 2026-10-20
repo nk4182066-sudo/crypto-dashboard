@@ -43,6 +43,8 @@ export interface PatternResult {
   confidence: number;
   /** Short rationale. */
   note: string;
+  /** Anchor points for chart markers (Double Top/Bottom pivots + neckline). */
+  points?: { p1: { time: number; price: number }; p2: { time: number; price: number }; neckline: number };
 }
 
 /** One ZigZag swing pivot. */
@@ -273,6 +275,7 @@ function detectDoubleTop(swings: Swing[], close: number): PatternResult | null {
     pattern: "Double Top",
     type: "bearish",
     confidence: 80,
+    points: { p1: { time: a.time, price: a.price }, p2: { time: b.time, price: b.price }, neckline },
     note: `Two equal swing highs within ${DOUBLE_EQ_PCT}% — M shape, price closed back below the resistance line.`,
   };
 }
@@ -296,6 +299,7 @@ function detectDoubleBottom(swings: Swing[], close: number): PatternResult | nul
     pattern: "Double Bottom",
     type: "bullish",
     confidence: 80,
+    points: { p1: { time: a.time, price: a.price }, p2: { time: b.time, price: b.price }, neckline },
     note: `Two equal swing lows within ${DOUBLE_EQ_PCT}% — W shape, price closed back above the support line.`,
   };
 }

@@ -73,6 +73,8 @@ export interface AnalyzeResult {
   chartPattern: string | null;
   /** Confidence (0-100) of the chart pattern above (0 when none). */
   chartPatternConfidence: number;
+  /** Anchor points (p1/p2/neckline) for the chart pattern, when available. */
+  chartPatternPoints?: { p1: { time: number; price: number }; p2: { time: number; price: number }; neckline: number } | null;
   candlestick: string | null;
   candlestickType: "bullish" | "bearish" | "neutral" | null;
   /** Confidence (0-100) of the candlestick confirmation above (0 when none). */
@@ -155,7 +157,7 @@ export function analyzeCoin(input: AnalyzeCoinInput): AnalyzeResult {
   // series condition 1 historically judged) else the primary candles.
   const swingHit = detectSwingChartPattern(input.h4 ?? candles);
   const chartHit = swingHit?.pattern
-    ? { name: swingHit.pattern, type: swingHit.type, confidence: swingHit.confidence }
+    ? { name: swingHit.pattern, type: swingHit.type, confidence: swingHit.confidence, points: swingHit.points ?? null }
     : null;
   const candlePatternHit = detectCandlestickPattern(candles);
   const candleHit = candlePatternHit?.pattern
@@ -336,6 +338,7 @@ export function analyzeCoin(input: AnalyzeCoinInput): AnalyzeResult {
     conditions,
     chartPattern: chartHit?.name ?? null,
     chartPatternConfidence: chartHit?.confidence ?? 0,
+    chartPatternPoints: chartHit?.points ?? null,
     candlestick: candleHit?.name ?? null,
     candlestickType: candleHit?.type ?? null,
     candlestickConfidence: candleHit?.confidence ?? 0,

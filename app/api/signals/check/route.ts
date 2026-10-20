@@ -1,5 +1,5 @@
 // GET /api/signals/check — returns the setups that score at or above minScore.
-// Powers the background notification watcher (90+ only). Educational only.
+// Powers the background notification watcher (95+ only). Educational only.
 import { analyzeSymbol, type AutoAnalysis } from "@/src/lib/autoAnalysis";
 import { cached } from "@/src/lib/cache";
 
@@ -42,8 +42,8 @@ function bestPattern(analysis: AutoAnalysis): string | null {
 
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
-  const parsed = parseInt(searchParams.get("minScore") ?? "90", 10);
-  const minScore = Number.isFinite(parsed) ? Math.min(100, Math.max(0, parsed)) : 90;
+  const parsed = parseInt(searchParams.get("minScore") ?? "95", 10);
+  const minScore = Number.isFinite(parsed) ? Math.min(100, Math.max(0, parsed)) : 95;
 
   try {
     const analyses = await Promise.all(

@@ -2,6 +2,7 @@ import { cached } from "@/src/lib/cache";
 import { callAI, type AIMessage, type AIResult } from "@/src/lib/aiProvider";
 import { analyzeSymbol, type AutoAnalysis } from "@/src/lib/autoAnalysis";
 import { analyzeCoin } from "@/src/lib/analyzeCoin";
+import type { EmittedMarketSignal } from "@/src/lib/signalsLive";
 import { calculateIndicators, type IndicatorRow } from "@/src/lib/indicatorEngine";
 import { generateFullSignal } from "@/src/lib/signalGenerator";
 import { compactMarketContext, selectTier, systemPromptFor } from "@/src/lib/llm";
@@ -330,7 +331,21 @@ async function getMarketAnalysisReply(scope: ScanMarket, romanUrdu: boolean, ori
 
 /** "Coin X analysis" via the real 8-condition engine + analyzeSymbol — the
  *  same data the Trade page shows. Zero LLM asset guessing. */
+/**
+ * Like buildStrictAssetReply but sources every number from /api/signals/live
+ * so BTC / ETH / Gold / EUR-USD answers always use real RSI, EMA, MACD,
+ * Support/Resistance — never hardcoded or fake indicators.
+ */
 async function buildStrictAssetReply(asset: AssetTarget, romanUrdu: boolean, origin?: string): Promise<string | null> {
+  // 1) Try the live signal pool first — real indicators only.
+  const key = livePoolKeyFor(asset);
+  if (key) {
+    const liveSignal = await findLiveSignal(key.symbol, key.market, origin);
+    if (liveSignal) {
+      return buildLiveSignalAnalysisReply(asset, liveSignal, romanUrdu);
+    }
+  }
+  // 2) Fall back to the on-demand engine analysis (still real candle data).
   return buildFullAnalysisReply(asset, romanUrdu, origin);
 }
 
@@ -596,6 +611,27 @@ const liveAnalysisCache = new Map<string, { data: string; expires: number }>();
 
 /** Compact real-data block for the model, or null when candles are unavailable. */
 async function getLiveAssetContext(asset: AssetTarget, origin?: string): Promise<string | null> {
+  // 1) Try the live signal pool first — real indicators from /api/signals/live.
+  const key = livePoolKeyFor(asset);
+  if (key) {
+    const liveSignal = await findLiveSignal(key.symbol, key.market, origin);
+    if (liveSignal) {
+      const rsi = extractLiveIndicator(liveSignal.confirmations, "RSI (14)");
+      const macd = extractLiveIndicator(liveSignal.confirmations, "MACD");
+      const ema = extractLiveIndicator(liveSignal.confirmations, "EMA (20/50/200)");
+      const data = [
+        `Asset: ${asset.label} (${liveSignal.symbol})`,
+        `Current price: ${liveSignal.price}`,
+        `Trend: ${liveSignal.direction} | Bias: ${liveSignal.bias}`,
+        `RSI: ${rsi ?? "n/a"} | MACD: ${macd ?? "n/a"} | EMA: ${ema ?? "n/a"}`,
+        `Support: ${liveSignal.support ?? "n/a"} | Resistance: ${liveSignal.resistance ?? "n/a"}`,
+        `Pattern: ${liveSignal.pattern ?? "none"} | Candlestick: ${liveSignal.candlestickPattern ?? "none"}`,
+        `Engine score: ${liveSignal.score}/100 | ${liveSignal.reason ?? ""}`,
+      ].join("\n");
+      return data;
+    }
+  }
+  // 2) Fall back to cached engine analysis.
   const hit = liveAnalysisCache.get(asset.symbol);
   if (hit && Date.now() < hit.expires) return hit.data;
 
@@ -625,6 +661,88 @@ async function getLiveAssetContext(asset: AssetTarget, origin?: string): Promise
   }
   liveAnalysisCache.set(asset.symbol, { data, expires: Date.now() + LIVE_TTL_MS });
   return data;
+}
+
+
+// ════ AI ASSISTANT LIVE-POOL SYNC — /api/signals/live ═════════════════════════════════════════════════════════════
+
+const LIVE_POOL_ASSETS: Array<{ symbol: string; market: string }> = [
+  { symbol: "BTC-USD", market: "crypto" },
+  { symbol: "ETH-USD", market: "crypto" },
+  { symbol: "XAU-USD", market: "metals" },
+  { symbol: "EURUSD=X", market: "forex" },
+];
+
+async function findLiveSignal(symbol: string, market: string, origin?: string): Promise<EmittedMarketSignal | null> {
+  try {
+    const base = origin || "http://localhost:3000";
+    const url = new URL(`/api/signals/live?market=all`, base);
+    const response = await fetch(url.toString(), {
+      cache: "no-store",
+      signal: AbortSignal.timeout(8000),
+    });
+    if (!response.ok) return null;
+    const payload = (await response.json()) as { results?: EmittedMarketSignal[] };
+    const results = Array.isArray(payload.results) ? payload.results : [];
+    return results.find((s) => s.symbol === symbol && s.market === market) ?? null;
+  } catch {
+    return null;
+  }
+}
+
+function extractLiveIndicator(
+  confirmations: EmittedMarketSignal["confirmations"],
+  name: string,
+): string | null {
+  if (!confirmations?.indicators) return null;
+  const hit = (confirmations.indicators as unknown[]).find((entry) => {
+    if (!entry || typeof entry !== "object") return false;
+    const e = entry as Record<string, unknown>;
+    return String(e.name ?? "").toLowerCase() === name.toLowerCase();
+  });
+  if (!hit) return null;
+  const e = hit as Record<string, unknown>;
+  return String(e.signalText ?? e.value ?? "");
+}
+
+/** Build a real-indicator analysis reply straight from the /api/signals/live pool. */
+function buildLiveSignalAnalysisReply(asset: AssetTarget, signal: EmittedMarketSignal, romanUrdu: boolean): string {
+  const rsi = extractLiveIndicator(signal.confirmations, "RSI (14)");
+  const macd = extractLiveIndicator(signal.confirmations, "MACD");
+  const ema = extractLiveIndicator(signal.confirmations, "EMA (20/50/200)");
+
+  const money = (value: number | null): string =>
+    value == null ? "—" : value >= 1000 ? `$${value.toLocaleString("en-US", { maximumFractionDigits: 2 })}` : `$${value.toFixed(value >= 1 ? 2 : 4)}`;
+
+  const scoreWord = signal.score >= 95 ? "95+ HIGH CONFIDENCE" : signal.score >= 85 ? "Strong" : signal.score >= 75 ? "Good" : "Watch";
+
+  const lines: string[] = [];
+  lines.push(`${asset.label} — Live Analysis (/api/signals/live)`);
+  lines.push("");
+  lines.push(`Score: ${signal.score}/100 (${scoreWord})`);
+  lines.push(`Trend: ${signal.bias} · Price: ${money(signal.price)}`);
+  lines.push(`Support: ${money(signal.support)} · Resistance: ${money(signal.resistance)}`);
+  lines.push("");
+  lines.push("Real Indicators (TwelveData + Binance):");
+  if (rsi) lines.push(`  RSI (14): ${rsi}`);
+  if (macd) lines.push(`  MACD: ${macd}`);
+  if (ema) lines.push(`  EMA (20/50/200): ${ema}`);
+  lines.push("");
+  lines.push(`Pattern: ${signal.pattern ?? "No clear pattern"}`);
+  if (signal.candlestickPattern) lines.push(`Candlestick: ${signal.candlestickPattern}`);
+  lines.push("");
+  lines.push(signal.reason ? `Read: ${signal.reason}` : "—");
+  lines.push("");
+  lines.push("Data source: /api/signals/live (live pool — real candles from TwelveData + Binance).");
+  lines.push("Educational only — not financial advice.");
+  if (romanUrdu) lines.push("Note: Ye analysis sirf educational purpose ke liye hai — financial advice nahi.");
+  return lines.join("\n");
+}
+
+/** Resolve an AssetTarget to its live-pool symbol/market (BTC/ETH/Gold/EUR-USD). */
+function livePoolKeyFor(asset: AssetTarget): { symbol: string; market: string } | null {
+  const hit = LIVE_POOL_ASSETS.find((a) => a.market === asset.market && a.symbol === asset.symbol);
+  return hit ?? null;
 }
 
 // ── MASLA 3 — signal discussion (teacher mode) ────────────────────────────────
@@ -776,7 +894,7 @@ function money(value: number): string {
 
 /** Score badge label matching the signals/results pages. */
 function scoreTierLabel(score: number): string {
-  if (score >= 90) return "🏆 Excellent";
+  if (score >= 95) return "🏆 Excellent";
   if (score >= 75) return "⭐ Very Good";
   if (score >= 60) return "👍 Good";
   return "🔍 Developing";
