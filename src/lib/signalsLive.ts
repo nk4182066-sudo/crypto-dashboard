@@ -517,6 +517,16 @@ export async function refresh(market: ScanMarket, origin?: string): Promise<Emit
     if (typeof d.market !== "string" || d.market !== market) continue;
     if (RESOLVED_STATUSES.has(String(d.status ?? ""))) continue;
     if (liveBySymbol.has(String(d.symbol))) continue;
+    // QUALITY GATE (Quality with Quantity spec) — a STORED doc only joins the
+    // live pool when it clears the same 85+ floor and the 3/4 expert gate as a
+    // fresh scan. Legacy cards (75-84) from an older build are skipped so the
+    // pool can never show a sub-85 setup.
+    const storedScore = Number(d.score ?? 0);
+    if (!Number.isFinite(storedScore) || storedScore < MIN_EMIT_SCORE) continue;
+    const storedAgreed = Number(
+      (d.experts as { consensus?: { agreed?: number } } | null)?.consensus?.agreed ?? 0,
+    );
+    if (storedAgreed < 3) continue;
 
     const direction = d.direction as "bullish" | "bearish" | "neutral";
     const candlestick = d.candlestick as { name: string; type: string; confidence: number } | null;
