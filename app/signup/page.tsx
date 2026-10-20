@@ -170,7 +170,7 @@ export default function SignUpPage() {
         console.log("Signup Error:", authError.code, authError.message);
         const code = authError?.code;
         if (code === "auth/email-already-in-use") {
-          setSubmitError("Yeh email pehle se registered hai. Login karein.");
+          setSubmitError("Email already in use — yeh email pehle se registered hai. Login karein.");
         } else if (code === "auth/weak-password") {
           setSubmitError("Password kam se kam 6 characters ka hona chahiye.");
         } else if (code === "auth/network-request-failed") {
