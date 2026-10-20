@@ -1,11 +1,12 @@
 "use client";
 import AuthGuard from "@/components/AuthGuard";
 
-// Home - search, alerts, top 5 movers and a short news preview.
-// The market tabs and the long coin list were removed (the bottom bar now has
-// a live News tab), so Home no longer duplicates the Markets screen.
+// Home - clean market list only: search bar + market tabs + coin list.
+// Top 5 Movers and the news preview were removed (news lives on the bottom
+// bar's News tab), so Home stays focused and professional.
 // The navbar and mobile bottom nav are rendered globally in app/layout.tsx.
-// Clicking a row opens /trade?symbol=... Educational only. Not financial advice.
+// Clicking a coin row OR a search result opens /trade?symbol=... (the chart
+// page) — never the chat. Educational only. Not financial advice.
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -28,16 +29,20 @@ interface AllCoin {
   priceChangePercent: number;
 }
 
-interface NewsItem {
-  id: string;
-  title: string;
-  source: string;
-  link: string;
-  timeAgo: string;
-  tag: "Crypto" | "Forex" | "Stock" | "Gold";
-}
+type TabKey = "crypto" | "futures" | "metals" | "stocks" | "forex";
 
-/** Small optimistic placeholder set so the first paint is never empty. */
+// Order matches the tabs: Spot | Futures | Metals | Stocks | Forex.
+const TABS: { key: TabKey; label: string }[] = [
+  { key: "crypto", label: "Spot" },
+  { key: "futures", label: "Futures" },
+  { key: "metals", label: "Metals" },
+  { key: "stocks", label: "Stocks" },
+  { key: "forex", label: "Forex" },
+];
+
+/** Small optimistic placeholder set so the first paint is never empty.
+ *  Covers every market tab (Spot, Futures, Metals, Stocks, Forex) so switching
+ *  tabs is instant before the live /api/market/all-coins payload arrives. */
 const PLACEHOLDER_COINS: AllCoin[] = [
   { id: "BTCUSDT", symbol: "BTCUSDT", label: "BTC/USDT", market: "crypto", currentPrice: 83000, priceChangePercent: 0.25 },
   { id: "ETHUSDT", symbol: "ETHUSDT", label: "ETH/USDT", market: "crypto", currentPrice: 2300, priceChangePercent: 0.2 },
@@ -47,6 +52,30 @@ const PLACEHOLDER_COINS: AllCoin[] = [
   { id: "ADAUSDT", symbol: "ADAUSDT", label: "ADA/USDT", market: "crypto", currentPrice: 0.45, priceChangePercent: -0.2 },
   { id: "DOGEUSDT", symbol: "DOGEUSDT", label: "DOGE/USDT", market: "crypto", currentPrice: 0.12, priceChangePercent: 0.5 },
   { id: "AVAXUSDT", symbol: "AVAXUSDT", label: "AVAX/USDT", market: "crypto", currentPrice: 28, priceChangePercent: 0.18 },
+  // Futures (mirror majors so the tab isn't empty before live data).
+  { id: "BTCUSDT-fut", symbol: "BTCUSDT", label: "BTC/USDT Perp", market: "futures", currentPrice: 83000, priceChangePercent: 0.25 },
+  { id: "ETHUSDT-fut", symbol: "ETHUSDT", label: "ETH/USDT Perp", market: "futures", currentPrice: 2300, priceChangePercent: 0.2 },
+  { id: "SOLUSDT-fut", symbol: "SOLUSDT", label: "SOL/USDT Perp", market: "futures", currentPrice: 109, priceChangePercent: 0.1 },
+  { id: "BNBUSDT-fut", symbol: "BNBUSDT", label: "BNB/USDT Perp", market: "futures", currentPrice: 600, priceChangePercent: -0.15 },
+  { id: "XRPUSDT-fut", symbol: "XRPUSDT", label: "XRP/USDT Perp", market: "futures", currentPrice: 0.52, priceChangePercent: 0.35 },
+  // Metals.
+  { id: "xau-usd", symbol: "XAU-USD", label: "Gold (XAU-USD)", market: "metals", currentPrice: 2648, priceChangePercent: 0.3 },
+  { id: "xag-usd", symbol: "XAG-USD", label: "Silver (XAG-USD)", market: "metals", currentPrice: 31.2, priceChangePercent: -0.4 },
+  { id: "xpt-usd", symbol: "XPT-USD", label: "Platinum (XPT-USD)", market: "metals", currentPrice: 985, priceChangePercent: 0.12 },
+  { id: "xpd-usd", symbol: "XPD-USD", label: "Palladium (XPD-USD)", market: "metals", currentPrice: 1020, priceChangePercent: -0.08 },
+  { id: "xcu-usd", symbol: "XCU-USD", label: "Copper (XCU-USD)", market: "metals", currentPrice: 4.5, priceChangePercent: 0.05 },
+  // Stocks.
+  { id: "aapl", symbol: "AAPL", label: "Apple Inc.", market: "stocks", currentPrice: 228, priceChangePercent: 0.45 },
+  { id: "tsla", symbol: "TSLA", label: "Tesla Inc.", market: "stocks", currentPrice: 248, priceChangePercent: -0.6 },
+  { id: "nvda", symbol: "NVDA", label: "NVIDIA Corp.", market: "stocks", currentPrice: 122, priceChangePercent: 1.2 },
+  { id: "msft", symbol: "MSFT", label: "Microsoft Corp.", market: "stocks", currentPrice: 420, priceChangePercent: 0.2 },
+  { id: "amzn", symbol: "AMZN", label: "Amazon.com", market: "stocks", currentPrice: 185, priceChangePercent: -0.15 },
+  // Forex.
+  { id: "eur-usd", symbol: "EUR-USD", label: "Euro / US Dollar", market: "forex", currentPrice: 1.085, priceChangePercent: 0.05 },
+  { id: "gbp-usd", symbol: "GBP-USD", label: "British Pound / US Dollar", market: "forex", currentPrice: 1.27, priceChangePercent: -0.03 },
+  { id: "usd-jpy", symbol: "USD-JPY", label: "US Dollar / Japanese Yen", market: "forex", currentPrice: 152.4, priceChangePercent: 0.12 },
+  { id: "usd-chf", symbol: "USD-CHF", label: "US Dollar / Swiss Franc", market: "forex", currentPrice: 0.9, priceChangePercent: -0.02 },
+  { id: "aud-usd", symbol: "AUD-USD", label: "Australian Dollar / US Dollar", market: "forex", currentPrice: 0.66, priceChangePercent: 0.08 },
 ];
 
 function fmtPrice(p: number): string {
@@ -63,7 +92,7 @@ function HomeContent() {
   const [loading, setLoading] = useState(true);
   const [query, setQuery] = useState("");
   const [debouncedQuery, setDebouncedQuery] = useState("");
-  const [news, setNews] = useState<NewsItem[]>([]);
+  const [activeTab, setActiveTab] = useState<TabKey>("crypto");
 
   // Debounce the search by 300ms so filtering stays cheap while typing.
   useEffect(() => {
@@ -110,31 +139,8 @@ function HomeContent() {
     };
   }, []);
 
-  // Short news preview for the Home page (the full feed lives on /news).
-  useEffect(() => {
-    let cancelled = false;
-    const loadNews = () => {
-      fetch("/api/news?limit=5", { cache: "no-store" })
-        .then((res) => (res.ok ? res.json() : null))
-        .then((data) => {
-          if (!cancelled && data && Array.isArray(data.items)) {
-            setNews(data.items as NewsItem[]);
-          }
-        })
-        .catch(() => {
-          /* the preview is optional - stay silent if it fails */
-        });
-    };
-    loadNews();
-    const interval = setInterval(loadNews, 5 * 60 * 1000);
-    return () => {
-      cancelled = true;
-      clearInterval(interval);
-    };
-  }, []);
-
   /** Search matches every market (crypto, forex, metals, stocks). */
-  const filtered = useMemo(() => {
+  const searchResults = useMemo(() => {
     const q = debouncedQuery.trim().toLowerCase();
     if (!q) return [];
     return coins.filter((c) => {
@@ -145,26 +151,8 @@ function HomeContent() {
     });
   }, [coins, debouncedQuery]);
 
-  /** Top 5 movers - biggest absolute 24h move across the whole universe.
-   *  The universe contains the same asset in both spot and futures (e.g.
-   *  EPICUSDT), so we collapse those twins and keep the stronger move. */
-  const movers = useMemo(() => {
-    const best = new Map<string, AllCoin>();
-    for (const c of coins) {
-      if (!Number.isFinite(c.priceChangePercent) || c.priceChangePercent === 0) continue;
-      const key = (c.symbol ?? "").replace(/usdt$/i, "").toUpperCase() || c.id;
-      const current = best.get(key);
-      if (
-        !current ||
-        Math.abs(c.priceChangePercent) > Math.abs(current.priceChangePercent)
-      ) {
-        best.set(key, c);
-      }
-    }
-    return [...best.values()]
-      .sort((a, b) => Math.abs(b.priceChangePercent) - Math.abs(a.priceChangePercent))
-      .slice(0, 5);
-  }, [coins]);
+  /** Tab-filtered coin list (Spot tab = the crypto market). */
+  const filteredCoins = useMemo(() => coins.filter((c) => c.market === activeTab), [coins, activeTab]);
 
   return (
     <main className="min-h-screen pb-24" style={{ backgroundColor: BG }}>
@@ -199,17 +187,17 @@ function HomeContent() {
           className="mx-4 mt-3 overflow-hidden rounded-2xl border"
           style={{ backgroundColor: CARD, borderColor: BORDER }}
         >
-          {loading && filtered.length === 0 && (
+          {loading && searchResults.length === 0 && (
             <p className="px-4 py-4 text-sm" style={{ color: MUTED }}>
               Searching...
             </p>
           )}
-          {!loading && filtered.length === 0 && (
+          {!loading && searchResults.length === 0 && (
             <p className="px-4 py-4 text-sm" style={{ color: MUTED }}>
               Koi coin nahi mila. Try &quot;BTC&quot; or &quot;ETH&quot;
             </p>
           )}
-          {filtered.slice(0, 20).map((c) => {
+          {searchResults.slice(0, 20).map((c) => {
             const up = c.priceChangePercent >= 0;
             const base =
               c.symbol.replace(/USDT$/, "").split("/")[0].slice(0, 3) || c.label.slice(0, 1);
@@ -265,41 +253,74 @@ function HomeContent() {
         <EnableNotifications />
       </div>
 
-      {/* Top 5 movers */}
-      <div className="px-4 pt-5">
-        <div className="flex items-center justify-between">
-          <h2 className="text-sm font-bold" style={{ color: TEXT }}>
-            Top 5 Movers (24h)
-          </h2>
-          <Link href="/markets" className="text-xs font-semibold" style={{ color: GREEN }}>
-            All markets
-          </Link>
-        </div>
-        <div
-          className="mt-2 overflow-hidden rounded-2xl border"
-          style={{ backgroundColor: CARD, borderColor: BORDER }}
-        >
-          {loading && movers.length === 0 && (
-            <div className="animate-pulse p-3" role="status" aria-label="Loading movers">
-              {[...Array(5)].map((_, i) => (
-                <div key={i} className="mb-2 h-10 rounded" style={{ backgroundColor: "#23272f" }} />
-              ))}
-            </div>
-          )}
-          {movers.map((c) => {
+      {/* Market tabs + tab-filtered coin list. Every row (and every search
+          result) opens the Trade chart page — never the chat. */}
+      <div className="flex gap-2 overflow-x-auto px-4 pb-1 pt-3">
+        {TABS.map((tab) => {
+          const active = activeTab === tab.key;
+          return (
+            <button
+              key={tab.key}
+              type="button"
+              onClick={() => setActiveTab(tab.key)}
+              className="shrink-0 rounded-full px-4 py-1.5 text-sm font-semibold transition-colors"
+              style={{
+                backgroundColor: active ? GREEN : CARD,
+                color: active ? BG : MUTED,
+                border: `1px solid ${active ? GREEN : BORDER}`,
+              }}
+            >
+              {tab.label}
+            </button>
+          );
+        })}
+      </div>
+
+      {/* Coin list */}
+      <div className="mx-4 mt-3 overflow-hidden rounded-2xl border" style={{ backgroundColor: CARD, borderColor: BORDER }}>
+        {loading && filteredCoins.length === 0 && (
+          <div className="animate-pulse p-2" role="status" aria-label="Loading markets">
+            {Array.from({ length: 10 }).map((_, i) => (
+              <div key={i} className="mb-2 flex items-center justify-between rounded-xl px-2 py-3">
+                <div className="flex items-center gap-3">
+                  <div className="h-9 w-9 rounded-full" style={{ backgroundColor: "#2B3139" }} />
+                  <div className="flex flex-col gap-1.5">
+                    <div className="h-3.5 w-24 rounded" style={{ backgroundColor: "#2B3139" }} />
+                    <div className="h-2.5 w-16 rounded" style={{ backgroundColor: "#23272f" }} />
+                  </div>
+                </div>
+                <div className="flex flex-col items-end gap-1.5">
+                  <div className="h-3.5 w-16 rounded" style={{ backgroundColor: "#2B3139" }} />
+                  <div className="h-2.5 w-10 rounded" style={{ backgroundColor: "#23272f" }} />
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+        {!loading && filteredCoins.length === 0 && (
+          <p className="px-4 py-6 text-sm" style={{ color: MUTED }}>
+            Koi coin nahi mila. Try &quot;BTC&quot; or &quot;ETH&quot;
+          </p>
+        )}
+        {(loading || filteredCoins.length > 0) &&
+          filteredCoins.map((c) => {
             const up = c.priceChangePercent >= 0;
             const base =
               c.symbol.replace(/USDT$/, "").split("/")[0].slice(0, 3) || c.label.slice(0, 1);
+            const tradeHref = `/trade?symbol=${encodeURIComponent(c.symbol)}`;
             return (
               <Link
                 key={c.id}
-                href={`/trade?symbol=${encodeURIComponent(c.symbol)}`}
+                href={tradeHref}
+                // Prefetch the trade route on hover/focus so the chart opens instantly.
+                onMouseEnter={() => router.prefetch(tradeHref)}
+                onFocus={() => router.prefetch(tradeHref)}
                 className="flex items-center justify-between border-b px-4 py-3 last:border-b-0"
                 style={{ borderColor: BORDER }}
               >
                 <div className="flex items-center gap-3">
                   <span
-                    className="flex h-8 w-8 items-center justify-center rounded-full text-xs font-bold"
+                    className="flex h-9 w-9 items-center justify-center rounded-full text-xs font-bold"
                     style={{ backgroundColor: "#2B3139", color: TEXT }}
                   >
                     {base}
@@ -331,47 +352,6 @@ function HomeContent() {
               </Link>
             );
           })}
-        </div>
-      </div>
-
-      {/* Short news preview - the full feed lives on /news */}
-      <div className="px-4 pt-5">
-        <div className="flex items-center justify-between">
-          <h2 className="text-sm font-bold" style={{ color: TEXT }}>
-            Latest News
-          </h2>
-          <Link href="/news" className="text-xs font-semibold" style={{ color: GREEN }}>
-            See all
-          </Link>
-        </div>
-        <div
-          className="mt-2 overflow-hidden rounded-2xl border"
-          style={{ backgroundColor: CARD, borderColor: BORDER }}
-        >
-          {news.length === 0 ? (
-            <p className="px-4 py-4 text-sm" style={{ color: MUTED }}>
-              News load ho rahi hai...
-            </p>
-          ) : (
-            news.map((n) => (
-              <a
-                key={n.id}
-                href={n.link}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="block border-b px-4 py-3 last:border-b-0"
-                style={{ borderColor: BORDER }}
-              >
-                <p className="text-sm font-semibold leading-snug" style={{ color: TEXT }}>
-                  {n.title}
-                </p>
-                <p className="mt-1 text-xs" style={{ color: MUTED }}>
-                  {n.source} | {n.timeAgo} | {n.tag}
-                </p>
-              </a>
-            ))
-          )}
-        </div>
       </div>
 
       <p className="mt-5 px-4 text-center text-sm" style={{ color: MUTED }}>
