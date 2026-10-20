@@ -174,30 +174,57 @@ export function parseFeed(xml: string, feed: NewsFeed): NewsItem[] {
   return items;
 }
 
-/** Fetch one feed and parse it. Returns [] on any failure (never throws). */
-export async function fetchFeed(feed: NewsFeed): Promise<NewsItem[]> {
+/** Fetch one feed and parse it. Returns [] on any failure (never throws).
+ *  Some publishers (FXStreet, Investing.com) intermittently stall or throttle
+ *  requests coming from a datacenter IP, so we retry once with a short pause
+ *  before giving up on that feed. */
+export async function fetchFeed(feed: NewsFeed, attempt = 0): Promise<NewsItem[]> {
   try {
     const res = await fetch(feed.url, {
       cache: "no-store",
       redirect: "follow",
       headers: {
         // Some publishers serve a stripped feed to unknown agents.
-        "User-Agent": "Mozilla/5.0 (compatible; TradingStudentExpertAI/1.0; +https://crypto-dashboard.vercel.app)",
+        "User-Agent":
+          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
         Accept: "application/rss+xml, application/xml, text/xml, */*",
       },
-      signal: AbortSignal.timeout(8000),
+      signal: AbortSignal.timeout(12000),
     });
-    if (!res.ok) return [];
+    if (!res.ok) {
+      if (attempt < 1 && res.status >= 500) {
+        await new Promise((r) => setTimeout(r, 600));
+        return fetchFeed(feed, attempt + 1);
+      }
+      return [];
+    }
     const xml = await res.text();
-    return parseFeed(xml, feed);
+    const items = parseFeed(xml, feed);
+    if (items.length === 0 && attempt < 1) {
+      // A 200 with zero items usually means a throttled/empty response body.
+      await new Promise((r) => setTimeout(r, 600));
+      return fetchFeed(feed, attempt + 1);
+    }
+    return items;
   } catch {
+    if (attempt < 1) {
+      await new Promise((r) => setTimeout(r, 600));
+      return fetchFeed(feed, attempt + 1);
+    }
     return [];
   }
 }
 
-/** Fetch every feed in parallel and merge into one time-sorted list. */
+/** Fetch every feed (small batches to avoid tripping per-host rate limits) and
+ *  merge into one time-sorted, de-duplicated list. */
 export async function fetchAllNews(limit = 60): Promise<NewsItem[]> {
-  const results = await Promise.all(NEWS_FEEDS.map((f) => fetchFeed(f)));
+  const results: NewsItem[][] = [];
+  const BATCH = 3;
+  for (let i = 0; i < NEWS_FEEDS.length; i += BATCH) {
+    const batch = NEWS_FEEDS.slice(i, i + BATCH);
+    const settled = await Promise.all(batch.map((f) => fetchFeed(f)));
+    results.push(...settled);
+  }
   const merged = results.flat();
   // Newest first. Items without a date sink to the bottom.
   merged.sort((a, b) => {
@@ -205,9 +232,20 @@ export async function fetchAllNews(limit = 60): Promise<NewsItem[]> {
     const tb = b.publishedAt ? Date.parse(b.publishedAt) : 0;
     return tb - ta;
   });
+  // Cap the number of items per source so one fast-publishing feed (BBC,
+  // Investing.com) cannot crowd out the rest of the world's news.
+  const PER_SOURCE = 8;
+  const perSource = new Map<string, number>();
+  const capped = merged.filter((item) => {
+    const seen = perSource.get(item.source) ?? 0;
+    if (seen >= PER_SOURCE) return false;
+    perSource.set(item.source, seen + 1);
+    return true;
+  });
+
   // Dedupe by link (the same story can appear in two feeds).
   const seen = new Set<string>();
-  const unique = merged.filter((item) => {
+  const unique = capped.filter((item) => {
     if (seen.has(item.link)) return false;
     seen.add(item.link);
     return true;

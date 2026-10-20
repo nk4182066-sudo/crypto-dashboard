@@ -15,6 +15,9 @@
     },
     "app/api/track-signals/route.ts": {
       "maxDuration": 30
+    },
+    "app/api/news/route.ts": {
+      "maxDuration": 60
     }
   },
   "crons": [
