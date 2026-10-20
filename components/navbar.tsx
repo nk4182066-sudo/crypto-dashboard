@@ -18,7 +18,7 @@ const GREEN = "#00C087";
 
 const TOP_LINKS = [
   { href: "/", label: "Home" },
-  { href: "/markets", label: "Markets" },
+  { href: "/news", label: "News" },
   { href: "/trade", label: "Trade" },
   { href: "/signals", label: "Signals" },
   { href: "/risk", label: "Risk" },
@@ -26,9 +26,11 @@ const TOP_LINKS = [
   { href: "/assets", label: "Assets" },
 ];
 
+// Mobile bottom bar — the "Markets" tab was replaced by a live "News" feed
+// (the old Markets table is still reachable from the desktop top nav).
 const BOTTOM_LINKS = [
   { href: "/", label: "Home", icon: "🏠" },
-  { href: "/markets", label: "Markets", icon: "📊" },
+  { href: "/news", label: "News", icon: "📰" },
   { href: "/trade", label: "Trade", icon: "📈" },
   { href: "/signals", label: "Signals", icon: "⚡" },
   { href: "/assets", label: "Assets", icon: "📚" },
