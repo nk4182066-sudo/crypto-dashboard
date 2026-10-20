@@ -61,6 +61,7 @@ export interface SignalPatternPoints {
 
 export interface EmittedMarketSignal {
   symbol: string;
+  createdAt?: number;
   label: string;
   market: ScanMarket;
   score: number;
@@ -543,6 +544,7 @@ export async function refresh(market: ScanMarket, origin?: string): Promise<Emit
       resistance: Number.isFinite(Number(d.resistance)) ? Number(d.resistance) : null,
       watchLevel: Number.isFinite(Number(d.watchLevel)) ? Number(d.watchLevel) : null,
       reason: typeof d.reason === "string" ? d.reason : "",
+      createdAt: typeof d.createdAt === "number" ? d.createdAt : 0,
       analyzedAt: typeof d.analyzedAt === "string" ? d.analyzedAt : new Date().toISOString(),
       chartPattern: typeof d.chartPattern === "string" ? d.chartPattern : null,
       chartPatternNote: typeof d.chartPatternNote === "string" ? d.chartPatternNote : null,

@@ -17,6 +17,7 @@
 // Educational analysis only — not financial advice.
 
 import { refresh, getLiveSignals, LIVE_CAPS, type EmittedMarketSignal, type ScanMarket } from "@/src/lib/signalsLive";
+import { SIGNAL_TTL_MS } from "@/src/lib/signalCloud";
 import { scanUniverse } from "@/src/scanner/universe";
 
 // ONE entry per MARKET — scanUniverse holds one row per SYMBOL (120 today), so
@@ -72,17 +73,49 @@ export async function GET(request: Request) {
 
   const results: Record<string, EmittedMarketSignal[]> = {};
 
+  // STRICT 24H EXPIRY FILTER — only signals created within last 24 hours are
+  // returned. Older signals are silently dropped so the UI can never show stale
+  // setups that failed to resolve to WIN/LOSS/EXPIRED.
+  const now = Date.now();
+  function isFresh(signal: EmittedMarketSignal): boolean {
+    const createdAt = signal.createdAt ?? 0;
+    return createdAt > 0 && now - createdAt <= SIGNAL_TTL_MS;
+  }
+
+  const filteredPools = pools.map((pool) => pool.filter(isFresh));
+
   if (market === "all") {
     const merged: EmittedMarketSignal[] = [];
     markets.forEach((active, index) => {
-      for (const signal of pools[index] ?? []) results[toComparable(active, signal.symbol)] = [signal];
-      merged.push(...(pools[index] ?? []));
+      for (const signal of filteredPools[index] ?? []) results[toComparable(active, signal.symbol)] = [signal];
+      merged.push(...(filteredPools[index] ?? []));
     });
     merged.sort((a, b) => b.score - a.score || a.market.localeCompare(b.market) || (a.symbol < b.symbol ? -1 : 1));
-    return Response.json({ generatedAt: new Date().toISOString(), targets: LIVE_CAPS, results: merged }, { headers: { "Cache-Control": "no-store" } });
+    const expiredCount = (pools[0]?.length ?? 0) - (filteredPools[0]?.length ?? 0);
+    return Response.json(
+      {
+        generatedAt: new Date().toISOString(),
+        targets: LIVE_CAPS,
+        results: merged,
+        expiresAt: new Date(now + SIGNAL_TTL_MS).toISOString(),
+        expiredFiltered: expiredCount,
+      },
+      { headers: { "Cache-Control": "no-store" } }
+    );
   }
 
-  const pool = pools[0] ?? [];
+  const pool = filteredPools[0] ?? [];
   const cap = LIVE_CAPS[market as ScanMarket];
-  return Response.json({ generatedAt: new Date().toISOString(), market, cap, results: pool }, { headers: { "Cache-Control": "no-store" } });
+  const expiredCount = (pools[0]?.length ?? 0) - (pool.length);
+  return Response.json(
+    {
+      generatedAt: new Date().toISOString(),
+      market,
+      cap,
+      results: pool,
+      expiresAt: new Date(now + SIGNAL_TTL_MS).toISOString(),
+      expiredFiltered: expiredCount,
+    },
+    { headers: { "Cache-Control": "no-store" } }
+  );
 }

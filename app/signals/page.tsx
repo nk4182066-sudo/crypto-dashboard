@@ -44,6 +44,20 @@ const LANG_STORAGE_KEY = "signals-language";
 
 const BG = "#0B0E11";
 const CARD = "#181A20";
+
+// Display "Valid till" with a live countdown timer
+function formatElapsed(ms: number): string {
+  const totalSeconds = Math.floor(ms / 1000);
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  return `${hours}h ${minutes}m ${seconds}s`;
+}
+
+function formatUnix(ms: number): string {
+  const date = new Date(ms);
+  return date.toLocaleString("en-GB", { hour12: false });
+}
 const BORDER = "#2B3139";
 const TEXT = "#EAECEF";
 const MUTED = "#9CA3AF";
@@ -55,12 +69,15 @@ const YELLOW = "#F59E0B";
 
 type Market = "crypto" | "forex" | "stocks" | "metals";
 
+import { SIGNAL_TTL_MS } from "@/src/lib/signalCloud";
+
 interface MarketSignal {
   symbol: string;
   label: string;
   market: Market;
   score: number;
   direction: "bullish" | "bearish" | "neutral";
+  createdAt?: number;
   bias: "Bullish" | "Bearish" | "Sideways";
   price: number;
   pattern: string | null;
@@ -105,7 +122,6 @@ const REFRESH_MS = 30 * 1000;
  */
 const COLD_RETRY_MS = 8 * 1000;
 /** Stored setups (cloud/backup) older than this expire — 24h retention (Quality spec). */
-const SIGNAL_TTL_MS = 24 * 60 * 60 * 1000;
 
 function fmtPrice(p: number | null): string {
   if (p == null || !Number.isFinite(p) || p === 0) return "—";
@@ -636,6 +652,12 @@ function SignalsPageContent() {
                   <span className="font-semibold" style={{ color: dirColor }}>{directionLabel(signal.direction)}</span>
                   <span style={{ color: MUTED }}>· {full.trend}</span>
                   <span className="ml-auto text-xs font-semibold" style={{ color: status.color }}>{status.text}</span>
+                  {/* Valid till with live countdown — 24h expiry enforced at API level */}
+                  {signal.createdAt && (
+                    <span className="text-xs" style={{ color: MUTED }}>
+                      {formatElapsed(Date.now() - signal.createdAt)} ago · valid until {formatUnix(signal.createdAt + SIGNAL_TTL_MS)}
+                    </span>
+                  )}
                 </div>
 
                 {/* 📊 CHART PATTERN (with small SVG) */}
