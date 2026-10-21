@@ -239,7 +239,7 @@ export function generateFullSignal(input: FullSignalInput): FullSignal {
   if (price <= 0) throw new Error(`[signalGenerator] REJECT: price ${input.price} <= 0 for ${symbol}`);
 
 // CANDLESTICK NEUTRAL REJECTION - if type is "neutral", reject signal
-if (candlestick?.type === "neutral") {
+if (input.candlestick?.type === "neutral") {
   console.warn(`[generateFullSignal] Rejecting signal for ${symbol}: candlestick pattern is neutral (no confirmation)`);
   return null;
 }
@@ -264,19 +264,19 @@ if (candlestick?.type === "neutral") {
   });
 
 // Validate SL/TP are solid positive numbers (not 0, not null, not NaN)
-if (stopLoss == null || stopLoss <= 0 || isNaN(stopLoss)) {
+if (plan.stopLoss == null || plan.stopLoss <= 0 || isNaN(plan.stopLoss)) {
   console.warn(`[generateFullSignal] Rejecting signal for ${symbol}: invalid stopLoss`);
   return null;
 }
-if (tp1 == null || tp1 <= 0 || isNaN(tp1)) {
+if (plan.tp1 == null || plan.tp1 <= 0 || isNaN(plan.tp1)) {
   console.warn(`[generateFullSignal] Rejecting signal for ${symbol}: invalid tp1`);
   return null;
 }
-if (tp2 == null || tp2 <= 0 || isNaN(tp2)) {
+if (plan.tp2 == null || plan.tp2 <= 0 || isNaN(plan.tp2)) {
   console.warn(`[generateFullSignal] Rejecting signal for ${symbol}: invalid tp2`);
   return null;
 }
-if (tp3 == null || tp3 <= 0 || isNaN(tp3)) {
+if (plan.tp3 == null || plan.tp3 <= 0 || isNaN(plan.tp3)) {
   console.warn(`[generateFullSignal] Rejecting signal for ${symbol}: invalid tp3`);
   return null;
 }
