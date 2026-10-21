@@ -5,13 +5,14 @@ import AuthGuard from "@/components/AuthGuard";
 // buttons, a full-width chart with auto-drawn patterns (blue), support/
 // resistance (green/red dashed), buy-point arrows and Entry/SL/TP zones, then
 // an AI Analysis box below. Educational only. Not financial advice.
-import { Suspense, useEffect, useMemo, useRef, useState } from "react";
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import TradingChart, { type ChartArrowMarker, type ChartLevel } from "@/components/TradingChart";
 import { buildLeverageLevels } from "@/src/lib/signalGenerator";
 import { zigZag } from "@/src/analysis/structure";
 import { analyzeCoin, type AnalyzeResult } from "@/src/lib/analyzeCoin";
 import { normalizeSymbol } from "@/src/lib/chart/symbol";
+import { mergeCandles, type SeriesCandle } from "@/src/lib/candleSeries";
 import { buildConfirmations, buildEducators, buildGuidance } from "@/src/lib/confirmations";
 import { TrendBadge, ConfirmationSection, ExpertPanel, GuidanceSection } from "@/components/AnalysisInsights";
 
@@ -53,14 +54,7 @@ function tfToMinutes(timeframe: Timeframe): number {
   }
 }
 
-interface Candle {
-  time: number;
-  open: number;
-  high: number;
-  low: number;
-  close: number;
-  volume: number;
-}
+type Candle = SeriesCandle;
 
 function fmtPrice(p: number): string {
   if (!Number.isFinite(p) || p === 0) return "—";
@@ -70,18 +64,64 @@ function fmtPrice(p: number): string {
   return p.toFixed(8);
 }
 
-/** Pulls one timeframe of candles; empty array on any failure. */
-async function fetchCandles(symbol: string, market: string, timeframe: string): Promise<Candle[]> {
+/**
+ * Pulls one timeframe of candles; empty array on any failure.
+ * `hasMore` mirrors the API's "there is more history before this page" flag
+ * so the chart can offer historical navigation.
+ */
+async function fetchCandles(
+  symbol: string,
+  market: string,
+  timeframe: string
+): Promise<{ candles: Candle[]; hasMore: boolean }> {
   try {
     const query = new URLSearchParams({ market, symbol, timeframe });
     const response = await fetch(`/api/market/history?${query}`, { cache: "no-store" });
-    if (!response.ok) return [];
-    const payload = (await response.json()) as { candles?: Candle[]; degraded?: boolean };
+    if (!response.ok) return { candles: [], hasMore: false };
+    const payload = (await response.json()) as {
+      candles?: Candle[];
+      hasMore?: boolean;
+      degraded?: boolean;
+    };
     // Reject demo/synthetic data: a degraded body is NOT real market data.
-    if (payload.degraded) return [];
-    return Array.isArray(payload.candles) ? payload.candles : [];
+    if (payload.degraded) return { candles: [], hasMore: false };
+    const candles = Array.isArray(payload.candles) ? payload.candles : [];
+    return { candles, hasMore: Boolean(payload.hasMore) && candles.length > 0 };
   } catch {
-    return [];
+    return { candles: [], hasMore: false };
+  }
+}
+
+/**
+ * MASLA — fetch the page of candles that ENDS right before `before` (the
+ * oldest bar we already hold). Used to backfill history when the user drags
+ * the chart to the left, so older bars can be explored.
+ */
+async function fetchOlderCandles(
+  symbol: string,
+  market: string,
+  timeframe: string,
+  before: number
+): Promise<{ candles: Candle[]; hasMore: boolean }> {
+  try {
+    const query = new URLSearchParams({
+      market,
+      symbol,
+      timeframe,
+      before: String(before),
+    });
+    const response = await fetch(`/api/market/history?${query}`, { cache: "no-store" });
+    if (!response.ok) return { candles: [], hasMore: false };
+    const payload = (await response.json()) as {
+      candles?: Candle[];
+      hasMore?: boolean;
+      degraded?: boolean;
+    };
+    if (payload.degraded) return { candles: [], hasMore: false };
+    const candles = Array.isArray(payload.candles) ? payload.candles : [];
+    return { candles, hasMore: Boolean(payload.hasMore) && candles.length > 0 };
+  } catch {
+    return { candles: [], hasMore: false };
   }
 }
 
@@ -103,12 +143,15 @@ async function fetchQuote(symbol: string, market: string): Promise<{ price: numb
  * Merge freshly polled candles into the current series: update the last candle
  * in place (live close/high/low tick) and append genuinely new candles. Keeps
  * historical candles untouched so the chart doesn't jump around.
+ *
+ * The implementation lives in "@/src/lib/candleSeries" (shared with the chart
+ * component). Note the argument order matters:
+ *  - live poll  -> mergeCandles(prev, incoming)  => the fresh tick wins,
+ *  - history    -> mergeCandles(older, prev)      => the bars we already hold
+ *    win, so a backfilled page can never rewrite an existing candle.
  */
 function mergeLiveCandles(prev: Candle[], incoming: Candle[]): Candle[] {
-  if (incoming.length === 0) return prev;
-  const byTime = new Map(prev.map((c) => [c.time, c]));
-  for (const candle of incoming) byTime.set(candle.time, candle);
-  return [...byTime.values()].sort((a, b) => a.time - b.time);
+  return mergeCandles(prev, incoming) as Candle[];
 }
 
 
@@ -128,6 +171,10 @@ function TradeChart() {
 
   const [timeframe, setTimeframe] = useState<Timeframe>("1h");
   const [candles, setCandles] = useState<Candle[]>([]);
+  // MASLA — historical navigation state. `hasMoreHistory` tells the chart it
+  // may backfill; `loadingOlder` guards against duplicate concurrent fetches.
+  const [hasMoreHistory, setHasMoreHistory] = useState(false);
+  const [loadingOlder, setLoadingOlder] = useState(false);
   // MASLA 1/2 — fixed 1h/4h/1d series for the shared analyzeCoin() trend
   // condition ("Trend aligned 1h + 4h + 1d"). Fetched once per symbol,
   // independent of the selected chart timeframe.
@@ -223,15 +270,42 @@ function TradeChart() {
       };
     }
     setLoading(true);
-    void fetchCandles(symbol, dataMarket, timeframe).then((rows) => {
+    void fetchCandles(symbol, dataMarket, timeframe).then(({ candles: rows, hasMore }) => {
       if (cancelled) return;
       setCandles(rows);
+      setHasMoreHistory(hasMore);
       setLoading(false);
     });
     return () => {
       cancelled = true;
     };
   }, [symbol, dataMarket, timeframe, useSaved, savedSeries]);
+
+  // MASLA — historical navigation. The chart asks for older data when the
+  // user scrolls/pans to the left edge; we fetch the previous page and
+  // PREPEND it so the visible window keeps its position.
+  const loadOlderData = useCallback(async () => {
+    if (loadingOlder || !hasMoreHistory) return;
+    const oldest = candles[0]?.time;
+    if (!oldest) return;
+    setLoadingOlder(true);
+    try {
+      const { candles: older, hasMore } = await fetchOlderCandles(
+        symbol,
+        dataMarket,
+        timeframe,
+        oldest,
+      );
+      if (older.length === 0) {
+        setHasMoreHistory(false);
+        return;
+      }
+      setCandles((prev) => mergeLiveCandles(older, prev));
+      setHasMoreHistory(hasMore);
+    } finally {
+      setLoadingOlder(false);
+    }
+  }, [candles, hasMoreHistory, loadingOlder, symbol, dataMarket, timeframe]);
 
   // MASLA 1 — the 1h/4h/1d series analyzeCoin() needs for the multi-timeframe
   // trend condition. Same endpoint, same candles the Signals route reads, so
@@ -243,7 +317,7 @@ function TradeChart() {
       fetchCandles(symbol, dataMarket, "4h"),
       fetchCandles(symbol, dataMarket, "1d"),
     ]).then(([h1, h4, d1]) => {
-      if (!cancelled) setMultiTf({ h1, h4, d1 });
+      if (!cancelled) setMultiTf({ h1: h1.candles, h4: h4.candles, d1: d1.candles });
     });
     return () => {
       cancelled = true;
@@ -254,7 +328,7 @@ function TradeChart() {
   useEffect(() => {
     if (useSaved) return; // frozen signal basis: no live drift from the saved series
     const interval = setInterval(() => {
-      void fetchCandles(symbol, dataMarket, timeframe).then((rows) => {
+      void fetchCandles(symbol, dataMarket, timeframe).then(({ candles: rows }) => {
         if (rows.length === 0) return; // ignore empty/error polls, keep last state
         setCandles((prev) => mergeLiveCandles(prev, rows));
       });
@@ -645,6 +719,11 @@ function TradeChart() {
               levels={levels}
               patternOutlines={visiblePatternOutlines}
               arrowMarkers={visibleArrowMarkers}
+              // MASLA — historical navigation: the chart asks for older bars
+              // when the user scrolls/pans to the left edge.
+              hasMoreHistory={hasMoreHistory}
+              loadingOlder={loadingOlder}
+              onLoadOlderData={loadOlderData}
               // Anchors live on the frozen 1h series — on other timeframes
               // those bar times may not exist in the loaded data.
               patternPoints={savedSeries ? (apiSignal?.patternPoints ?? null) : null}

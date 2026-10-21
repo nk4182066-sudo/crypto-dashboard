@@ -148,7 +148,7 @@ function toEpoch(datetime?: string): number | null {
   return Math.floor(Date.UTC(y, m - 1, d, hh, mm, ss) / 1000);
 }
 
-/** Format an epoch second as TwelveData's `end` datetime ("2026-01-01 12:00:00" UTC). */
+/** Format an epoch second as TwelveData's `end_date` datetime ("2026-01-01 12:00:00" UTC). */
 function toEndParam(epochSeconds: number): string {
   return new Date(epochSeconds * 1000).toISOString().replace("T", " ").slice(0, 19);
 }
@@ -185,8 +185,13 @@ export async function fetchTwelveDataHistory(
     url.searchParams.set("outputsize", String(outputsize));
     url.searchParams.set("timezone", "UTC");
     url.searchParams.set("apikey", apiKey);
-    // Backward paging: only bars strictly before this epoch second.
-    if (before !== null && !quoteOnly) url.searchParams.set("end", toEndParam(before));
+    // Backward paging: Twelve Data supports `end_date` (NOT `end` — an
+    // unknown `end` param is silently IGNORED by the API, which would always
+    // return the newest bars and never backfill).
+    // `end_date` is INCLUSIVE (the bar opening exactly at that instant IS
+    // returned), so we ask for one second before the oldest bar we already
+    // hold to get a strictly older page.
+    if (before !== null && !quoteOnly) url.searchParams.set("end_date", toEndParam(before - 1));
 
     const cacheKey = `twelve:${tdSymbol}:${interval}:${outputsize}:${before ?? "now"}`;
 

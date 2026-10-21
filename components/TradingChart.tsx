@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   CandlestickSeries,
   ColorType,
@@ -19,15 +19,34 @@ import {
 import ChartAnalysisOverlay from "@/components/ChartAnalysisOverlay";
 import { generateChartMarkers, type ChartMarkerBundle } from "@/src/lib/chartMarkers";
 import { getChartAnalysis, type ChartAnalysis } from "@/src/lib/autoChartAnalysis";
+import { normalizeCandles, type SeriesCandle } from "@/src/lib/candleSeries";
 
-interface CandleData {
-  time: number;
-  open: number;
-  high: number;
-  low: number;
-  close: number;
-  volume: number;
-}
+type CandleData = SeriesCandle;
+
+/**
+ * MASLA — how far (as a fraction of the current price) a support/resistance
+ * level may sit from the live price and still be drawn. Levels further away
+ * are hidden: they are noise on the chart and stretch the price axis.
+ */
+const SR_PRICE_WINDOW = 0.03; // 3%
+
+/** MASLA — number of candles shown by default (the rest stays loaded). */
+const DEFAULT_VISIBLE_CANDLES = 100;
+
+/**
+ * MASLA — empty space (in bars) kept to the right of the newest candle so
+ * the live price does not sit glued to the right edge. Applied when the
+ * DEFAULT view is (re)built — never after the user has zoomed/panned, because
+ * forcing `rightOffset` there would silently override their position.
+ */
+const RIGHT_PADDING_BARS = 8;
+
+/**
+ * MASLA — timestamp normalization / de-duplication / ordering lives in
+ * "@/src/lib/candleSeries" so the trade page and the chart share ONE policy.
+ * (lightweight-charts REQUIRES strictly increasing times — unsorted or
+ * duplicated data throws inside setData and silently leaves holes.)
+ */
 
 /** Masla 1 — convert a chart symbol (e.g. "BTC-USD") to a Binance USDT pair ("BTCUSDT"). */
 function toBinancePair(symbol: string): string | null {
@@ -128,6 +147,10 @@ interface TradingChartProps {
 }
 
 export default function TradingChart({ data, chartKey = "", signals = [], candlePatterns = [], levels = [], trendline = [], trendDirection = "Sideways", patternOutline = [], patternOutlines = [], patternName = "", structureMarkers = [], indicatorOverlays = [], drawingMode = null, drawings = [], onDrawingComplete, hasMoreHistory = false, loadingOlder = false, onLoadOlderData = () => {}, arrowMarkers = [], patternPoints = null, height = 600, autoAnalyze = true, market = "crypto" }: TradingChartProps) {
+  // MASLA — the FULL history is kept (sorted, de-duplicated, timestamps
+  // normalized) so zooming out / "Fit" always exposes every available candle.
+  // Only the *visible* window is limited to the last 100 candles.
+  const normalizedData = useMemo(() => normalizeCandles(data), [data]);
   const chartContainerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const candlestickSeriesRef = useRef<ISeriesApi<'Candlestick', Time> | null>(null);
@@ -315,7 +338,7 @@ export default function TradingChart({ data, chartKey = "", signals = [], candle
         borderColor: '#2b3139',
         timeVisible: true,
         secondsVisible: false,
-        rightOffset: 6,
+        rightOffset: RIGHT_PADDING_BARS,
         // MASLA 3 — autoScale ON: the price axis always fits the full visible
         // range (upper + lower), so support/resistance lines stay on screen.
         // Drag moves the view, wheel zooms (handleScroll below).
@@ -336,11 +359,11 @@ export default function TradingChart({ data, chartKey = "", signals = [], candle
 
     chartRef.current = chart;
 
-    // Show only the last 100 candles by default so candles stay big and clear
-    // (fitContent squishes everything when there are 1000+ candles).
-    if (data.length > 0) {
-      const from = Math.max(0, data.length - 100);
-      chart.timeScale().setVisibleLogicalRange({ from, to: data.length });
+    // Show only the last 100 candles by default so candles stay big and clear.
+    // The full history stays loaded — scrolling/zooming out reveals the rest.
+    if (normalizedData.length > 0) {
+      const from = Math.max(0, normalizedData.length - DEFAULT_VISIBLE_CANDLES);
+      chart.timeScale().setVisibleLogicalRange({ from, to: normalizedData.length });
     }
 
     const candlestickSeries = chart.addSeries(CandlestickSeries, {
@@ -500,10 +523,25 @@ export default function TradingChart({ data, chartKey = "", signals = [], candle
     if (!candlestickSeries || !trendlineSeries || !patternSeries) return;
 
     // MASLA 3 — capture the level prices BEFORE setData so the very first
-    // autoscale run (and every later one) includes S/R + entry/SL/TP levels.
-    autoscalePricesRef.current = levels
-      .map((level) => level.price)
-      .filter((price) => Number.isFinite(price) && price > 0);
+    // autoscale run (and every later one) includes the levels that are
+    // actually drawn. Levels that are filtered out (far-away S/R) must NOT
+    // stretch the price axis, otherwise the candles get squished.
+    const latestClose = normalizedData[normalizedData.length - 1]?.close;
+    const hasLatestClose = typeof latestClose === "number" && Number.isFinite(latestClose) && latestClose > 0;
+    // MASLA — Support/Resistance are "watch levels" that are only meaningful
+    // when they sit close to the live price. Anything further away is hidden
+    // so the chart is not cluttered and the price axis is not stretched.
+    const visibleLevels = levels.filter((level) => {
+      const price = Number(level.price);
+      if (!Number.isFinite(price) || price <= 0) return false;
+      if (level.kind === "support" || level.kind === "resistance") {
+        if (!hasLatestClose) return false;
+        const distancePct = Math.abs((price - latestClose) / latestClose);
+        return distancePct <= SR_PRICE_WINDOW;
+      }
+      return true;
+    });
+    autoscalePricesRef.current = visibleLevels.map((level) => Number(level.price));
 
     const trendColor = trendDirection === "Bullish" ? "#22c55e" : trendDirection === "Bearish" ? "#ef4444" : "#a1a1aa";
     trendlineSeries.applyOptions({ color: trendColor, title: `${trendDirection} trend line` });
@@ -512,12 +550,12 @@ export default function TradingChart({ data, chartKey = "", signals = [], candle
     const isNewChart = !previous || previous.chartKey !== chartKey;
     const visibleRange = !isNewChart ? chartRef.current?.timeScale().getVisibleLogicalRange() : null;
     const firstPreviousIndex = previous && !isNewChart
-      ? data.findIndex((candle) => candle.time >= previous.data[0]?.time)
+      ? normalizedData.findIndex((candle) => candle.time >= previous.data[0]?.time)
       : -1;
     const prependedCount = firstPreviousIndex > 0 ? firstPreviousIndex : 0;
 
     const candlePatternsByTime = new Map(candlePatterns.map((pattern) => [pattern.time, pattern]));
-    const candles = data.map((candle) => {
+    const candles = normalizedData.map((candle) => {
       const pattern = candlePatternsByTime.get(candle.time);
       const color = pattern?.direction === "bullish" ? "#2dd4bf" : pattern?.direction === "bearish" ? "#fb7185" : pattern ? "#fbbf24" : undefined;
       return {
@@ -587,27 +625,44 @@ export default function TradingChart({ data, chartKey = "", signals = [], candle
     // Chart draws candlesticks + support/resistance/entry/SL/TP price lines and
     // the caller-supplied pattern outline / arrow markers.
     priceLinesRef.current.forEach((priceLine) => candlestickSeries.removePriceLine(priceLine));
-    const kindColor = (kind: ChartLevel["kind"]): string =>
-      kind === "entry" ? "#3b82f6"
-      : kind === "support" ? "#22c55e"
-      : kind === "takeProfit" ? "#22c55e"
-      : kind === "resistance" ? "#ef4444"
-      : kind === "stopLoss" ? "#ef4444"
-      : "#facc15";
-    priceLinesRef.current = levels.map((level) => {
-      const color = level.color ?? kindColor(level.kind);
-      return candlestickSeries.createPriceLine({
-        price: level.price,
-        color,
-        lineWidth: 2,
-        lineStyle: level.lineStyle
-          ? level.lineStyle === "dashed" ? LineStyle.Dashed : LineStyle.Solid
-          : level.kind === "stopLoss" || level.kind === "takeProfit" || level.kind === "fibonacci" ? LineStyle.Dashed : LineStyle.Solid,
-        axisLabelVisible: true,
-        axisLabelColor: color,
-        title: level.label ?? `${level.kind} ${level.price}`,
+    const alpha = (hex: string, a = 0.7): string => {
+      const r = parseInt(hex.slice(1, 3), 16);
+      const g = parseInt(hex.slice(3, 5), 16);
+      const b = parseInt(hex.slice(5, 7), 16);
+      return `rgba(${r},${g},${b},${a})`;
+    };
+    const kindColor = (kind: ChartLevel["kind"]): string => {
+      // 70% opacity so indicator lines don't cover candles (Bitget/Binance look).
+      return {
+        entry: alpha("#3b82f6"),
+        support: alpha("#22c55e"),
+        resistance: alpha("#ef4444"),
+        stopLoss: alpha("#ef4444"),
+        takeProfit: alpha("#22c55e"),
+        fibonacci: alpha("#facc15"),
+      }[kind];
+    };
+    // MASLA — Support/Resistance are "watch levels" that are only meaningful
+    // when they sit close to the live price. Anything further away is hidden
+    // so the chart is not cluttered and the price axis is not stretched.
+    priceLinesRef.current = visibleLevels
+      .map((level) => {
+        const color = level.color ?? kindColor(level.kind);
+        // Only the actionable levels (entry / SL / TP) get a price-axis tag —
+        // stacking a tag for every S/R line is what caused the label pile-up.
+        const showAxisLabel = level.kind === "entry" || level.kind === "stopLoss" || level.kind === "takeProfit";
+        return candlestickSeries.createPriceLine({
+          price: level.price,
+          color,
+          lineWidth: 2,
+          lineStyle: level.lineStyle
+            ? level.lineStyle === "dashed" ? LineStyle.Dashed : LineStyle.Solid
+            : level.kind === "stopLoss" || level.kind === "takeProfit" || level.kind === "fibonacci" ? LineStyle.Dashed : LineStyle.Solid,
+          axisLabelVisible: showAxisLabel,
+          axisLabelColor: color,
+          title: level.label ?? `${level.kind} ${level.price}`,
+        });
       });
-    });
 
     // Explicit arrow markers (buy/sell points) supplied by the caller.
     if (markersRef.current) {
@@ -640,20 +695,31 @@ export default function TradingChart({ data, chartKey = "", signals = [], candle
       markersRef.current.setMarkers(combined);
     }
 
-    if (data.length > 0 && chartRef.current && (isNewChart || !previous?.data.length || !visibleRange)) {
-      // MASLA 3 — show the FULL range (upper + lower) on a new chart so support/
-      // resistance levels and every candle are visible; autoScale stays on so the
-      // price axis fits all data. Drag = move, wheel = zoom (chart options below).
-      chartRef.current.timeScale().fitContent();
+    if (normalizedData.length > 0 && chartRef.current && (isNewChart || !previous?.data.length || !visibleRange)) {
+      // MASLA — the DEFAULT view is the most recent DEFAULT_VISIBLE_CANDLES
+      // candles (Binance/Bitget style: big, readable candles). The complete
+      // history is still loaded on the series, so zooming out (or the chart's
+      // built-in "fit content") exposes every available candle.
+      const total = normalizedData.length;
+      const visible = Math.min(DEFAULT_VISIBLE_CANDLES, total);
+      chartRef.current.timeScale().setVisibleLogicalRange({
+        from: total - visible,
+        to: total,
+      });
       interactedRef.current = false;
+      // Keep the last candle off the right edge so the view breathes like
+      // Bitget/Binance (the newest bar is not glued to the edge). Only applied
+      // together with the DEFAULT view — forcing it after the user has
+      // zoomed/panned would silently override their position.
+      chartRef.current.timeScale().applyOptions({ rightOffset: RIGHT_PADDING_BARS });
     } else if (prependedCount > 0 && visibleRange && chartRef.current) {
       chartRef.current.timeScale().setVisibleLogicalRange({
         from: visibleRange.from + prependedCount,
         to: visibleRange.to + prependedCount,
       });
     }
-    previousDataRef.current = { chartKey, data };
-  }, [data, chartKey, signals, candlePatterns, levels, trendline, trendDirection, patternOutline, patternOutlines, patternName, structureMarkers, indicatorOverlays, arrowMarkers, patternPoints]);
+    previousDataRef.current = { chartKey, data: normalizedData };
+  }, [normalizedData, chartKey, signals, candlePatterns, levels, trendline, trendDirection, patternOutline, patternOutlines, patternName, structureMarkers, indicatorOverlays, arrowMarkers, patternPoints]);
 
   const handleDrawingClick = (event: React.MouseEvent<SVGSVGElement>) => {
     if (!drawingMode || !onDrawingComplete) return;

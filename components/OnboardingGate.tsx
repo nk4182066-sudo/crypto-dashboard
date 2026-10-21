@@ -21,7 +21,7 @@ export default function OnboardingGate({ children }: { children: React.ReactNode
 
   // Standalone auth routes (e.g. /login) manage their own access — never gate
   // them, otherwise the login screen would be hidden behind the onboarding flow.
-  const isAuthRoute = pathname === "/login";
+  const isAuthRoute = ["/login", "/signup"].includes(pathname);
 
   // Decide the starting step from localStorage (client-only).
   useEffect(() => {
