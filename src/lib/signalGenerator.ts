@@ -238,6 +238,11 @@ export function generateFullSignal(input: FullSignalInput): FullSignal {
   const price = Number.isFinite(input.price) && input.price > 0 ? input.price : 0;
   if (price <= 0) throw new Error(`[signalGenerator] REJECT: price ${input.price} <= 0 for ${symbol}`);
 
+// CANDLESTICK NEUTRAL REJECTION - if type is "neutral", reject signal
+if (candlestick?.type === "neutral") {
+  console.warn(`[generateFullSignal] Rejecting signal for ${symbol}: candlestick pattern is neutral (no confirmation)`);
+  return null;
+}
   // Derive support / resistance so they are never empty (Rule 5).
   const support = input.support && input.support > 0 ? input.support : roundPrice(price * 0.97);
   const resistance = input.resistance && input.resistance > 0 ? input.resistance : roundPrice(price * 1.03);
@@ -258,6 +263,23 @@ export function generateFullSignal(input: FullSignalInput): FullSignal {
     resistance: input.resistance ?? null,
   });
 
+// Validate SL/TP are solid positive numbers (not 0, not null, not NaN)
+if (stopLoss == null || stopLoss <= 0 || isNaN(stopLoss)) {
+  console.warn(`[generateFullSignal] Rejecting signal for ${symbol}: invalid stopLoss`);
+  return null;
+}
+if (tp1 == null || tp1 <= 0 || isNaN(tp1)) {
+  console.warn(`[generateFullSignal] Rejecting signal for ${symbol}: invalid tp1`);
+  return null;
+}
+if (tp2 == null || tp2 <= 0 || isNaN(tp2)) {
+  console.warn(`[generateFullSignal] Rejecting signal for ${symbol}: invalid tp2`);
+  return null;
+}
+if (tp3 == null || tp3 <= 0 || isNaN(tp3)) {
+  console.warn(`[generateFullSignal] Rejecting signal for ${symbol}: invalid tp3`);
+  return null;
+}
   // Entry 1 (aggressive) = current price; Entry 2 (conservative) = the S/R
   // level (support for longs, resistance for shorts).
   const entry1 = plan.entry;
