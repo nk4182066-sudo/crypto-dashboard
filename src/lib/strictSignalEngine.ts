@@ -74,8 +74,8 @@ function conditionEmaAlignment(indicators: StrictIndicators, direction: Directio
 }
 
 function conditionVolume(indicators: StrictIndicators): ConditionChecks["volume"] {
-  if (indicators.volumeRatio <= 2.0) {
-    return { pass: false, detail: `Volume ${indicators.volumeRatio.toFixed(2)}x avg (>2.0x required)`, ratio: indicators.volumeRatio };
+  if (indicators.volumeRatio <= 1.2) {
+    return { pass: false, detail: `Volume ${indicators.volumeRatio.toFixed(2)}x avg (>1.2x required)`, ratio: indicators.volumeRatio };
   }
   return { pass: true, detail: `Volume ${indicators.volumeRatio.toFixed(2)}x avg + rising in trade direction`, ratio: indicators.volumeRatio };
 }
@@ -410,6 +410,8 @@ export interface SignalTierVerdict {
   if (conditionsPassed >= 8 && expertsAgreed >= 4) return 95;
   if (conditionsPassed >= 7 && expertsAgreed >= 3) return 85;
   if (conditionsPassed >= 6 && expertsAgreed >= 3) return 80;
+  // Relaxed tier for slow markets: 6/8 conditions + 2/4 experts → score 80.
+  if (conditionsPassed >= 6 && expertsAgreed >= 2) return 80;
   return null;
 }
 

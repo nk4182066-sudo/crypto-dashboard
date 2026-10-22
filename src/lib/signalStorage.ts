@@ -82,6 +82,8 @@ export interface StoredSignal {
   lessonUrdu: string;
   /** English lesson. */
   lessonEnglish: string;
+  /** Day bucket (YYYY-MM-DD) this signal belongs to, used for daily reset / stats. */
+  dateKey?: string;
 }
 
 /** Input accepted by saveSignal() ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â exactly the trade-plan fields the Signals page has. */
