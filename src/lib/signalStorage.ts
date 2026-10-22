@@ -33,13 +33,13 @@ export const LEGACY_SIGNAL_KEY = "signal-history";
  * 85 = Quality with Quantity spec (85+ only — Tier 2 STRONG minimum).
  * Anything below 85 is REJECTED — never shown, never saved, never alerted.
  * No relaxation tier exists; a quiet market shows fewer cards instead of ghatiya fillers. */
-export const MIN_SCORE = 80;
+export const MIN_SCORE = 75;
 /**
  * Signals page LIST display floor. Same as MIN_SCORE (85 = the Quality spec
  * floor) — no relaxation, no fallback. If a market emits no 85+ signals, the
  * tab shows the "Aaj ke liye best setups pure ho gaye hain" empty state.
  */
-export const DISPLAY_MIN_SCORE = 80;
+export const DISPLAY_MIN_SCORE = 75;
 /** Max records kept; oldest are dropped when this is exceeded.
  *  300 ≈ a full history (route emits ≤10/market/day, 4 markets). */
 export const MAX_SIGNALS = 300;
@@ -690,5 +690,6 @@ export function applyCloudOutcome(
     lessonEnglish: lesson.english,
   };
 }
+
 
 

@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { createUserWithEmailAndPassword, type AuthError } from "firebase/auth";
 import { auth, db, COLLECTION_USERS, onAuthStateChanged } from "@/src/lib/firebase";
+import { clearUser } from "@/src/lib/userAuth";
 import { doc, setDoc, serverTimestamp } from "firebase/firestore";
 
 const BG = "#0B0E11";
@@ -183,6 +184,9 @@ export default function SignUpPage() {
       }
 
       // 2. Signup ke baad SEEDHA dashboard redirect — Google login trigger nahi
+      // Clear existing td-user localStorage so onboarding flow starts fresh
+      // and doesn't re-initiate Google auth unnecessarily after signup redirect
+      clearUser();
       redirecting.current = true;
       router.push("/");
     } catch (err: any) {
