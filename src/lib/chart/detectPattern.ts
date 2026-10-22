@@ -43,7 +43,12 @@ export interface PatternResult {
   confidence: number;
   /** Short rationale. */
   note: string;
-  /** Anchor points for chart markers (Double Top/Bottom pivots + neckline). */
+  /**
+   * Anchor points for chart markers.
+   * Double Top/Bottom → p1/p2 (the two equal pivots).
+   * Triple Top/Bottom → p1/p2/p3 (the three equal pivots).
+   * Head & Shoulders (and inverse) → p1/p2 = the shoulders, p3 = the head.
+   */
   points?: { p1: { time: number; price: number }; p2: { time: number; price: number }; p3?: { time: number; price: number }; neckline: number };
 }
 
@@ -229,7 +234,7 @@ function detectTripleTop(swings: Swing[], close: number): PatternResult | null {
     pattern: "Triple Top",
     type: "bearish",
     confidence: 86,
-    points: { p1: { time: a.time, price: a.price }, p2: { time: b.time, price: b.price }, p3: { time: c.time, price: c.price }, neckline: (a.price + b.price + c.price) / 3 },
+    points: { p1: { time: a.time, price: a.price }, p2: { time: b.time, price: b.price }, p3: { time: c.time, price: c.price }, neckline },
     note: `Three equal swing highs within ${TRIPLE_EQ_PCT}% — resistance rejected price three times, close back below the level.`,
   };
 }
@@ -253,7 +258,7 @@ function detectTripleBottom(swings: Swing[], close: number): PatternResult | nul
     pattern: "Triple Bottom",
     type: "bullish",
     confidence: 86,
-    points: { p1: { time: a.time, price: a.price }, p2: { time: b.time, price: b.price }, p3: { time: c.time, price: c.price }, neckline: (a.price + b.price + c.price) / 3 },
+    points: { p1: { time: a.time, price: a.price }, p2: { time: b.time, price: b.price }, p3: { time: c.time, price: c.price }, neckline },
     note: `Three equal swing lows within ${TRIPLE_EQ_PCT}% — support held three times, close back above the level.`,
   };
 }
@@ -332,11 +337,16 @@ function detectHeadAndShoulders(swings: Swing[], close: number): PatternResult |
   if (!n1 || !n2 || !eqP(n1.price, n2.price, NECKLINE_EQ_PCT)) return null;
   const neckline = (n1.price + n2.price) / 2;
   if (close >= neckline) return null;
+  // p1/p2 = the two shoulders, p3 = the head.
+  const p1 = { time: ls.time, price: ls.price };
+  const p2 = { time: rs.time, price: rs.price };
+  const p3 = { time: head.time, price: head.price };
   return {
     pattern: "Head & Shoulders",
     type: "bearish",
     confidence: 84,
     note: `Head above matched shoulders (${SHOULDER_EQ_PCT}%), neckline matched within ${NECKLINE_EQ_PCT}% and price closed below it — bearish reversal.`,
+    points: { p1, p2, p3, neckline },
   };
 }
 
@@ -361,11 +371,16 @@ function detectInverseHeadAndShoulders(swings: Swing[], close: number): PatternR
   if (!n1 || !n2 || !eqP(n1.price, n2.price, NECKLINE_EQ_PCT)) return null;
   const neckline = (n1.price + n2.price) / 2;
   if (close <= neckline) return null;
+  // p1/p2 = the two shoulders, p3 = the head.
+  const p1 = { time: ls.time, price: ls.price };
+  const p2 = { time: rs.time, price: rs.price };
+  const p3 = { time: head.time, price: head.price };
   return {
     pattern: "Inverse Head & Shoulders",
     type: "bullish",
     confidence: 84,
     note: `Head below matched shoulders (${SHOULDER_EQ_PCT}%), neckline matched within ${NECKLINE_EQ_PCT}% and price closed above it — bullish reversal.`,
+    points: { p1, p2, p3, neckline },
   };
 }
 

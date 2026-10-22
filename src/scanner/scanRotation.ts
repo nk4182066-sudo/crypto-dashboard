@@ -9,7 +9,7 @@
  */
 import { scanUniverse, type ScanTarget, type ScanMarket } from "./universe";
 
-export const SCAN_WINDOW_SIZE = 50;
+export const SCAN_WINDOW_SIZE = 100;
 
 const MARKETS: ScanMarket[] = ["crypto", "forex", "stocks", "metals"];
 /** Per-market rotation offset (in-memory; resets on cold start). */

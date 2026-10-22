@@ -61,6 +61,40 @@ function fmtDate(ts: number): string {
   return d.toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
 }
 
+/** Masla 2 — Asia/Karachi timezone milla, aaj ka start/end UTC timestamps (1970-01-01 00:00:00 GMT+5). */
+function getTodayDateRange(): { start: number; end: number } {
+  const now = new Date();
+  const jan1 = new Date(now.getFullYear(), 0, 0, 0, 0, 0, 0);
+  const todayMS = now.getTime() - jan1.getTime();
+  const oneDay = 86400000;
+  const todayStart = now.getTime() - todayMS;
+  return { start: todayStart, end: todayStart + oneDay };
+}
+
+function isToday(ts: number): boolean {
+  const { start, end } = getTodayDateRange();
+  return ts >= start && ts < end;
+}
+
+function isThisYear(ts: number): boolean {
+  const d = new Date(ts);
+  return d.getFullYear() === new Date().getFullYear();
+}
+
+function isThisMonth(ts: number): boolean {
+  const d = new Date(ts);
+  const now = new Date();
+  return d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear();
+}
+
+function isThisWeek(ts: number): boolean {
+  const now = new Date();
+  const startOfWeek = new Date(now);
+  startOfWeek.setDate(now.getDate() - now.getDay());
+  startOfWeek.setHours(0, 0, 0, 0);
+  return ts >= startOfWeek.getTime();
+}
+
 /**
  * MASLA 2 — rebuild a full StoredSignal card from a Firestore CloudDoc so the
  * Results page shows EVERY signal the server emitted (not just ones this
@@ -334,11 +368,13 @@ function ResultsPageContent() {
   }, [records]);
 
   const filtered = useMemo(() => {
+    if (time === "today") {
+      return records.filter((r) => isToday(r.createdAt));
+    }
     const now = Date.now();
     const day = 24 * 60 * 60 * 1000;
     return records.filter((r) => {
       if (status !== "all" && r.status !== status) return false;
-      if (time === "today" && now - r.createdAt > day) return false;
       if (time === "week" && now - r.createdAt > 7 * day) return false;
       if (time === "month" && now - r.createdAt > 30 * day) return false;
       return true;

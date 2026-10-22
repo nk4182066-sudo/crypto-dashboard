@@ -20,6 +20,10 @@ import ChartAnalysisOverlay from "@/components/ChartAnalysisOverlay";
 import { generateChartMarkers, type ChartMarkerBundle } from "@/src/lib/chartMarkers";
 import { getChartAnalysis, type ChartAnalysis } from "@/src/lib/autoChartAnalysis";
 import { normalizeCandles, type SeriesCandle } from "@/src/lib/candleSeries";
+import {
+  toPatternAnchorMarkers,
+  type PatternAnchorPoints,
+} from "@/src/lib/chart/patternAnchors";
 
 type CandleData = SeriesCandle;
 
@@ -138,8 +142,8 @@ interface TradingChartProps {
   onLoadOlderData?: () => void;
   /** Explicit arrow markers (buy/sell points) drawn on the series. */
   arrowMarkers?: ChartArrowMarker[];
-  /** Double Top/Bottom anchor points (p1/p2 + neckline) drawn as yellow circles. */
-  patternPoints?: { p1: ChartPoint; p2: ChartPoint; neckline: number } | null;
+  /** Chart-pattern anchor points (p1/p2/p3 + neckline) drawn as gold circles. */
+  patternPoints?: PatternAnchorPoints | null;
   height?: number;
   /** Fetch and show auto analysis on symbol change (default on). */
   autoAnalyze?: boolean;
@@ -673,21 +677,11 @@ export default function TradingChart({ data, chartKey = "", signals = [], candle
         shape: marker.shape,
         text: marker.text,
       }));
-      // Double Top/Bottom anchors: yellow circles at p1/p2 (position inferred
-      // from whether the pivots sit above/below the neckline).
-      const patternPointMarkers: SeriesMarker<Time>[] = [];
-      if (patternPoints) {
-        const position = patternPoints.p1.price >= patternPoints.neckline ? "aboveBar" : "belowBar";
-        for (const pt of [patternPoints.p1, patternPoints.p2]) {
-          patternPointMarkers.push({
-            time: pt.time as UTCTimestamp,
-            position,
-            color: "#FFD700",
-            shape: "circle",
-            text: "",
-          });
-        }
-      }
+      // Chart-pattern anchors: gold circles at every anchor the pattern
+      // provides (p1/p2 for Double Top/Bottom, p1/p2/p3 for Triple Top/Bottom
+      // and Head & Shoulders). Position inferred from whether the pivots sit
+      // above/below the neckline.
+      const patternPointMarkers: SeriesMarker<Time>[] = toPatternAnchorMarkers(patternPoints);
       // Candlestick pattern markers: Morning Star (bullish → green circle below bar),
       // Evening Star (bearish → red circle above bar).
       const candlePatternMarkers: SeriesMarker<Time>[] = candlePatterns.map((p) => ({

@@ -73,8 +73,14 @@ export interface AnalyzeResult {
   chartPattern: string | null;
   /** Confidence (0-100) of the chart pattern above (0 when none). */
   chartPatternConfidence: number;
-  /** Anchor points (p1/p2/neckline) for the chart pattern, when available. */
-  chartPatternPoints?: { p1: { time: number; price: number }; p2: { time: number; price: number }; neckline: number } | null;
+  /** Anchor points (p1/p2/p3 + neckline) for the chart pattern, when available. */
+  chartPatternPoints?: {
+    p1: { time: number; price: number };
+    p2: { time: number; price: number };
+    /** Third anchor — Triple Top/Bottom + Head & Shoulders (optional). */
+    p3?: { time: number; price: number };
+    neckline: number;
+  } | null;
   candlestick: string | null;
   candlestickType: "bullish" | "bearish" | "neutral" | null;
   /** Confidence (0-100) of the candlestick confirmation above (0 when none). */

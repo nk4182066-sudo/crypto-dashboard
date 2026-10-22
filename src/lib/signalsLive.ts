@@ -59,10 +59,12 @@ export const LIVE_CAPS: Record<ScanMarket, number> = {
 /** Which Cloud Firestore statuses are considered resolved (win/loss/expiry). */
 export const RESOLVED_STATUSES = new Set(["WIN", "LOSS", "EXPIRED"]);
 
-/** Double Top/Bottom anchors (p1/p2 + neckline) — mirrors detectPattern's `PatternResult.points`. */
+/** Chart-pattern anchors (p1/p2/p3 + neckline) — mirrors detectPattern's `PatternResult.points`. */
 export interface SignalPatternPoints {
   p1: { time: number; price: number };
   p2: { time: number; price: number };
+  /** Third anchor — Triple Top/Bottom + Head & Shoulders (optional). */
+  p3?: { time: number; price: number };
   neckline: number;
 }
 
@@ -98,7 +100,7 @@ export interface EmittedMarketSignal {
   timeframeMinutes?: number | null;
   /** Frozen last-100 h1 bars the signal was scored on — the Trade page's single-truth chart source. */
   candles?: Candle[] | null;
-  /** Double Top/Bottom anchors (p1/p2 + neckline) drawn as yellow circles on the Trade chart. */
+  /** Chart-pattern anchors (p1/p2/p3 + neckline) drawn as gold circles on the Trade chart. */
   patternPoints?: SignalPatternPoints | null;
 }
 
@@ -138,9 +140,9 @@ function toEmittedSignal(item: { symbol: string; label: string; market: ScanMark
     // DYNAMIC plan inputs — cards/docs rebuild the identical ATR-based TP/SL.
     atr: full.atr,
     timeframeMinutes: full.tfMinutes,
-    // SINGLE-TRUTH CHART SOURCE: freeze the last 100 h1 bars + the Double
-    // Top/Bottom anchors the detector saw, so the Trade page renders EXACTLY
-    // the series the score was computed on (no live re-fetch drift).
+    // SINGLE-TRUTH CHART SOURCE: freeze the last 100 h1 bars + the chart-pattern
+    // anchors the detector saw (p1/p2/p3 + neckline), so the Trade page renders
+    // EXACTLY the series the score was computed on (no live re-fetch drift).
     candles: h1.slice(-100),
     patternPoints: full.chartPatternPoints ?? null,
   };
@@ -502,7 +504,7 @@ function hydrateCandles(raw: unknown): Candle[] | null {
   return out.length > 0 ? out.slice(-100) : null;
 }
 
-/** Re-read the Double Top/Bottom anchors from a stored doc (null when absent/corrupt). */
+/** Re-read the chart-pattern anchors from a stored doc (null when absent/corrupt). */
 function hydratePatternPoints(raw: unknown): SignalPatternPoints | null {
   if (!raw || typeof raw !== "object") return null;
   const rec = raw as Record<string, unknown>;
@@ -515,9 +517,10 @@ function hydratePatternPoints(raw: unknown): SignalPatternPoints | null {
   };
   const p1 = point(rec.p1);
   const p2 = point(rec.p2);
+  const p3 = point(rec.p3);
   const neckline = Number(rec.neckline);
   if (!p1 || !p2 || !Number.isFinite(neckline)) return null;
-  return { p1, p2, neckline };
+  return { p1, p2, ...(p3 ? { p3 } : {}), neckline };
 }
 
 

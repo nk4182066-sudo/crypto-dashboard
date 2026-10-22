@@ -182,38 +182,7 @@ export default function SignUpPage() {
         return;
       }
 
-      // 2. Firestore mein user data save karein
-      try {
-        await setDoc(doc(db, COLLECTION_USERS, result.user.uid), {
-          uid: result.user.uid,
-          name: form.name,
-          email: form.email,
-          phone: form.phone,
-          age: form.age,
-          city: form.city,
-          country: form.country,
-          fullAddress: form.fullAddress,
-          createdAt: serverTimestamp(),
-        });
-      } catch (firestoreError: any) {
-        console.log("Signup Error:", firestoreError.code, firestoreError.message);
-        const code = firestoreError?.code;
-        if (code === "permission-denied") {
-          setSubmitError("Database mein save karne ki permission nahi hai. Firestore Rules check karein.");
-        } else if (code === "auth/network-request-failed") {
-          setSubmitError("Internet connection check karein.");
-        } else {
-          setSubmitError(firestoreError.message || "Firestore mein user save nahi hua. Dobara try karein.");
-        }
-        setSubmitting(false);
-        return;
-      }
-
-      try {
-        localStorage.setItem("onboarding-complete", "true");
-      } catch {
-        /* ignore quota / private-mode failures */
-      }
+      // 2. Signup ke baad SEEDHA dashboard redirect — Google login trigger nahi
       redirecting.current = true;
       router.push("/");
     } catch (err: any) {

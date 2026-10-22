@@ -25,14 +25,22 @@ function conditionSupportResistance(candles4h: Candle[], indicators: StrictIndic
   return { pass: true, detail: `Resistance ${resistance.toFixed(0)} within 1.5x ATR (rejection zone)`, support, resistance };
 }
 
+/** MASLA 3 — relaxed thresholds for signal generation. */
+const RELAXED_RSI_OVERSOLD = 35;
+const RELAXED_RSI_OVERBOUGHT = 65;
+const RELAXED_VOLUME_RATIO = 1.0;
+const RELAXED_EXPERTS_MIN = 2;
+const RELAXED_SCORE_MIN = 75;
+
+/** MASLA 3 — relaxed RSI condition for signal generation. */
 function conditionRsi(indicators: StrictIndicators, direction: Direction): ConditionChecks["rsi"] {
   const rsi = indicators.rsi ?? 0;
   if (direction === "bullish") {
-    if (rsi < 30) return { pass: true, detail: `RSI ${rsi.toFixed(1)} oversold (<30)`, rsi };
-    return { pass: false, detail: `RSI ${rsi.toFixed(1)} not oversold (<30 required)`, rsi };
+    if (rsi < RELAXED_RSI_OVERSOLD) return { pass: true, detail: `RSI ${rsi.toFixed(1)} oversold (<${RELAXED_RSI_OVERSOLD})`, rsi };
+    return { pass: false, detail: `RSI ${rsi.toFixed(1)} not oversold (<${RELAXED_RSI_OVERSOLD} required)`, rsi };
   }
-  if (rsi > 70) return { pass: true, detail: `RSI ${rsi.toFixed(1)} overbought (>70)`, rsi };
-  return { pass: false, detail: `RSI ${rsi.toFixed(1)} not overbought (>70 required)`, rsi };
+  if (rsi > RELAXED_RSI_OVERBOUGHT) return { pass: true, detail: `RSI ${rsi.toFixed(1)} overbought (>${RELAXED_RSI_OVERBOUGHT})`, rsi };
+  return { pass: false, detail: `RSI ${rsi.toFixed(1)} not overbought (>${RELAXED_RSI_OVERBOUGHT} required)`, rsi };
 }
 
 function conditionMacd(indicators: StrictIndicators, direction: Direction): ConditionChecks["macd"] {
@@ -74,8 +82,8 @@ function conditionEmaAlignment(indicators: StrictIndicators, direction: Directio
 }
 
 function conditionVolume(indicators: StrictIndicators): ConditionChecks["volume"] {
-  if (indicators.volumeRatio <= 1.2) {
-    return { pass: false, detail: `Volume ${indicators.volumeRatio.toFixed(2)}x avg (>1.2x required)`, ratio: indicators.volumeRatio };
+  if (indicators.volumeRatio < RELAXED_VOLUME_RATIO) {
+    return { pass: false, detail: `Volume ${indicators.volumeRatio.toFixed(2)}x avg (>=${RELAXED_VOLUME_RATIO}x required)`, ratio: indicators.volumeRatio };
   }
   return { pass: true, detail: `Volume ${indicators.volumeRatio.toFixed(2)}x avg + rising in trade direction`, ratio: indicators.volumeRatio };
 }
@@ -409,9 +417,7 @@ export interface SignalTierVerdict {
 }export function tierScore(conditionsPassed: number, expertsAgreed: number): number | null {
   if (conditionsPassed >= 8 && expertsAgreed >= 4) return 95;
   if (conditionsPassed >= 7 && expertsAgreed >= 3) return 85;
-  if (conditionsPassed >= 6 && expertsAgreed >= 3) return 80;
-  // Relaxed tier for slow markets: 6/8 conditions + 2/4 experts → score 80.
-  if (conditionsPassed >= 6 && expertsAgreed >= 2) return 80;
+  if (conditionsPassed >= 6 && expertsAgreed >= 2) return 75;
   return null;
 }
 
