@@ -467,7 +467,7 @@ function SignalsPageContent() {
     if (loading) return;
     for (const signal of displayed) {
       if (signal.score < MIN_SCORE) continue;
-      const full: FullSignal = generateFullSignal({
+      const full = generateFullSignal({
         symbol: signal.symbol,
         market: signal.market,
         price: signal.price,
@@ -487,6 +487,7 @@ function SignalsPageContent() {
           ? { name: signal.candlestickPattern, confidence: signal.candlestickConfidence, type: signal.direction }
           : null,
       });
+      if (!full) continue;
       saveSignal({
         symbol: signal.symbol,
         market: signal.market,
@@ -577,7 +578,7 @@ function SignalsPageContent() {
               </h2>
             ) : null;
             const status = statusOf(signal);
-            const full: FullSignal = generateFullSignal({
+            const full = generateFullSignal({
               symbol: signal.symbol,
               market: signal.market,
               price: signal.price,
@@ -598,6 +599,7 @@ function SignalsPageContent() {
                 ? { name: signal.candlestickPattern, confidence: signal.candlestickConfidence, type: signal.direction }
                 : null,
             });
+            if (!full) return null;
             const why = lang === "urdu" ? full.whyRomanUrdu : full.whyEnglish;
             const teacher = lang === "urdu" ? full.teacherNotesRomanUrdu : full.teacherNotesEnglish;
             const dirColor = full.direction === "bearish" ? RED : full.direction === "bullish" ? GREEN : MUTED;

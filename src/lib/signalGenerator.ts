@@ -233,7 +233,7 @@ export function buildLeverageLevels(
  *   trimmed by Support/Resistance — never fixed 3% / 10/20/30% (atrPlan.ts)
  * - R:R per target = reward / risk of the SAME plan (TP3 R:R >= 1:3)
  */
-export function generateFullSignal(input: FullSignalInput): FullSignal {
+export function generateFullSignal(input: FullSignalInput): FullSignal | null {
   const { symbol, market, direction, pattern = null, score = 0, bias, reason } = input;
   const price = Number.isFinite(input.price) && input.price > 0 ? input.price : 0;
   if (price <= 0) throw new Error(`[signalGenerator] REJECT: price ${input.price} <= 0 for ${symbol}`);

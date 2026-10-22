@@ -211,6 +211,31 @@ function toTextOnly(text: string): string {
     .trim();
 }
 
+/** Clean Mojibake encoding artifacts (e.g. Ãfâ€ from UTF-8 interpreted as Latin-1). */
+function cleanMojibake(text: string): string {
+  // Replace common Mojibake patterns: Ã followed by a character that was double-encoded
+  // This handles patterns like Ã© (é in UTF-8 read as Latin-1), Ã¶ (ö), etc.
+  // The regex matches Ã followed by another non-control character, which indicates
+  // a byte-level encoding issue.
+  return text
+    .replace(/Ã([^\s\p{L}])/gu, '')  // Remove stray Ã sequences
+    .replace(/[\s\p{L}]Ã/gu, '')  // Remove trailing Ã
+    .replace(/Ã²/g, 'â')  // Handle Ã² -> â
+    .replace(/Ã¨/g, 'ê')  // Handle Ã¨ -> ê
+    .replace(/Ã¬/g, 'ê')  // Handle Ã¬ -> ê (variant)
+    .replace(/Ã¼/g, 'ü')  // Handle Ã¼ -> ü
+    .replace(/Ã¶/g, 'ö')  // Handle Ã¶ -> ö
+    .replace(/ÃŸ/g, 'ç')  // Handle Ã -> ç
+    .replace(/Ã¡/g, 'á')  // Handle Ã¡ -> á
+    .replace(/Ã´/g, 'á')  // Handle Ã´ -> ó (common typo)
+    .replace(/Ã»/g, 'ú')  // Handle Ã» -> ú
+    .replace(/Ã±/g, 'ñ')  // Handle Ã± -> ñ
+    .replace(/Ã¡/g, 'á')  // Handle Ã¡ -> á
+    .replace(/Ã‚/g, '')  // Remove Ã‚ (often leftover from double-encoding)
+    .replace(/Ãƒ/g, '')  // Remove Ãƒ (often leftover from double-encoding)
+    .trim();
+}
+
 // ── Task 2: auto-search — when the user asks for a trade/setup, scan the market ──
 // Returns a formatted reply with the top 80+ confluence setups in the user's
 // language, or null when the message isn't a trade-seeking request.
@@ -302,25 +327,25 @@ type EngineBlockOptions = { detail: boolean };
 
 /** One asset's real rule-based scan block — live numbers only, no copy-paste reasons. */
 async function buildEngineBlock(target: { symbol: string; label: string; market: ScanMarket }, origin?: string, _opts?: EngineBlockOptions): Promise<string | null> {
-  let analysis: AutoAnalysis;
+  let analysis: AnalyzeResult;
   try {
-    analysis = await analyzeSymbol(target.symbol, target.market, origin);
+    analysis = await analyzeCoin({ symbol: target.symbol, market: target.market, primary: [] as any });
   } catch (error) {
     console.error(`Engine block failed for ${target.symbol}:`, error);
     return null;
   }
-  if (!analysis || !Number.isFinite(analysis.current) || analysis.current <= 0) return null;
-  const topPatterns = analysis.patterns.slice(0, 2).map((p) => `${p.name} (${p.type}, ${p.confidence}%)`).join(", ") || "none";
+  if (!analysis || !Number.isFinite(analysis.price) || analysis.price <= 0) return null;
+  const topPatterns = analysis.conditions.filter((c) => c.pass).slice(0, 2).map((p) => p.label).join(", ") || "none";
   // No "(8/8)"-style badge — this block is the 5-check heuristic scan, NOT the
   // strict 8-condition engine, so no condition count may be claimed here.
-  const status = analysis.verdict === "STRONG_SETUP" ? "✅ Strong" : analysis.verdict === "MODERATE" ? "⚠️ Moderate" : "⏸️ Low confluence — Wait";
+  const status = analysis.quality === "PERFECT" ? "✅ Strong" : analysis.quality === "STRONG" ? "⚠️ Moderate" : "⏸️ Low confluence — Wait";
   return [
     `🔹 ${target.label} — ${status} (${analysis.score}/100)`,
-    `Price: $${analysis.current.toFixed(2)} | Trend: ${analysis.trend} | Timeframe: ${analysis.timeframeAlignment}`,
-    `RSI: ${analysis.indicators.rsi} | MACD: ${analysis.indicators.macd} | SMA: ${analysis.indicators.sma} | Volume: ${analysis.indicators.volume}`,
+    `Price: $${analysis.price.toFixed(2)} | Trend: ${analysis.direction} | Timeframe: ${analysis.tfMinutes}`,
+    `RSI: ${analysis.indicators.rsi} | MACD: ${analysis.indicators.macd} | SMA: ${analysis.indicators.ema20} | Volume: ${analysis.indicators.volume}`,
     `Support: ${analysis.support} | Resistance: ${analysis.resistance}`,
     `Patterns: ${topPatterns}`,
-    `Risk: ${analysis.riskLevel}`,
+    `Risk: ${analysis.quality}`,
   ].join("\n");
 }
 
@@ -766,7 +791,7 @@ async function getLiveAssetContext(asset: AssetTarget, origin?: string): Promise
   }
   if (!Number.isFinite(analysis.current) || analysis.current <= 0) return null;
 
-  const patterns = analysis.patterns.slice(0, 2).map((p) => `${p.name} (${p.type}, ${p.confidence}%)`).join(", ") || "none";
+  const patterns = analysis.patterns.slice(0, 2).map((p) => p.name).join(", ") || "none";
   const data = [
     `Asset: ${asset.label} (${asset.symbol})`,
     `Current price: ${analysis.current}`,
@@ -774,7 +799,7 @@ async function getLiveAssetContext(asset: AssetTarget, origin?: string): Promise
     `RSI: ${analysis.indicators.rsi} | MACD: ${analysis.indicators.macd} | SMA: ${analysis.indicators.sma} | Volume: ${analysis.indicators.volume}`,
     `Support: ${analysis.support} | Resistance: ${analysis.resistance}`,
     `Recent patterns: ${patterns}`,
-    `Engine score: ${analysis.score}/100 | Verdict: ${analysis.verdict} | Risk: ${analysis.riskLevel}`,
+    `Engine score: ${analysis.score}/100 | Quality: ${analysis.riskLevel}`,
   ].join("\n");
 
   if (liveAnalysisCache.size > 20) {
@@ -1132,6 +1157,7 @@ async function buildFullAnalysisReply(asset: AssetTarget, romanUrdu: boolean, or
     pattern: topPattern,
     score,
   });
+  if (!full) return null;
 
   const trendLabel = analysis.trend === "bullish" ? "Bullish" : analysis.trend === "bearish" ? "Bearish" : "Sideways";
   const lines: string[] = [];

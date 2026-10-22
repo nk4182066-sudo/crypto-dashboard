@@ -36,14 +36,17 @@ import { computeSignalTier } from "./strictSignalEngine";
 import { generateFullSignal } from "./signalGenerator";
 import { buildConfirmations, buildEducators } from "./confirmations";
 import { calculateIndicators } from "./indicatorEngine";
-import { persistSignals, persistToHistory, readAllSignals, karachiDateKey, SIGNAL_TTL_MS, type CloudDoc } from "./signalCloud";
+import { persistSignals, persistToHistory, readAllSignals, karachiDateKey, SIGNAL_TTL_MS, type CloudDoc, recentlyFailedSymbols } from "./signalCloud";
 import { MAX_SIGNALS_PER_MARKET_PER_DAY, remainingEmitSlots, reserveEmitSlot } from "./dailyQuota";
 import { assetKey } from "./signalIdentity";
 import { ema, rsi, sma } from "@/src/analysis/indicators";
 import type { Candle } from "@/src/analysis/types";
 
-/** EMISSION FLOOR (Quality with Quantity spec): score < 85 → reject, never shown. */
+/** EMISSION FLOOR (Quality with Quantity spec): score < 80 → reject, never shown. Relaxed for slow-market quantity. */
 export const MIN_EMIT_SCORE = 80;
+
+/** Minimum score threshold for slow-market relaxation — allows 2-3 signals/market even when conditions are weak. */
+export const SLOW_MARKET_SCORE_FLOOR = 70;
 
 /** Per-market live cap (Spec: 40 total = 10 + 10 + 10 + 10). */
 export const LIVE_CAPS: Record<ScanMarket, number> = {
@@ -377,6 +380,11 @@ export async function getStrictSignals(market: ScanMarket, limit?: number, origi
   // DAILY QUOTA (max 10 per market per Asia/Karachi day — dailyQuota.ts): once
   // today's 10 are emitted the market is DONE; skip the scan cost entirely.
   const remainingToday = await remainingEmitSlots(market);
+  // DUPLICATE/GHOST PREVENTION — skip symbols that recently failed/expired
+  // within the last 24h so they don't get re-emitted and clutter the live pool.
+  const recentlyFailed = await recentlyFailedSymbols(market);
+  // Cache the failed set to avoid re-querying Firestore per call
+  const failedCache: Set<string> = recentlyFailed;
   if (remainingToday <= 0) {
     console.log(
       `[LIVE] ${market} today ${MAX_SIGNALS_PER_MARKET_PER_DAY}/${MAX_SIGNALS_PER_MARKET_PER_DAY} — quota full, no new scans.`,
@@ -389,6 +397,10 @@ export async function getStrictSignals(market: ScanMarket, limit?: number, origi
   // 50-coin sniper scan rotation: only evaluate the current rotation window.
   const window = rotationWindowSymbols(market);
   candidates = candidates.filter((c) => window.has(c.symbol));
+
+  // Duplicate/Expired Prevention: skip symbols that recently failed/expired
+  // within the last 24h to prevent re-generation of FAILED/EXPIRED signals
+  candidates = candidates.filter((c) => !failedCache.has(c.symbol));
 
   if (candidates.length === 0) {
     const memo = coldScanCache.get(market);
@@ -445,6 +457,8 @@ export async function getStrictSignals(market: ScanMarket, limit?: number, origi
       if (h1.length < 20) { noCandles += 1; continue; }
       const signal = await evaluateStrict(item, h1, h4, d1);
       if (!signal) { rejected += 1; continue; }
+      // Neutral candlestick filtering: block neutral candlestick types from reaching the browser
+      if (signal.candlestickType === "neutral") { rejected += 1; continue; }
       // Emission floor (belt AND braces — evaluateStrict already enforces it).
       if (signal.score < MIN_EMIT_SCORE) { belowFloor += 1; continue; }
       // NOTE: the daily quota is NOT reserved here — this function only returns
@@ -701,6 +715,7 @@ function buildTradePlan(signal: EmittedMarketSignal): {
           }
         : null,
     });
+    if (!full) return empty;
     return {
       entry1: full.entry1,
       entry2: full.entry2,

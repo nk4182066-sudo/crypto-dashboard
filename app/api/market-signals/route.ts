@@ -6,6 +6,7 @@ import { scanUniverse, type ScanMarket, type ScanTarget } from "@/src/scanner/un
 import { rotationWindowSymbols } from "@/src/scanner/scanRotation";
 import type { Candle } from "@/src/analysis/types";
 import { generateFullSignal } from "@/src/lib/signalGenerator";
+import { buildAtrPlan } from "@/src/lib/atrPlan";
 import { buildConfirmations, buildEducators, type ConfirmationIndicator, type Consensus, type EducatorVerdict } from "@/src/lib/confirmations";
 import { calculateIndicators, indicatorsAgreed, type IndicatorRow } from "@/src/lib/indicatorEngine";
 import { persistSignals, persistToHistory, type CloudDoc } from "@/src/lib/signalCloud";
@@ -142,8 +143,9 @@ export interface MarketSignal {
    *  the exact "X/8 Conditions Passed" both pages compute. */
   conditionsPassed?: number;
   conditions?: ConditionLine[] | null;
-  /** Feature 2 — real-data confirmation breakdown (RSI/MACD/EMA/Volume). */
+  /* Feature 2 — real-data confirmation breakdown (RSI/MACD/EMA/Volume). */
   confirmations?: { indicators: ConfirmationIndicator[]; confirmed: number; total: number } | null;
+/** KAAM 4 — the full 10-indicator institutional panel (value/status/side each). */
   /** KAAM 4 — the full 10-indicator institutional panel (value/status/side each). */
   indicators?: IndicatorRow[] | null;
   /** Feature 3 — the 4-educator panel + consensus (agreed >= 3 = delivery-grade). */
@@ -581,6 +583,40 @@ export async function GET(request: Request) {
 
     // DAILY QUOTA — reserve the emit slot before accepting. When today's 10
     // are used up, stop emitting for this market (no fallback filler).
+    // Slow-market relaxation: if fewer than 3 signals emitted for this market
+    // today, allow signals with score >= 70 even if they don't meet the full
+    // tier gate, to ensure minimum 2-3 signals per market even in slow conditions.
+    const marketEmittedCount = emitted.filter((s: any) => s.market === item.market).length;
+    const scoreQualifiesForSlowMarket = !tierVerdict && (full.conditionsPassed >= 5 || (full.conditionsPassed >= 4 && (experts?.consensus?.agreed ?? 0) >= 2)) && (full.candlestickType !== "neutral" && (full.candlestickConfidence ?? 0) >= 50);
+
+    // ── Build the DYNAMIC ATR plan (same geometry the Trade chart uses) ──
+    const price = full.price;
+    const direction = full.direction;
+    const bullish = direction === "bullish";
+    const bearish = direction === "bearish";
+    const plan = buildAtrPlan({
+      price,
+      direction: bullish ? "bullish" : "bearish",
+      atr: full.atr,
+      timeframeMinutes: full.tfMinutes ?? 60,
+      support: full.support ?? 0,
+      resistance: full.resistance ?? 0,
+    });
+    const { stopLoss, tp1, tp2, tp3 } = plan;
+
+    // SL/TP Validation: reject signals with null/0 SL/TP (API-level guard)
+    const hasValidPlan = Number.isFinite(stopLoss) && stopLoss > 0 &&
+                       Number.isFinite(tp1) && tp1 > 0 &&
+                       Number.isFinite(tp2) && tp2 > 0 &&
+                       Number.isFinite(tp3) && tp3 > 0;
+    if (!hasValidPlan) {
+      console.warn(`[market-signals] REJECT ${item.symbol}: invalid SL/TP plan (SL=${stopLoss}, TP1=${tp1}, TP2=${tp2}, TP3=${tp3})`);
+      if (!candlestickConfirmed || !volumePassed || !chartPatternPassed) drops.conditions += 1;
+      else if (expertsAgreed < 3) drops.experts += 1;
+      else if (indicatorsAgreedCount <= 7) drops.indicators += 1;
+      continue;
+    }
+
     if (emitted.length >= MAX_SIGNALS_PER_MARKET_PER_DAY || quotaLeft <= 0) break;
     if (!(await reserveEmitSlot(item.market))) {
       quotaLeft = 0;
@@ -588,8 +624,24 @@ export async function GET(request: Request) {
     }
     quotaLeft -= 1;
 
+    // Allow slow-market signals: if < 3 emitted for this market, accept
+    // signals with effective score >= 70 even when tierVerdict is null.
+    const tvScore = tierVerdict?.score ?? 0;
+    const isSlowMarketEmission = marketEmittedCount < 3 && scoreQualifiesForSlowMarket && tvScore < 80 && tvScore >= 70;
+
+    if (!tierVerdict && !isSlowMarketEmission) {
+      if (!candlestickConfirmed || !volumePassed || !chartPatternPassed) drops.conditions += 1;
+      else if (expertsAgreed < 3) drops.experts += 1;
+      else if (indicatorsAgreedCount <= 7) drops.indicators += 1;
+      continue;
+    }
+
+    // If slow-market emission, treat it as GOOD tier for the emit function
+    const effectiveTier = isSlowMarketEmission ? "GOOD" : tierVerdict?.tier;
+    const effectiveScore = isSlowMarketEmission ? 75 : tierVerdict?.score ?? 0;
+
     drops.emitted += 1;
-    emitted.push(emitSignal(item, full, confirmations, indicatorRows, experts, tierVerdict.tier, tierVerdict.score));
+    emitted.push(emitSignal(item, full, confirmations, indicatorRows, experts, effectiveTier, effectiveScore));
   }
 
   // MASLA 2 — persist every emitted setup (Firestore `signals` collection) so

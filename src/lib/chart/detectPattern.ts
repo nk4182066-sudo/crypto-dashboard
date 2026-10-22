@@ -44,7 +44,7 @@ export interface PatternResult {
   /** Short rationale. */
   note: string;
   /** Anchor points for chart markers (Double Top/Bottom pivots + neckline). */
-  points?: { p1: { time: number; price: number }; p2: { time: number; price: number }; neckline: number };
+  points?: { p1: { time: number; price: number }; p2: { time: number; price: number }; p3?: { time: number; price: number }; neckline: number };
 }
 
 /** One ZigZag swing pivot. */
@@ -229,6 +229,7 @@ function detectTripleTop(swings: Swing[], close: number): PatternResult | null {
     pattern: "Triple Top",
     type: "bearish",
     confidence: 86,
+    points: { p1: { time: a.time, price: a.price }, p2: { time: b.time, price: b.price }, p3: { time: c.time, price: c.price }, neckline: (a.price + b.price + c.price) / 3 },
     note: `Three equal swing highs within ${TRIPLE_EQ_PCT}% — resistance rejected price three times, close back below the level.`,
   };
 }
@@ -252,6 +253,7 @@ function detectTripleBottom(swings: Swing[], close: number): PatternResult | nul
     pattern: "Triple Bottom",
     type: "bullish",
     confidence: 86,
+    points: { p1: { time: a.time, price: a.price }, p2: { time: b.time, price: b.price }, p3: { time: c.time, price: c.price }, neckline: (a.price + b.price + c.price) / 3 },
     note: `Three equal swing lows within ${TRIPLE_EQ_PCT}% — support held three times, close back above the level.`,
   };
 }
@@ -433,3 +435,6 @@ export function detectPattern(candles: Candle[]): PatternResult {
     note: "No clear pattern detected.",
   };
 }
+
+
+
