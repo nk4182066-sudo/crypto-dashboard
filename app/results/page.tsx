@@ -306,11 +306,16 @@ function ResultsPageContent() {
 
   // Honest statistics — win rate is computed over RESOLVED setups only.
   const stats = useMemo(() => {
-    const total = records.length;
-    const wins = records.filter((r) => r.status === "SUCCESS").length;
-    const losses = records.filter((r) => r.status === "FAILED").length;
-    const expired = records.filter((r) => r.status === "EXPIRED").length;
-    const pending = records.filter((r) => r.status === "PENDING").length;
+    const todayKey = signalDateKey(Date.now());
+    const todayRecords = records.filter((r) => {
+      const rKey = r.dateKey ?? signalDateKey(r.createdAt);
+      return rKey === todayKey;
+    });
+    const total = todayRecords.length;
+    const wins = todayRecords.filter((r) => r.status === "SUCCESS").length;
+    const losses = todayRecords.filter((r) => r.status === "FAILED").length;
+    const expired = todayRecords.filter((r) => r.status === "EXPIRED").length;
+    const pending = todayRecords.filter((r) => r.status === "PENDING").length;
     const resolved = wins + losses;
     const pct = (n: number) => (total ? Math.round((n / total) * 100) : 0);
     return {

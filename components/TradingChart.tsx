@@ -688,8 +688,17 @@ export default function TradingChart({ data, chartKey = "", signals = [], candle
           });
         }
       }
+      // Candlestick pattern markers: Morning Star (bullish → green circle below bar),
+      // Evening Star (bearish → red circle above bar).
+      const candlePatternMarkers: SeriesMarker<Time>[] = candlePatterns.map((p) => ({
+        time: p.time as UTCTimestamp,
+        position: p.direction === "bullish" ? "belowBar" : "aboveBar",
+        color: p.direction === "bullish" ? "#22c55e" : "#ef4444",
+        shape: "circle",
+        text: p.name,
+      }));
       // lightweight-charts requires markers in chronological order.
-      const combined = [...arrowSeriesMarkers, ...patternPointMarkers].sort(
+      const combined = [...arrowSeriesMarkers, ...patternPointMarkers, ...candlePatternMarkers].sort(
         (a, b) => Number(a.time) - Number(b.time),
       );
       markersRef.current.setMarkers(combined);

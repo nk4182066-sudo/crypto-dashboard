@@ -353,8 +353,9 @@ function SignalsPageContent() {
     () =>
       signals
         .filter((s) => s.score >= DISPLAY_MIN_SCORE)
-        // Experts gate: 0/4 and 2/4 consensus signals never reach the UI.
-        .filter((s) => s.experts != null && s.experts.consensus.agreed >= 3)
+        // Experts gate: 2/4 consensus is the minimum for display (relaxed from 3/4
+        // so slow markets still produce 2-3 signals/day instead of zero).
+        .filter((s) => s.experts != null && s.experts.consensus.agreed >= 2)
         .sort((first, second) => second.score - first.score),
     [signals],
   );

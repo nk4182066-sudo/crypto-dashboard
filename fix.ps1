@@ -1,0 +1,3 @@
+$content = Get-Content 'C:\Users\noman\OneDrive\Desktop\crypto website\crypto-dashboard\src\lib\chart\detectPattern.ts' -Raw
+$content -replace 'points:\s*\{\s*p1:\s*\{ time: 0, price: 0 \},\s*p2:\s*\{ time: 0, price: 0 \},\s*p3:\s*\{ time: 0, price: 0 \},\s*neckline: 0 \},', 'points: { p1: { time: a.time, price: a.price }, p2: { time: b.time, price: b.price }, p3: { time: c.time, price: c.price }, neckline: (a.price + b.price + c.price) / 3 },' | Set-Content 'C:\Users\noman\OneDrive\Desktop\crypto website\crypto-dashboard\src\lib\chart\detectPattern.ts'
+Write-Host Done
