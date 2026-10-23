@@ -41,6 +41,7 @@ function toComparable(market: string, symbol: string): string {
 }
 
 export async function GET(request: Request) {
+  console.log('LIVE API HIT: market=', new URL(request.url).searchParams.get('market'), 'Time:', new Date().toISOString());
   const { searchParams } = new URL(request.url);
   const market = toMarket(searchParams.get("market"));
   const origin = new URL(request.url).origin;
