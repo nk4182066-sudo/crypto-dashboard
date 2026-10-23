@@ -75,7 +75,7 @@ async function fetchCandles(symbol: string, market: ScanTarget["market"]): Promi
   // The scheduler and on-demand reads still share this one cached fetch.
   return cached<Candle[]>(
     `scan:candles:${market}:${providerSymbol}`,
-    { ttlMs: 5 * 60 * 1000, staleMs: 30 * 60 * 1000 },
+    { ttlMs: 1 * 60 * 1000, staleMs: 2 * 60 * 1000 },
     async () => {
       const url = new URL(`https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(providerSymbol)}`);
       url.searchParams.set("interval", "1h");
@@ -90,7 +90,7 @@ async function fetchCandles(symbol: string, market: ScanTarget["market"]): Promi
       const quote = result?.indicators?.quote?.[0];
       if (!quote) return [];
 
-      return timestamps.flatMap((time, index): Candle[] => {
+      const candles = timestamps.flatMap((time, index): Candle[] => {
         const open = quote.open?.[index];
         const high = quote.high?.[index];
         const low = quote.low?.[index];
@@ -98,6 +98,10 @@ async function fetchCandles(symbol: string, market: ScanTarget["market"]): Promi
         if (open == null || high == null || low == null || close == null) return [];
         return [{ time, open, high, low, close, volume: quote.volume?.[index] ?? 0 }];
       });
+      if (candles.length > 0) {
+        console.log(`[DATA FRESH] ${symbol} Last candle: ${new Date(candles[candles.length - 1].time * 1000).toISOString()}`);
+      }
+      return candles;
     }
   );
 }
