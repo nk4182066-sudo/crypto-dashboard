@@ -183,21 +183,24 @@ export function qualityFilterMiss(
 ): string | null {
   const h1Side = trendSide(h1);
   const h4Side = trendSide(h4);
-  if (h4Side === "neutral" || h1Side !== direction || h4Side !== direction) {
+  // Relaxed: only require h4 trend aligned with direction; h1 can be neutral.
+  if (h4Side === "neutral" || h4Side !== direction) {
     return `trendFilter: h1=${h1Side} h4=${h4Side} dir=${direction}`;
   }
   const volumeAvg = lastOf(sma(h1.map((c) => c.volume ?? 0), 20));
   const volumeLast = h1[h1.length - 1]?.volume ?? 0;
-  if (volumeAvg === null || !(volumeLast > volumeAvg)) {
-    return `volumeFilter: last=${volumeLast.toFixed(0)} sma20=${volumeAvg === null ? "n/a" : volumeAvg.toFixed(0)}`;
+  // Relaxed volume: last >= 0.5 * sma20 (was > sma20)
+  if (volumeAvg !== null && !(volumeLast >= 0.5 * volumeAvg)) {
+    return `volumeFilter: last=${volumeLast.toFixed(0)} sma20=${volumeAvg.toFixed(0)}`;
   }
   const rsiValue = lastOf(rsi(h1.map((c) => c.close), 14));
   if (rsiValue === null) return "rsiFilter: no RSI data";
-  if (direction === "bullish" && rsiValue >= 35) {
-    return `rsiFilter: buy needs RSI<35 (got ${rsiValue.toFixed(1)})`;
+  // Relaxed RSI: Buy < 40, Sell > 60
+  if (direction === "bullish" && rsiValue >= 40) {
+    return `rsiFilter: buy needs RSI<40 (got ${rsiValue.toFixed(1)})`;
   }
-  if (direction === "bearish" && rsiValue <= 65) {
-    return `rsiFilter: sell needs RSI>65 (got ${rsiValue.toFixed(1)})`;
+  if (direction === "bearish" && rsiValue <= 60) {
+    return `rsiFilter: sell needs RSI>60 (got ${rsiValue.toFixed(1)})`;
   }
   return null;
 }

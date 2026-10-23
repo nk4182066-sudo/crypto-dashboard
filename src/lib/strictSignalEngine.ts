@@ -28,9 +28,9 @@ function conditionSupportResistance(candles4h: Candle[], indicators: StrictIndic
 /** MASLA 3 — relaxed thresholds for signal generation. */
 const RELAXED_RSI_OVERSOLD = 35;
 const RELAXED_RSI_OVERBOUGHT = 65;
-const RELAXED_VOLUME_RATIO = 1.0;
-const RELAXED_EXPERTS_MIN = 2;
-const RELAXED_SCORE_MIN = 75;
+const RELAXED_VOLUME_RATIO = 0.5;
+const RELAXED_EXPERTS_MIN = 1;
+const RELAXED_SCORE_MIN = 60;
 
 /** MASLA 3 — relaxed RSI condition for signal generation. */
 function conditionRsi(indicators: StrictIndicators, direction: Direction): ConditionChecks["rsi"] {
@@ -415,10 +415,12 @@ export interface SignalTierVerdict {
   /** The exact fixed score for this tier — 95 / 85 / 80. */
   score: number;
 }export function tierScore(conditionsPassed: number, expertsAgreed: number): number | null {
-  // Original strict tier scoring
+  // Relaxed tier scoring (MIN_CONDITIONS 3, MIN_EXPERTS 1)
   if (conditionsPassed >= 8 && expertsAgreed >= 4) return 95;
-  if (conditionsPassed >= 7 && expertsAgreed >= 3) return 85;
-  if (conditionsPassed >= 6 && expertsAgreed >= 2) return 75;
+  if (conditionsPassed >= 7 && expertsAgreed >= 1) return 85;
+  if (conditionsPassed >= 6 && expertsAgreed >= 1) return 75;
+  if (conditionsPassed >= 3 && expertsAgreed >= 1) return 60;
+  if (conditionsPassed >= 3) return 60;
   return null;
 }
 

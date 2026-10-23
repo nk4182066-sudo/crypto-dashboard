@@ -9,7 +9,9 @@ import { generateFullSignal } from "@/src/lib/signalGenerator";
 import { buildAtrPlan } from "@/src/lib/atrPlan";
 import { buildConfirmations, buildEducators, type ConfirmationIndicator, type Consensus, type EducatorVerdict } from "@/src/lib/confirmations";
 import { calculateIndicators, indicatorsAgreed, type IndicatorRow } from "@/src/lib/indicatorEngine";
-import { persistSignals, persistToHistory, type CloudDoc } from "@/src/lib/signalCloud";
+import { type CloudDoc } from "@/src/lib/signalCloud";
+import { db } from "@/src/lib/firebase";
+import { addDoc, collection } from "firebase/firestore";
 import { recentlyFailedSymbols } from "@/src/lib/signalCloud";
 import { analyzeCoin, type ConditionLine } from "@/src/lib/analyzeCoin";
 import { computeSignalTier, type SignalTier } from "@/src/lib/strictSignalEngine";
@@ -652,18 +654,16 @@ export async function GET(request: Request) {
   // it ever threw for one odd signal shape, it must not 500 the whole route —
   // persistence is best-effort, the emitted array is what matters.
   const cloudDocs = emitted.map((signal) => toCloudDoc(signal, "1h")).filter((doc): doc is CloudDoc => doc !== null);
-  if (cloudDocs.length > 0) {
-    try {
-      await persistSignals(cloudDocs);
-    } catch (error) {
-      console.warn("[market-signals] persist step failed (non-fatal):", error);
-    }
-    // Mirror into signals_history too, so the emission record survives archive
-    // status patches. Best-effort like the archive write above.
-    try {
-      await persistToHistory(cloudDocs);
-    } catch (error) {
-      console.warn("[market-signals] history persist failed (non-fatal):", error);
+  if (cloudDocs.length > 0 && db) {
+    let count = 0;
+    for (const doc of cloudDocs) {
+      try {
+        count += 1;
+        await addDoc(collection(db, "signals"), doc as any);
+        console.log('Saving signal:', (doc as any).symbol, 'Market:', (doc as any).market, 'Quota:', count + '/10');
+      } catch (error) {
+        console.warn("[market-signals] save failed (non-fatal):", error);
+      }
     }
   }
 
