@@ -33,7 +33,7 @@ export default function LoginPage() {
     setConfigured(auth !== null);
     if (!auth) return;
     const unsub = onAuthStateChanged(auth, (user) => {
-      if (user) router.push("/");
+      if (user) window.location.href = "/";
     });
     return unsub;
   }, []);
@@ -46,7 +46,7 @@ export default function LoginPage() {
     }
     saveUser({ name: user.displayName ?? "User", provider: "google" });
     redirecting.current = true;
-    router.push("/");
+    window.location.href = "/";
   }
 
   async function handleGoogle() {

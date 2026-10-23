@@ -50,7 +50,10 @@ export default function AuthGuard({
     if (!user && !isPublic) {
       router.replace("/login");
     } else if (user && isPublic) {
-      router.replace("/");
+      // Hard reload so Firebase auth state is fully persisted before AuthGuard
+      // on "/" evaluates it (avoids race-condition redirect back to /login).
+      window.location.href = "/";
+      return;
     }
   }, [user, loading, pathname, router]);
 

@@ -111,7 +111,7 @@ export default function SignUpPage() {
   useEffect(() => {
     if (!auth) return;
     const unsub = onAuthStateChanged(auth, (user) => {
-      if (user) router.push("/");
+      if (user) window.location.href = "/";
     });
     return unsub;
   }, []);
@@ -188,7 +188,7 @@ export default function SignUpPage() {
       // and doesn't re-initiate Google auth unnecessarily after signup redirect
       clearUser();
       redirecting.current = true;
-      router.push("/");
+      window.location.href = "/";
     } catch (err: any) {
       console.log("Signup Error:", err.code, err.message);
       if (err instanceof Error && err.message === "Firebase not configured") {

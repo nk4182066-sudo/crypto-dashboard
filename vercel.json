@@ -1,25 +1,5 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
-  "functions": {
-    "app/api/market-signals/route.ts": {
-      "maxDuration": 60
-    },
-    "app/api/market/scan/route.ts": {
-      "maxDuration": 60
-    },
-    "app/api/signals/live/route.ts": {
-      "maxDuration": 60
-    },
-    "app/api/chat/route.ts": {
-      "maxDuration": 60
-    },
-    "app/api/track-signals/route.ts": {
-      "maxDuration": 30
-    },
-    "app/api/news/route.ts": {
-      "maxDuration": 60
-    }
-  },
   "crons": [
     { "path": "/api/signals/live", "schedule": "0 3 * * *" },
     { "path": "/api/track-signals", "schedule": "30 15 * * *" }
