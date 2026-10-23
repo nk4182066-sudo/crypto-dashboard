@@ -456,6 +456,8 @@ export async function getStrictSignals(market: ScanMarket, limit?: number, origi
       const item = batch[index];
       const [h1, h4, d1] = candleSets[index];
       scanned += 1;
+      // 🔍 LOG: Data availability check for each coin
+      console.log(`[signalsLive] ${market}/${item.symbol}: ${h1.length} 1h candles, ${h4.length} 4h candles, ${d1.length} 1d candles`);
       if (h1.length < 20) { noCandles += 1; continue; }
       const signal = await evaluateStrict(item, h1, h4, d1);
       if (!signal) { rejected += 1; continue; }
