@@ -133,6 +133,8 @@ export const cryptoSymbols: CryptoSymbol[] = [
   { key: "OP-USD", label: "Optimism", bybit: "OPUSDT", bitget: "OP-USDT", coingeckoId: "optimism" },
   { key: "SEI-USD", label: "Sei", bybit: "SEIUSDT", bitget: "SEI-USDT", coingeckoId: "sei-network" },
   { key: "XLM-USD", label: "Stellar", bybit: "XLMUSDT", bitget: "XLM-USDT", coingeckoId: "stellar" },
+  { key: "COMP-USD", label: "Compound", bybit: "COMPUSDT", bitget: "COMP-USDT", coingeckoId: "compound-governance-token" },
+  { key: "FTM-USD", label: "Fantom", bybit: "FTMUSDT", bitget: "FTM-USDT", coingeckoId: "fantom" },
 ];
 
 function findSymbol(key: string): CryptoSymbol | undefined {
@@ -161,6 +163,7 @@ interface BybitTickersResponse {
 async function getCandlesBybit(symbol: string, timeframe: string, limit = 300): Promise<Candle[]> {
   const url = `${BYBIT_BASE}/v5/market/kline`;
   const params = new URLSearchParams({ symbol, interval: timeframe, limit: String(limit) });
+  console.log('[API CHECK]', symbol, 'URL:', url);
   const response = await fetchJson<BybitKlineResponse>(`${url}?${params.toString()}`);
   if (!response || response.retCode !== 0) return [];
   const rows = response.result?.kline?.list ?? [];
@@ -237,6 +240,7 @@ interface BitgetTickerResponse {
 async function getCandlesBitget(symbol: string, timeframe: string, limit = 300): Promise<Candle[]> {
   const url = `${BITGET_BASE}/api/v2/spot/market/candles`;
   const params = new URLSearchParams({ symbol, interval: timeframe, limit: String(limit) });
+  console.log('[API CHECK]', symbol, 'URL:', url);
   const response = await fetchJson<BitgetCandleResponse>(`${url}?${params.toString()}`);
   if (!response || response.code !== "00000") return [];
   const rows = response.data ?? [];

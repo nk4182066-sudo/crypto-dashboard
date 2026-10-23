@@ -65,8 +65,8 @@ export const scanUniverse: ScanTarget[] = [
   { symbol: "ENJ-USD", market: "crypto", label: "ENJUSDT" },
   { symbol: "CRV-USD", market: "crypto", label: "CRVUSDT" },
   { symbol: "SNX-USD", market: "crypto", label: "SNXUSDT" },
-  { symbol: "COMP-USD", market: "crypto", label: "COMPUSDT" },
-  // Forex (20) — Yahoo `=X` pairs
+  { symbol: "FTMUSDT", market: "crypto", label: "FTMUSDT" },
+  { symbol: "COMPUSDT", market: "crypto", label: "COMPUSDT" },
   { symbol: "EURUSD=X", market: "forex", label: "EURUSD" },
   { symbol: "GBPUSD=X", market: "forex", label: "GBPUSD" },
   { symbol: "USDJPY=X", market: "forex", label: "USDJPY" },

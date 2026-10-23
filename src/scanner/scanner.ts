@@ -65,6 +65,14 @@ interface YahooChartPayload {
   };
 }
 
+/** Exchanges like Bybit use `BTCUSDT`; Yahoo chart uses `BTC-USD`. */
+function toBybitSymbol(symbol: string): string {
+  return symbol
+    .replace(/^([A-Za-z0-9]+)-(USD|USDT)$/, "$1$2")
+    .replace(/^([A-Za-z0-9]+)USD$/, "$1USDT")
+    .replace(/[^A-Za-z0-9]/g, "");
+}
+
 async function fetchCandles(symbol: string, market: ScanTarget["market"]): Promise<Candle[]> {
   const providerSymbol = toProviderSymbol(symbol);
 
@@ -73,13 +81,60 @@ async function fetchCandles(symbol: string, market: ScanTarget["market"]): Promi
   // candles.slice() on it; caching the raw JSON object here made that throw
   // "candles.slice is not a function" once the per-symbol details survived.
   // The scheduler and on-demand reads still share this one cached fetch.
+  const cacheKey = market === "crypto"
+    ? `scan:candles:${market}:${toBybitSymbol(symbol)}`
+    : `scan:candles:${market}:${providerSymbol}`;
+
   return cached<Candle[]>(
-    `scan:candles:${market}:${providerSymbol}`,
+    cacheKey,
     { ttlMs: 1 * 60 * 1000, staleMs: 2 * 60 * 1000 },
     async () => {
+      // Crypto routes to Bybit so delisted Yahoo pairs (COMP-USD, FTM-USD,
+      // PEPE-USD, ...) stop returning 404 instead of real price data.
+      if (market === "crypto") {
+        const bybitSymbol = toBybitSymbol(symbol);
+        const apiUrl = `https://api.bybit.com/v5/market/kline?symbol=${encodeURIComponent(bybitSymbol)}&interval=60&limit=300`;
+        console.log('[API CHECK]', market, symbol, 'providerSymbol=', bybitSymbol, 'URL:', apiUrl);
+
+        const response = await fetch(apiUrl, { headers: { "User-Agent": "Mozilla/5.0" }, cache: "no-store" });
+        if (!response.ok) throw new Error(`Provider returned ${response.status} for ${bybitSymbol}`);
+        const payload = (await response.json()) as {
+          retCode?: number;
+          retMsg?: string;
+          result?: { kline?: { list?: unknown[] }; };
+        };
+
+        if (payload?.retCode !== 0) {
+          throw new Error(`Bybit rejected ${bybitSymbol}: ${(payload as { retMsg?: string }).retMsg ?? "unknown error"}`);
+        }
+        const rows = payload.result?.kline?.list ?? [];
+        const candles = rows
+          .map((row): Candle | null => {
+            if (!Array.isArray(row) || (row as unknown[]).length < 6) return null;
+            const values = (row as unknown[]).map((value) => Number(value));
+            return {
+              time: values[0] ?? 0,
+              open: values[1] ?? 0,
+              high: values[2] ?? 0,
+              low: values[3] ?? 0,
+              close: values[4] ?? 0,
+              volume: values[5] ?? 0,
+            };
+          })
+          .filter((candle): candle is Candle => candle !== null);
+
+        if (candles.length > 0) {
+          const lastDate = new Date(candles[candles.length - 1].time).toISOString();
+          console.log(`[DATA FRESH] ${symbol} Last candle: ${lastDate}`);
+        }
+        return candles;
+      }
+
       const url = new URL(`https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(providerSymbol)}`);
       url.searchParams.set("interval", "1h");
       url.searchParams.set("range", "1mo");
+
+      console.log('[API CHECK]', market, symbol, 'providerSymbol=', providerSymbol, 'URL:', url);
 
       const response = await fetch(url, { headers: { "User-Agent": "Mozilla/5.0" }, cache: "no-store" });
       if (!response.ok) throw new Error(`Provider returned ${response.status} for ${providerSymbol}`);
