@@ -85,6 +85,8 @@ export async function GET(request: Request) {
 
   const filteredPools = pools.map((pool) => pool.filter(isFresh));
 
+  console.log('[signals/live] markets:', markets, 'raw pool sizes:', pools.map((p) => p?.length ?? 0), 'fresh sizes:', filteredPools.map((p) => p.length));
+
   if (market === "all") {
     const merged: EmittedMarketSignal[] = [];
     markets.forEach((active, index) => {
