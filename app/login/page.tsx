@@ -16,6 +16,8 @@ const GREEN = "#00C087";
 function friendlyError(error: unknown): string {
   const code = (error as { code?: string } | null)?.code;
   if (code === "auth/network-request-failed") return "Network issue. Internet check karein.";
+  if (code === "auth/email-already-in-use") return "Email already in use.";
+  if (code === "auth/invalid-credential") return "Invalid email or password.";
   if (error instanceof Error && error.message === NOT_CONFIGURED)
     return "Firebase configured nahi hai. NEXT_PUBLIC_FIREBASE_* keys .env.local mein add karein.";
   return "Login fail ho gaya. Dobara try karein.";
