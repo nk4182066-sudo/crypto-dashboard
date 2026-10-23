@@ -356,10 +356,11 @@ export async function GET(request: Request) {
   const beforeValue = Number(searchParams.get("before"));
   const before = Number.isFinite(beforeValue) && beforeValue > 0 ? beforeValue : null;
 
-  if (!/^[A-Z0-9.^=_-]{1,24}$/.test(symbol) || !interval) {
-    return Response.json({ error: "A valid market symbol and timeframe are required." }, { status: 400 });
-  }
-
+  // Optional exact end timestamp from signal/analysis callers (`endTime`).
+  // A caller that pins `endTime` wants the freshest possible window; otherwise
+  // fall back to the default `before ?? now + 60` semantics.
+  const endTime = Number(searchParams.get("endTime"));
+  const endTimeValid = Number.isFinite(endTime) && endTime > 0 ? endTime : null;
   const now = Math.floor(Date.now() / 1000);
 
   // ---- Source chain -------------------------------------------------------
@@ -455,7 +456,7 @@ export async function GET(request: Request) {
     url.searchParams.set("period1", "0");
     url.searchParams.set("period2", String(now + 60));
   } else {
-    const periodEnd = before ?? now + 60;
+    const periodEnd = endTimeValid ?? before ?? now + 60;
     const periodDays = before ? interval.chunkDays : interval.initialDays;
     url.searchParams.set("period1", String(Math.max(0, periodEnd - periodDays * 24 * 60 * 60)));
     url.searchParams.set("period2", String(periodEnd));

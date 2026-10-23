@@ -31,6 +31,7 @@ const RELAXED_RSI_OVERBOUGHT = 65;
 const RELAXED_VOLUME_RATIO = 0.5;
 const RELAXED_EXPERTS_MIN = 1;
 const RELAXED_SCORE_MIN = 60;
+const MIN_SCORE = 75;
 
 /** MASLA 3 — relaxed RSI condition for signal generation. */
 function conditionRsi(indicators: StrictIndicators, direction: Direction): ConditionChecks["rsi"] {
@@ -446,10 +447,16 @@ export function computeSignalTier({
   if (conditionsPassed >= 8 && expertsAgreed >= 4) {
     return { tier: "PREMIUM", label: "PREMIUM SETUP", color: "green", score };
   }
-  if (conditionsPassed >= 7) {
-    return { tier: "STRONG", label: "STRONG SETUP", color: "blue", score };
+
+  // MASLA 3 — accept 6/8 + 2/4 (score floor 75), but keep the strict score gate.
+  if (conditionsPassed >= 6 && expertsAgreed >= 2 && score >= MIN_SCORE) {
+    if (conditionsPassed >= 7 && expertsAgreed >= 3) {
+      return { tier: "STRONG", label: "STRONG SETUP", color: "blue", score };
+    }
+    return { tier: "GOOD", label: "GOOD SETUP", color: "yellow", score };
   }
-  return { tier: "GOOD", label: "GOOD SETUP", color: "yellow", score };
+
+  return null;
 }
 
 export function qualityLabel(quality: Quality | null): Quality | null {

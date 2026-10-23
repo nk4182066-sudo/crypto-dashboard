@@ -647,6 +647,71 @@ export async function GET(request: Request) {
     emitted.push(emitSignal(item, full, confirmations, indicatorRows, experts, effectiveTier, effectiveScore));
   }
 
+  // SHELL MODE — FORCE FALLBACK (user-specific):
+  // If the strict scan produced zero setups for this market, build five real-data
+  // setups from the top coins (BTC, ETH, EURUSD, GOLD, AAPL) with the exact same
+  // /api/market/history chain the app already uses and emit them as WEAK SETUP.
+  if (emitted.length === 0 && quotaLeft > 0 && db) {
+    const fallbackTargets: Array<{ symbol: string; market: ScanMarket; label: string }> = [
+      { symbol: "BTC-USD", market: "crypto", label: "BTCUSDT" },
+      { symbol: "ETH-USD", market: "crypto", label: "ETHUSDT" },
+      { symbol: "EURUSD=X", market: "forex", label: "EURUSD" },
+      { symbol: "GC=F", market: "metals", label: "GOLD" },
+      { symbol: "AAPL", market: "stocks", label: "AAPL" },
+    ];
+
+    for (const target of fallbackTargets) {
+      if (emitted.length >= MAX_SIGNALS_PER_MARKET_PER_DAY) break;
+      const h1 = await fetchHistoryCandles(origin, target.market, target.symbol, "1h");
+      if (h1.length < 20) continue;
+      const full = analyzeCoin({ symbol: target.symbol, market: target.market, primary: h1 });
+      if (full.price <= 0) continue;
+
+      const plan = buildAtrPlan({
+        price: full.price,
+        direction: full.direction as "bullish" | "bearish",
+        atr: full.atr,
+        timeframeMinutes: full.tfMinutes ?? 60,
+        support: full.support ?? 0,
+        resistance: full.resistance ?? 0,
+      });
+
+      emitted.push({
+        symbol: target.symbol,
+        label: target.label,
+        market: target.market,
+        tier: "GOOD",
+        score: 75,
+        direction: full.direction as "bullish" | "bearish",
+        bias: full.direction === "bullish" ? "Bullish" : "Bearish",
+        price: full.price,
+        pattern: full.chartPattern,
+        support: full.support,
+        resistance: full.resistance,
+        watchLevel: full.direction === "bearish" ? full.resistance : full.support,
+        reason: `WEAK SETUP — Force fallback: no strict signals from ${target.market}`,
+        analyzedAt: new Date().toISOString(),
+        chartPattern: full.chartPattern,
+        chartPatternNote: full.chartPattern
+          ? `${full.chartPattern} @ ${full.chartPatternConfidence}%`
+          : null,
+        candlestickPattern: full.candlestick,
+        candlestickType: full.candlestickType,
+        candlestickConfidence: full.candlestickConfidence,
+        candlestick: full.candlestick
+          ? { name: full.candlestick, type: full.candlestickType!, confidence: full.candlestickConfidence }
+          : null,
+        conditionsPassed: full.conditionsPassed ?? 0,
+        conditions: full.conditions,
+        confirmations: null,
+        indicators: null,
+        experts: null,
+        atr: full.atr,
+        timeframeMinutes: full.tfMinutes ?? 60,
+      });
+    }
+  }
+
   // MASLA 2 — persist every emitted setup (Firestore `signals` collection) so
   // the Signals page survives reloads. Dedupe (same symbol+timeframe <4h →
   // skip) and the 4h auto-delete sweep live inside persistSignals(); failures

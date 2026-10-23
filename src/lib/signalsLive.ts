@@ -348,6 +348,10 @@ async function fetchHistoryCandles(
     { ttlMs: 20_000, staleMs: 300_000, maxEntries: 8192 },
     async () => {
       const query = new URLSearchParams({ market, symbol, timeframe });
+      // Pin the fetch to the exact epoch timestamp so the chart source always
+      // returns the freshest 1h candles (latest candle included, not the next
+      // empty bar).
+      query.set("endTime", String(Date.now()));
       try {
         const response = await fetch(`${selfOrigin(origin)}/api/market/history?${query}`, {
           cache: "no-store",
@@ -359,6 +363,9 @@ async function fetchHistoryCandles(
         }
         const payload = (await response.json()) as { candles?: Candle[]; source?: string };
         if (payload.source === "Generated demo data") return [];
+        if (Array.isArray(payload.candles) && payload.candles.length > 0) {
+          console.log("[DATA]", symbol, "Last candle:", new Date(payload.candles[0].time).toISOString());
+        }
         return Array.isArray(payload.candles) ? payload.candles : [];
       } catch (error) {
         console.warn(
