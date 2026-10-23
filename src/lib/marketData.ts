@@ -164,8 +164,15 @@ async function getCandlesBybit(symbol: string, timeframe: string, limit = 300): 
   const response = await fetchJson<BybitKlineResponse>(`${url}?${params.toString()}`);
   if (!response || response.retCode !== 0) return [];
   const rows = response.result?.kline?.list ?? [];
-  return rows.map((row) => ({
-    time: parseInt(row[0] ?? "0", 10),
+  const rawTimes = rows.map((row) => parseInt(row[0] ?? "0", 10));
+  const times = rawTimes.map((rawTime) => rawTime * 1000);
+  const firstRaw = rawTimes[0] ?? 0;
+  const firstTime = firstRaw ? firstRaw * 1000 : 0;
+  console.log(
+    `[DATA FIX] ${symbol} Bybit kline: firstRaw=${firstRaw} fixed=${firstTime} date=${firstTime ? new Date(firstTime).toISOString() : "invalid"}`,
+  );
+  return rows.map((row, index) => ({
+    time: times[index],
     open: parseFloat(row[1] ?? "0"),
     high: parseFloat(row[2] ?? "0"),
     low: parseFloat(row[3] ?? "0"),
@@ -233,6 +240,10 @@ async function getCandlesBitget(symbol: string, timeframe: string, limit = 300):
   const response = await fetchJson<BitgetCandleResponse>(`${url}?${params.toString()}`);
   if (!response || response.code !== "00000") return [];
   const rows = response.data ?? [];
+  const firstRaw = rows.length > 0 ? rows[0].id : 0;
+  console.log(
+    `[DATA FIX] ${symbol} Bitget candles: firstRaw=${firstRaw} alreadyMs=${firstRaw > 1_000_000_000}`,
+  );
   return rows.map((row) => ({
     time: row.id,
     open: parseFloat(row.open ?? "0"),
