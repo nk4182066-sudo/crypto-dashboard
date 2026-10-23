@@ -282,6 +282,7 @@ async function loadDynamicTargets(origin: string): Promise<ScanTarget[]> {
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
   const market = (searchParams.get("market") ?? "crypto") as ScanMarket;
+  const wantsDebug = false;
   if (!validMarkets.includes(market)) {
     return Response.json({ error: "Unsupported market." }, { status: 400 });
   }
