@@ -44,7 +44,7 @@ export interface AtrLadder {
 }
 
 /** >=1h — Quality spec ladder: TP1 1.5x, TP2 3.0x, TP3 4.5x ATR. SL 0.4x ATR. */
-export const DEFAULT_LADDER: AtrLadder = { sl: 0.4, tp1: 1.5, tp2: 3.0, tp3: 4.5 };
+export const DEFAULT_LADDER: AtrLadder = { sl: 1.0, tp1: 1.2, tp2: 2.5, tp3: 4.0 };
 
 /** <=15m — tight scalping ladder. */
 export const TIGHT_LADDER: AtrLadder = { sl: 0.5, tp1: 0.5, tp2: 1.0, tp3: 1.5 };
