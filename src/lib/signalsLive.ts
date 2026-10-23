@@ -386,6 +386,7 @@ async function fetchHistoryCandles(
 export async function getStrictSignals(market: ScanMarket, limit?: number, origin?: string): Promise<EmittedMarketSignal[]> {
   // DAILY QUOTA (max 10 per market per Asia/Karachi day — dailyQuota.ts): once
   // today's 10 are emitted the market is DONE; skip the scan cost entirely.
+  console.log('SCAN START: 200 coins, Time:', new Date().toISOString());
   const remainingToday = await remainingEmitSlots(market);
   // DUPLICATE/GHOST PREVENTION — skip symbols that recently failed/expired
   // within the last 24h so they don't get re-emitted and clutter the live pool.

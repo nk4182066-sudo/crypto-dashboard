@@ -667,7 +667,23 @@ export async function GET(request: Request) {
     }
   }
 
-  const wantsDebug = searchParams.get("debug") === "1";
+  // FORCE TEST — prove Firestore write path works
+  if (db) {
+    try {
+      const { Timestamp } = await import("firebase/firestore");
+      await addDoc(collection(db, "signals"), {
+        symbol: "BTC-USD",
+        price: 65000,
+        market: "crypto",
+        score: 80,
+        badge: "TEST REAL",
+        createdAt: Date.now(),
+      });
+      console.log("Saving signal: BTC-USD Market: crypto Quota: 1/10 - TEST");
+    } catch (e) {
+      console.warn("TEST SAVE FAILED:", e);
+    }
+  }
   return Response.json(
     {
       generatedAt: snapshot?.generatedAt ?? new Date().toISOString(),
