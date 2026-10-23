@@ -406,18 +406,23 @@ export function scoreFromConditions(conditionsMet: number, indicatorsAgreedCount
 
 /** Strict tier verdict for a scanned setup. Returns null when the setup must
  *  be REJECTED (never shown, never saved, never alerted). No relaxation. */
-export type SignalTier = "PREMIUM" | "STRONG" | "GOOD" | null;
+export type SignalTier = "PREMIUM" | "STRONG" | "ENHANCED" | "RELAXED" | "ENTRY" | "GOOD" | null;
 
 export interface SignalTierVerdict {
   tier: SignalTier;
   label: string;
-  color: "green" | "blue" | "yellow";
-  /** The exact fixed score for this tier — 95 / 85 / 80. */
+  color: "green" | "blue" | "lightblue" | "yellow" | "orange";
+  /** The exact fixed score for this tier — 95 / 85 / 80 / 75 / 70 / 65. */
   score: number;
 }export function tierScore(conditionsPassed: number, expertsAgreed: number): number | null {
+  // MASLA 3 - relaxed thresholds for signal generation
+  // Score 65+ with 1+ expert (relaxed from 75+ with 2+ experts)
   if (conditionsPassed >= 8 && expertsAgreed >= 4) return 95;
   if (conditionsPassed >= 7 && expertsAgreed >= 3) return 85;
   if (conditionsPassed >= 6 && expertsAgreed >= 2) return 75;
+  if (conditionsPassed >= 5 && expertsAgreed >= 1) return 70;
+  if (conditionsPassed >= 4 && expertsAgreed >= 1) return 65;
+  if (conditionsPassed >= 3 && expertsAgreed >= 1) return 60;
   return null;
 }
 
@@ -436,16 +441,28 @@ export function computeSignalTier({
   volumePassed: boolean;
   chartPatternPassed: boolean;
 }): SignalTierVerdict | null {
+  // MASLA 3 - relaxed thresholds
+  // Accept score >= 65 with 1+ expert
   const score = tierScore(conditionsPassed, expertsAgreed);
-  if (score === null) return null;
+  if (score === null || score < 65) return null;
 
+  // Very relaxed tier assignment
   if (conditionsPassed >= 8 && expertsAgreed >= 4) {
     return { tier: "PREMIUM", label: "PREMIUM SETUP", color: "green", score };
   }
-  if (conditionsPassed >= 7) {
+  if (conditionsPassed >= 7 && expertsAgreed >= 3) {
     return { tier: "STRONG", label: "STRONG SETUP", color: "blue", score };
   }
-  return { tier: "GOOD", label: "GOOD SETUP", color: "yellow", score };
+  if (conditionsPassed >= 6 && expertsAgreed >= 2) {
+    return { tier: "ENHANCED", label: "ENHANCED SETUP", color: "lightblue", score };
+  }
+  if (conditionsPassed >= 5 && expertsAgreed >= 1) {
+    return { tier: "RELAXED", label: "RELAXED SETUP", color: "yellow", score };
+  }
+  if (conditionsPassed >= 4 && expertsAgreed >= 1) {
+    return { tier: "ENTRY", label: "ENTRY LEVEL", color: "orange", score };
+  }
+  return null;
 }
 
 export function qualityLabel(quality: Quality | null): Quality | null {
