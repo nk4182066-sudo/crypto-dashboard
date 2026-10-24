@@ -40,6 +40,10 @@ export const SIGNAL_TTL_MS = 24 * 60 * 60 * 1000;
 
 /** Firestore archive collection — signals are appended, never deleted. */
 export const SIGNALS_COLLECTION = "signals_archive";
+/** Firestore live collection — the Signals page reads from here so force-saved
+ *  WEAK SETUP docs are visible. persistSignals() still writes to signals_archive;
+ *  direct addDoc(collection(db, "signals"), ...) writes here. */
+export const SIGNALS_LIVE_COLLECTION = "signals";
 export const SIGNALS_HISTORY_COLLECTION = "signals_history";
 
 /** Statuses that mean "this setup already settled" — never re-written. */
@@ -278,7 +282,7 @@ export function subscribeSignals(onSignals: (signals: CloudDoc[]) => void): () =
   try {
     const today = karachiDateKey();
     return onSnapshot(
-      collection(db, SIGNALS_COLLECTION),
+      collection(db, SIGNALS_LIVE_COLLECTION),
       (snapshot) => {
         const fresh = snapshot.docs
           .map((entry) => entry.data() as CloudDoc)
@@ -358,7 +362,9 @@ export async function readAllSignals(): Promise<Array<CloudDoc & { id: string }>
     return [];
   }
   try {
-    const snapshot = await getDocs(collection(db, SIGNALS_COLLECTION));
+    // Read from signals (live) collection — NOT signals_archive — so force-saved
+    // WEAK SETUP docs are visible to refresh() and the Signals page.
+    const snapshot = await getDocs(collection(db, SIGNALS_LIVE_COLLECTION));
     return snapshot.docs.map((entry) => ({ id: entry.id, ...(entry.data() as CloudDoc) }));
   } catch (error) {
     console.warn("[signalCloud] readAllSignals failed:", error instanceof Error ? error.message : error);

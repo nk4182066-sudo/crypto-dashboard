@@ -232,11 +232,13 @@ function SignalsPageContent() {
       setLoading(true);
       setError(null);
       try {
+        console.log("[signals/page] Fetching signals from API: /api/signals/live?market=", market);
         const response = await fetch(`/api/signals/live?market=${market}`, { cache: "no-store" });
         if (!response.ok) throw new Error("Failed to load setups");
         const payload = (await response.json()) as { generatedAt?: string; results?: MarketSignal[] };
         if (cancelled) return;
         const results = Array.isArray(payload.results) ? payload.results : [];
+        console.log("[signals/page] Received:", results.length, "signals for market:", market);
         hadResults = results.length > 0;
         setApiSignals(results);
         setUpdatedAt(payload.generatedAt ?? null);

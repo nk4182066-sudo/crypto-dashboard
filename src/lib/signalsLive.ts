@@ -570,16 +570,18 @@ export async function refresh(market: ScanMarket, origin?: string): Promise<Emit
     const createdAt = typeof d.createdAt === "number" ? d.createdAt : 0;
     if (docDateKey && docDateKey !== today) continue;
     if (!docDateKey && createdAt > 0 && now - createdAt > SIGNAL_TTL_MS) continue;
-    // QUALITY GATE (Quality with Quantity spec) — a STORED doc only joins the
-    // live pool when it clears the same 85+ floor and the 3/4 expert gate as a
-    // fresh scan. Legacy cards (75-84) from an older build are skipped so the
-    // pool can never show a sub-85 setup.
-    const storedScore = Number(d.score ?? 0);
-    if (!Number.isFinite(storedScore) || storedScore < MIN_EMIT_SCORE) continue;
-    const storedAgreed = Number(
-      (d.experts as { consensus?: { agreed?: number } } | null)?.consensus?.agreed ?? 0,
-    );
-    if (storedAgreed < 3) continue;
+    // QUALITY GATE — WEAK SETUP force-saved docs bypass the 85+/3-expert gate
+    // so the Signals page never shows 0 signals when the strict filter emits nothing.
+    if (d.badge === "WEAK SETUP") {
+      // Weak-setup docs join the pool as-is (score 65, no expert consensus required).
+    } else {
+      const storedScore = Number(d.score ?? 0);
+      if (!Number.isFinite(storedScore) || storedScore < MIN_EMIT_SCORE) continue;
+      const storedAgreed = Number(
+        (d.experts as { consensus?: { agreed?: number } } | null)?.consensus?.agreed ?? 0,
+      );
+      if (storedAgreed < 3) continue;
+    }
 
     const direction = d.direction as "bullish" | "bearish" | "neutral";
     const candlestick = d.candlestick as { name: string; type: string; confidence: number } | null;
