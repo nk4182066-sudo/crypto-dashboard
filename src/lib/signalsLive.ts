@@ -590,19 +590,30 @@ export async function getStrictSignals(market: ScanMarket, limit?: number, origi
       scanned += 1;
       // 🔍 DEBUG: Fetching candles
       console.log(`[signalsLive] Fetching candles for ${item.symbol}...`);
-      console.log(`[signalsLive] ${market}/${item.symbol}: ${h1.length} 1h candles, ${h4.length} 4h candles, ${d1.length} 1d candles`);
-      if (h1.length < 20) { noCandles += 1; continue; }
-      const signal = await evaluateStrict(item, h1, h4, d1);
-      if (!signal) { rejected += 1; continue; }
-      // Neutral candlestick filtering: block neutral candlestick types from reaching the browser
-      if (signal.candlestickType === "neutral") { rejected += 1; continue; }
-      // Emission floor (belt AND braces — evaluateStrict already enforces it).
-      if (signal.score < MIN_EMIT_SCORE) { belowFloor += 1; continue; }
-      // NOTE: the daily quota is NOT reserved here — this function only returns
-      // CANDIDATES. The slot is reserved at the actual emission point (see
-      // reserveEmitSlot in getLiveSignals and /api/market-signals) so a
-      // candidate that is later filtered out never burns a daily slot.
-      results.push(signal);
+      const h1Len = h1?.length ?? 0;
+      const h4Len = h4?.length ?? 0;
+      const d1Len = d1?.length ?? 0;
+      console.log(`[signalsLive] ${market}/${item.symbol}: ${h1Len} 1h candles, ${h4Len} 4h candles, ${d1Len} 1d candles`);
+      if (!h1 || h1.length < 20) { noCandles += 1; continue; }
+      try {
+        const signal = await evaluateStrict(item, h1, h4, d1);
+        if (!signal) { rejected += 1; continue; }
+        // Neutral candlestick filtering: block neutral candlestick types from reaching the browser
+        if (signal.candlestickType === "neutral") { rejected += 1; continue; }
+        // Emission floor (belt AND braces — evaluateStrict already enforces it).
+        if (signal.score < MIN_EMIT_SCORE) { belowFloor += 1; continue; }
+        // NOTE: the daily quota is NOT reserved here — this function only returns
+        // CANDIDATES. The slot is reserved at the actual emission point (see
+        // reserveEmitSlot in getLiveSignals and /api/market-signals) so a
+        // candidate that is later filtered out never burns a daily slot.
+        results.push(signal);
+      } catch (error) {
+        console.warn(
+          `[signalsLive] ${market}/${item.symbol} analysis failed:`,
+          error instanceof Error ? error.message : String(error),
+        );
+        rejected += 1;
+      }
     }
   }
 

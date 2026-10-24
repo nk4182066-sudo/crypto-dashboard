@@ -109,6 +109,10 @@ async function fetchCandles(symbol: string, market: ScanTarget["market"]): Promi
             console.log(`[DATA] MEXC Failed: HTTP ${response.status} for ${cryptoPair}`);
           } else {
             const payload = await response.json() as unknown[];
+            // Log first raw item to verify MEXC response format
+            if (payload.length > 0) {
+              console.log(`[DATA] MEXC first raw item for ${cryptoPair}:`, JSON.stringify(payload[0]));
+            }
             const candles = payload.flatMap((row): Candle[] => {
               if (!Array.isArray(row) || row.length < 6) return [];
               const [time, open, high, low, close, volume] = row.map(Number);
