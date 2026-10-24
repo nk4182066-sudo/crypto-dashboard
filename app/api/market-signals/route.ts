@@ -19,6 +19,7 @@ import { MAX_SIGNALS_PER_MARKET_PER_DAY, remainingEmitSlots, reserveEmitSlot } f
 import { qualityFilterMiss } from "@/src/lib/signalsLive";
 
 export const dynamic = "force-dynamic";
+export const revalidate = 0;
 
 startScheduler();
 
