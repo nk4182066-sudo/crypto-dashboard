@@ -79,6 +79,8 @@ function toBybitSymbol(symbol: string): string {
 async function fetchCandles(symbol: string, market: ScanTarget["market"]): Promise<Candle[]> {
   const providerSymbol = toProviderSymbol(symbol);
 
+  console.log(`[DATA] fetchCandles market=${market} symbol=${symbol} providerSymbol=${providerSymbol}`);
+
   // Cache the CONVERTED Candle[] array (not the raw Yahoo payload) under this
   // key. The market-signals route reads `scan:candles:...` and calls
   // candles.slice() on it; caching the raw JSON object here made that throw
@@ -196,33 +198,43 @@ async function fetchCandles(symbol: string, market: ScanTarget["market"]): Promi
         return mockCandles;
       }
 
-      // Yahoo Finance blocks Vercel IPs — switch to biquote (MetaTrader 5 feed, no API key)
-      console.log(`[DATA] Yahoo blocked, using biquote for ${market}/${symbol}`);
-      try {
-        const bars = await bq.ohlc(providerSymbol, { interval: "1h", limit: 500 });
-        // Validate timestamps — reject 1970-01-01 epoch-zero candles
-        const validCandles: Candle[] = [];
-        for (const bar of bars) {
-          const t = Date.parse(bar.openTime);
-          if (!Number.isFinite(t) || t === 0 || new Date(t).getFullYear() < 2020) continue;
-          validCandles.push({
-            time: Math.floor(t / 1000),
-            open: bar.open,
-            high: bar.high,
-            low: bar.low,
-            close: bar.close,
-            volume: bar.volume,
-          });
+      // ========================
+      // FOREX / STOCKS / METALS: biquote (MetaTrader 5 feed)
+      // Crypto must never reach this block — it uses MEXC/Bitget above.
+      // ========================
+      if (market === "forex" || market === "stocks" || market === "metals") {
+        console.log(`[DATA] Yahoo blocked, using biquote for ${market}/${symbol}`);
+        try {
+          const bars = await bq.ohlc(providerSymbol, { interval: "1h", limit: 500 });
+          // Validate timestamps — reject 1970-01-01 epoch-zero candles
+          const validCandles: Candle[] = [];
+          for (const bar of bars) {
+            const t = Date.parse(bar.openTime);
+            if (!Number.isFinite(t) || t === 0 || new Date(t).getFullYear() < 2020) continue;
+            validCandles.push({
+              time: Math.floor(t / 1000),
+              open: bar.open,
+              high: bar.high,
+              low: bar.low,
+              close: bar.close,
+              volume: bar.volume,
+            });
+          }
+          if (validCandles.length > 0) {
+            const lastDate = new Date(validCandles[validCandles.length - 1].time * 1000).toISOString();
+            console.log(`[DATA FRESH] ${symbol} Last candle: ${lastDate}`);
+          }
+          return validCandles;
+        } catch (error) {
+          console.warn(`[DATA] biquote failed for ${market}/${symbol}:`, error instanceof Error ? error.message : String(error));
+          return [];
         }
-        if (validCandles.length > 0) {
-          const lastDate = new Date(validCandles[validCandles.length - 1].time * 1000).toISOString();
-          console.log(`[DATA FRESH] ${symbol} Last candle: ${lastDate}`);
-        }
-        return validCandles;
-      } catch (error) {
-        console.warn(`[DATA] biquote failed for ${market}/${symbol}:`, error instanceof Error ? error.message : String(error));
-        return [];
       }
+
+      // Should not reach here — crypto returns within the if block above,
+      // non-crypto returns within the biquote guard block.
+      console.warn(`[DATA] No data source matched for market=${market} symbol=${symbol}`);
+      return [];
     }
   );
 }
