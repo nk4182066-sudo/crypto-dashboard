@@ -312,8 +312,22 @@ export async function evaluateStrict(
   if (h1.length < 20) return null;
 
   const full = analyzeCoin({ symbol: candidate.symbol, market: candidate.market, primary: h1, h1, h4, d1 });
-  // 🔍 DEBUG: Condition logic check
-  console.log(`[signalsLive] ${candidate.symbol} Score: ${full.score}, Conditions: ${full.conditionsPassed}, Direction: ${full.direction}, Price: ${full.price}`);
+  // 🔍 DEBUG: AnalyzeCoin results
+  console.log(`[signalsLive] ${candidate.symbol} Score: ${full.score}, Conditions: ${full.conditionsPassed}, Direction: ${full.direction}, Price: ${full.price}, Pattern: ${full.chartPattern}`);
+  // 📊 DEBUG: Indicators summary
+  const rsiVal = lastOf(rsi(h1.map((c) => c.close), 14));
+  const macdVal = lastOf((full as any).macd);
+  const macdHistVal = lastOf((full as any).macdHistogram);
+  const volumeRatio = lastOf((full as any).volumeRatio);
+  console.log(`[signalsLive] ${candidate.symbol} Indicators: RSI=${rsiVal?.toFixed(2)}, MACD=${macdVal?.toFixed(2)}, MACD Hist=${macdHistVal?.toFixed(2)}, Volume Ratio=${volumeRatio?.toFixed(2)}`);
+  // 📊 DEBUG: Trend detection
+  const trendH1 = trendSide(h1);
+  const trendH4 = trendSide(h4);
+  console.log(`[signalsLive] ${candidate.symbol} Trends: H1=${trendH1}, H4=${trendH4}`);
+  // 📊 DEBUG: Pattern detection
+  const pattern = full.chartPattern || "none";
+  const patternConf = full.chartPatternConfidence || 0;
+  console.log(`[signalsLive] ${candidate.symbol} Pattern: ${pattern} (${patternConf}%)`);
 
   // ZERO PRICE GUARD (SHIB fetch bug fix) — never emit $0 signals.
   if (full.price <= 0) return null;
@@ -527,27 +541,14 @@ export async function getStrictSignals(market: ScanMarket, limit?: number, origi
         console.log(
           `[signalsLive] cold-start scan(${market}): Scanned ${fresh.scanned}, found ${candidates.length} candidates (${fresh.failed} failed)`,
         );
-        // If still no candidates after cold scan, use force save with hardcoded coins
+        // If still no candidates after cold scan, this is a DATA PROBLEM — the
+        // scan failed to find ANY setup for this market. Force-saving hardcoded
+        // coins with fake data (WEAK SETUP, score 65) would pollute the live
+        // pool with dummy signals, so we log and skip instead.
         if (candidates.length === 0) {
-          console.log('[signalsLive] No candidates from scan → force saving top 5 coins');
-          const forceCoins = ['BTCUSDT', 'ETHUSDT', 'EURUSD=X', 'GC=F', 'AAPL'];
-          for (const symbol of forceCoins) {
-            console.log('FORCE SAVING:', symbol);
-            // Try to create a basic signal for this coin
-            const basicSignal = {
-              symbol,
-              score: 65,
-              direction: 'bullish',
-              market: market as ScanMarket,
-              label: symbol,
-              reason: 'Force saved - top coin',
-              conditionsPassed: 3,
-              experts: { educators: [], consensus: { agreed: 0, total: 4 } },
-              badge: 'WEAK SETUP'
-            };
-            // Push to results or persist (type mismatch suppressed with ! for fast build)
-            (candidates as any).push(basicSignal);
-          }
+          console.error(
+            `[signalsLive] NO CANDIDATES for ${market}: scan returned nothing — this is a data/market problem, not a signal problem. Check /api/market/history.`,
+          );
         }
       } catch (error) {
         console.warn(`[signalsLive] cold-start scan failed for ${market}:`, error instanceof Error ? error.message : error);
@@ -699,8 +700,28 @@ export async function refresh(market: ScanMarket, origin?: string): Promise<Emit
       if (storedAgreed < 3) continue;
     }
 
-    const direction = d.direction as "bullish" | "bearish" | "neutral";
+     const direction = d.direction as "bullish" | "bearish" | "neutral";
     const candlestick = d.candlestick as { name: string; type: string; confidence: number } | null;
+    // QUALITY GATE: reject weak setups and test data — only real signals join the pool
+    if (d.badge === "WEAK SETUP") {
+      console.log(`[signalsLive] REJECT ${d.symbol}: weak-setup bypass removed (badge: WEAK SETUP)`);
+      continue;
+    }
+    if (d.badge === "TEST-DUMMY" || d.test === true) {
+      console.log(`[signalsLive] REJECT ${d.symbol}: test/dummy data rejected`);
+      continue;
+    }
+    if (d.score !== undefined && d.score !== null && Number(d.score) < 85) {
+      console.log(`[signalsLive] REJECT ${d.symbol}: score ${Number(d.score)} < MIN_EMIT_SCORE 85`);
+      continue;
+    }
+    const storedAgreed = Number(
+      (d.experts as { consensus?: { agreed?: number } } | null)?.consensus?.agreed ?? 0,
+    );
+    if (storedAgreed < 3) {
+      console.log(`[signalsLive] REJECT ${d.symbol}: experts ${storedAgreed}/3 < 3`);
+      continue;
+    }
     const signal: EmittedMarketSignal = {
       symbol: String(d.symbol),
       label: typeof d.label === "string" ? d.label : String(d.symbol),
