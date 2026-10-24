@@ -29,6 +29,7 @@ import { scanUniverse } from "@/src/scanner/universe";
 const MARKET_VALUES: ScanMarket[] = [...new Set(scanUniverse.map((s) => s.market))];
 
 export const dynamic = "force-dynamic";
+export const maxDuration = 60;
 
 function toMarket(market: string | null | undefined): ScanMarket | "all" {
   if (!market) return "all";

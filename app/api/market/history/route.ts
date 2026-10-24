@@ -1,6 +1,9 @@
 import { cached } from "@/src/lib/cache";
 import { fetchTwelveDataHistory } from "@/src/lib/data/twelveData";
 
+export const dynamic = "force-dynamic";
+export const maxDuration = 60;
+
 interface Candle {
   time: number;
   open: number;

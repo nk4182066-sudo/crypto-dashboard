@@ -28,7 +28,7 @@ export interface ScanSnapshot {
 }
 
 const SNAPSHOT_KEY = "scanner:snapshot";
-const SNAPSHOT_TTL_MS = 20 * 60 * 1000;
+const SNAPSHOT_TTL_MS = 1 * 60 * 1000;
 const DETAILS_KEY = "scanner:details";
 /**
  * How many per-symbol analyses the shared cache keeps before eviction.
