@@ -655,7 +655,15 @@ export async function refresh(market: ScanMarket, origin?: string): Promise<Emit
         // ── DIRECT SAVE to Firestore `signals` collection (bypass persistSignals,
         //    which writes to signals_archive). This is the primary write path so
         //    the Signals page always has docs to read, even if persistSignals fails. ──
-        console.log("[signalsLive] db initialized:", !!db, "attempting save for", sig.symbol);
+        if (!cloudDoc) {
+          console.error(`[signalsLive] SKIPPING — cloudDoc is undefined/null for ${sig.symbol}`);
+          continue;
+        }
+        if (!cloudDoc.symbol) {
+          console.error(`[signalsLive] SKIPPING — cloudDoc.symbol is undefined for ${sig.symbol}`);
+          continue;
+        }
+        console.log("[signalsLive] db initialized:", !!db, "attempting save for", cloudDoc.symbol);
         if (db) {
           try {
             console.log("[signalsLive] Attempting to save to signals collection:", cloudDoc.symbol);
@@ -663,10 +671,11 @@ export async function refresh(market: ScanMarket, origin?: string): Promise<Emit
             console.log('Saving signal:', cloudDoc.symbol, 'Score:', cloudDoc.score);
             console.log('Saved to signals:', cloudDoc.symbol);
           } catch (saveError) {
-            console.error(`[signalsLive] addDoc to signals FAILED for ${sig.symbol}:`, saveError instanceof Error ? saveError.message : saveError);
+            console.error(`[signalsLive] addDoc to signals FAILED for ${cloudDoc.symbol}:`, saveError instanceof Error ? saveError.message : saveError);
           }
         } else {
-          console.warn(`[signalsLive] SKIPPING signals save for ${sig.symbol} — db is null`);
+          console.warn(`[signalsLive] SKIPPING signals save for ${cloudDoc.symbol} — db is null`);
+          console.error("[signalsLive] CRITICAL: Firebase db is null — check NEXT_PUBLIC_FIREBASE_* env vars on Vercel");
         }
 
         // persistSignals writes to signals_archive — secondary, non-fatal.

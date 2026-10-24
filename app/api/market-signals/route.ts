@@ -727,20 +727,31 @@ export async function GET(request: Request) {
   if (cloudDocs.length > 0 && db) {
     let count = 0;
     for (const doc of cloudDocs) {
+      if (!doc) {
+        console.error("[market-signals] SKIPPING — doc is undefined/null");
+        continue;
+      }
+      const sym = (doc as any).symbol;
+      const sc = (doc as any).score ?? 0;
+      if (!sym) {
+        console.error("[market-signals] SKIPPING — doc.symbol is undefined");
+        continue;
+      }
       try {
-        const sym = (doc as any).symbol;
-        const sc = (doc as any).score ?? 0;
         console.log("[market-signals] Attempting to save to signals collection:", sym);
         count += 1;
         await addDoc(collection(db, "signals"), doc as any);
         console.log('Saving signal:', sym, 'Score:', sc);
         console.log('Saved to signals:', sym);
       } catch (error) {
-        console.error("[market-signals] addDoc to signals FAILED for", (doc as any).symbol, ":", error instanceof Error ? error.message : error);
+        console.error("[market-signals] addDoc to signals FAILED for", sym, ":", error instanceof Error ? error.message : error);
       }
     }
   } else {
     console.warn("[market-signals] SKIPPING signals save — db is null or no cloudDocs");
+    if (!db) {
+      console.error("[market-signals] CRITICAL: Firebase db is null — check NEXT_PUBLIC_FIREBASE_* env vars on Vercel");
+    }
   }
 
   // FORCE TEST — prove Firestore write path works
