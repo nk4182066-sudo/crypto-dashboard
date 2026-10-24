@@ -2,8 +2,11 @@ import type { Candle, MarketAnalysis } from "@/src/analysis/types";
 import { analyzeMarket } from "@/src/analysis";
 import { cacheGet, cached, cacheSet } from "@/src/lib/cache";
 import { detectCandlestickPattern, type CandlestickDetection } from "@/src/lib/signalGenerator";
+import Biquote from "biquote";
 import { mapConcurrent, toBatches } from "./batch";
 import { SCAN_BATCH_SIZE, SCAN_CONCURRENCY, SCAN_MIN_CANDLES, scanUniverse, type ScanTarget } from "./universe";
+
+const bq = new Biquote();
 
 export interface ScanResult {
   symbol: string;
@@ -193,33 +196,33 @@ async function fetchCandles(symbol: string, market: ScanTarget["market"]): Promi
         return mockCandles;
       }
 
-      const url = new URL(`https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(providerSymbol)}`);
-      url.searchParams.set("interval", "1h");
-      url.searchParams.set("range", "1mo");
-
-      console.log('[API CHECK]', market, symbol, 'providerSymbol=', providerSymbol, 'URL:', url);
-
-      const response = await fetch(url, { headers: { "User-Agent": "Mozilla/5.0" }, cache: "no-store" });
-      if (!response.ok) throw new Error(`Provider returned ${response.status} for ${providerSymbol}`);
-      const payload = (await response.json()) as YahooChartPayload;
-
-      const result = payload.chart?.result?.[0];
-      const timestamps = result?.timestamp ?? [];
-      const quote = result?.indicators?.quote?.[0];
-      if (!quote) return [];
-
-      const candles = timestamps.flatMap((time, index): Candle[] => {
-        const open = quote.open?.[index];
-        const high = quote.high?.[index];
-        const low = quote.low?.[index];
-        const close = quote.close?.[index];
-        if (open == null || high == null || low == null || close == null) return [];
-        return [{ time, open, high, low, close, volume: quote.volume?.[index] ?? 0 }];
-      });
-      if (candles.length > 0) {
-        console.log(`[DATA FRESH] ${symbol} Last candle: ${new Date(candles[candles.length - 1].time * 1000).toISOString()}`);
+      // Yahoo Finance blocks Vercel IPs — switch to biquote (MetaTrader 5 feed, no API key)
+      console.log(`[DATA] Yahoo blocked, using biquote for ${market}/${symbol}`);
+      try {
+        const bars = await bq.ohlc(providerSymbol, { interval: "1h", limit: 500 });
+        // Validate timestamps — reject 1970-01-01 epoch-zero candles
+        const validCandles: Candle[] = [];
+        for (const bar of bars) {
+          const t = Date.parse(bar.openTime);
+          if (!Number.isFinite(t) || t === 0 || new Date(t).getFullYear() < 2020) continue;
+          validCandles.push({
+            time: Math.floor(t / 1000),
+            open: bar.open,
+            high: bar.high,
+            low: bar.low,
+            close: bar.close,
+            volume: bar.volume,
+          });
+        }
+        if (validCandles.length > 0) {
+          const lastDate = new Date(validCandles[validCandles.length - 1].time * 1000).toISOString();
+          console.log(`[DATA FRESH] ${symbol} Last candle: ${lastDate}`);
+        }
+        return validCandles;
+      } catch (error) {
+        console.warn(`[DATA] biquote failed for ${market}/${symbol}:`, error instanceof Error ? error.message : String(error));
+        return [];
       }
-      return candles;
     }
   );
 }

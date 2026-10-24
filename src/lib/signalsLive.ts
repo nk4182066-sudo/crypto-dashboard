@@ -471,7 +471,16 @@ async function fetchHistoryCandles(
         if (Array.isArray(payload.candles) && payload.candles.length > 0) {
           console.log("[DATA]", symbol, "Last candle:", new Date(payload.candles[0].time).toISOString());
         }
-        return Array.isArray(payload.candles) ? payload.candles : [];
+        // Reject 1970-01-01 epoch-zero candles and any candle with a timestamp
+        // before 2020 — these come from broken data sources and break analysis.
+        const valid = (Array.isArray(payload.candles) ? payload.candles : []).filter((c) => {
+          const t = c.time * 1000;
+          return Number.isFinite(t) && t > 0 && new Date(t).getFullYear() >= 2020;
+        });
+        if (valid.length !== (Array.isArray(payload.candles) ? payload.candles.length : 0)) {
+          console.warn(`[signalsLive] filtered ${symbol}/${timeframe} 1970/invalid candles`);
+        }
+        return valid;
       } catch (error) {
         console.warn(
           `[signalsLive] history fetch failed for ${market}/${symbol}/${timeframe}:`,
