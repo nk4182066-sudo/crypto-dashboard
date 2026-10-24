@@ -655,14 +655,18 @@ export async function refresh(market: ScanMarket, origin?: string): Promise<Emit
         // ── DIRECT SAVE to Firestore `signals` collection (bypass persistSignals,
         //    which writes to signals_archive). This is the primary write path so
         //    the Signals page always has docs to read, even if persistSignals fails. ──
+        console.log("[signalsLive] db initialized:", !!db, "attempting save for", sig.symbol);
         if (db) {
           try {
+            console.log("[signalsLive] Attempting to save to signals collection:", cloudDoc.symbol);
             await addDoc(collection(db, "signals"), cloudDoc as any);
             console.log('Saving signal:', cloudDoc.symbol, 'Score:', cloudDoc.score);
             console.log('Saved to signals:', cloudDoc.symbol);
           } catch (saveError) {
-            console.warn(`[signalsLive] direct signals save failed for ${sig.symbol}:`, saveError instanceof Error ? saveError.message : saveError);
+            console.error(`[signalsLive] addDoc to signals FAILED for ${sig.symbol}:`, saveError instanceof Error ? saveError.message : saveError);
           }
+        } else {
+          console.warn(`[signalsLive] SKIPPING signals save for ${sig.symbol} — db is null`);
         }
 
         // persistSignals writes to signals_archive — secondary, non-fatal.

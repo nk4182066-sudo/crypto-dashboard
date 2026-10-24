@@ -723,25 +723,30 @@ export async function GET(request: Request) {
   // it ever threw for one odd signal shape, it must not 500 the whole route —
   // persistence is best-effort, the emitted array is what matters.
   const cloudDocs = emitted.map((signal) => toCloudDoc(signal, "1h")).filter((doc): doc is CloudDoc => doc !== null);
+  console.log("[market-signals] db initialized:", !!db, "cloudDocs:", cloudDocs.length);
   if (cloudDocs.length > 0 && db) {
     let count = 0;
     for (const doc of cloudDocs) {
       try {
-        count += 1;
-        await addDoc(collection(db, "signals"), doc as any);
         const sym = (doc as any).symbol;
         const sc = (doc as any).score ?? 0;
+        console.log("[market-signals] Attempting to save to signals collection:", sym);
+        count += 1;
+        await addDoc(collection(db, "signals"), doc as any);
         console.log('Saving signal:', sym, 'Score:', sc);
         console.log('Saved to signals:', sym);
       } catch (error) {
-        console.warn("[market-signals] save failed (non-fatal):", error);
+        console.error("[market-signals] addDoc to signals FAILED for", (doc as any).symbol, ":", error instanceof Error ? error.message : error);
       }
     }
+  } else {
+    console.warn("[market-signals] SKIPPING signals save — db is null or no cloudDocs");
   }
 
   // FORCE TEST — prove Firestore write path works
   if (db) {
     try {
+      console.log("[market-signals] FORCE TEST: Attempting to save to signals collection: BTC-USD");
       const { Timestamp } = await import("firebase/firestore");
       await addDoc(collection(db, "signals"), {
         symbol: "BTC-USD",
@@ -751,10 +756,13 @@ export async function GET(request: Request) {
         badge: "TEST REAL",
         createdAt: Date.now(),
       });
-      console.log("Saving signal: BTC-USD Market: crypto Quota: 1/10 - TEST");
+      console.log("Saving signal: BTC-USD Score: 80");
+      console.log("Saved to signals: BTC-USD");
     } catch (e) {
-      console.warn("TEST SAVE FAILED:", e);
+      console.error("TEST SAVE FAILED:", e instanceof Error ? e.message : e);
     }
+  } else {
+    console.warn("[market-signals] FORCE TEST SKIPPED — db is null");
   }
   return Response.json(
     {
