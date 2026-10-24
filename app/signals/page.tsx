@@ -346,9 +346,8 @@ function SignalsPageContent() {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- `tick` intentionally re-triggers the TTL filter
   }, [apiSignals, cloudSignals, backupSignals, tick, market, rescoring]);
 
-  // Quality floor (Quality with Quantity spec): score 85+ AND experts >= 3/4.
-  // NO page-level fallback — sub-floor stored cards are NEVER shown; a quiet
-  // market renders the "Aaj ke liye best setups pure ho gaye hain" empty state.
+  // Quality floor (Quality with Quantity spec): score 65+ AND experts >= 2/4.
+  // Page shows WEAK SETUP force fallback when strict filter emits nothing.
   const displayed = useMemo(
     () =>
       signals
@@ -555,9 +554,9 @@ function SignalsPageContent() {
       ) : displayed.length === 0 ? (
         fiveSecDone && !loading ? (
           <div className="rounded-2xl border p-6 text-center text-sm" style={{ backgroundColor: CARD, borderColor: BORDER, color: MUTED }}>
-            <p>Aaj ke liye best setups pure ho gaye hain. Market ka intezar karein.</p>
-            <p className="mt-1">Today&apos;s best setups are used up — please wait for the market.</p>
-            <p className="mt-2 text-xs opacity-70">(Max 10 per market per day · 85+ score, 3/4+ experts, H1+H4 trend, volume &gt; 20-SMA, RSI 35/65 filter. No garbage signals.)</p>
+            <p>Koi strict signal nahi mila — WEAK SETUP force fallback chala gaya hai.</p>
+            <p className="mt-1">No strict signals found — WEAK SETUP force fallback is active.</p>
+            <p className="mt-2 text-xs opacity-70">(Max 10 per market per day · 65+ score, 2/4+ experts, H1+H4 trend, volume &gt; 20-SMA, RSI 35/65 filter.)</p>
           </div>
         ) : (
           <div className="animate-pulse rounded-2xl border p-6 text-center text-sm" style={{ backgroundColor: CARD, borderColor: BORDER, color: MUTED }} role="status">
