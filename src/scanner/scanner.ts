@@ -101,6 +101,11 @@ async function fetchCandles(symbol: string, market: ScanTarget["market"]): Promi
         // Normalize symbol to MEXC/Bitget format (BTC-USD -> BTCUSDT)
         const cryptoPair = providerSymbol.replace(/^([A-Za-z0-9]+)-(USD|USDT)$/, "$1$2").replace(/^([A-Za-z0-9]+)USD$/, "$1USDT").replace(/[^A-Za-z0-9]/g, "");
 
+        // Normalize a raw timestamp to milliseconds.
+        // If < 1e11 it's seconds (10 digits) — multiply by 1000.
+        // If >= 1e11 it's already milliseconds (13 digits) — keep as-is.
+        const toMs = (ts: number): number => (ts < 1e11 ? ts * 1000 : ts);
+
         // Try MEXC first
         try {
           console.log(`[API CHECK] ${market} ${symbol} -> MEXC ${cryptoPair}`);
@@ -120,19 +125,15 @@ async function fetchCandles(symbol: string, market: ScanTarget["market"]): Promi
             }
             const candles = payload.flatMap((row): Candle[] => {
               if (!Array.isArray(row) || row.length < 6) return [];
-              const [time, open, high, low, close, volume] = row.map(Number);
-              if ([time, open, high, low, close, volume].some(v => !Number.isFinite(v))) return [];
-              return [{
-                time,
-                open,
-                high,
-                low,
-                close,
-                volume,
-              }];
+              const [rawTime, open, high, low, close, volume] = row.map(Number);
+              if (![rawTime, open, high, low, close, volume].every(Number.isFinite)) return [];
+              const time = toMs(rawTime);
+              // Reject 1970/epoch-zero timestamps
+              if (new Date(time).getFullYear() < 2020) return [];
+              return [{ time, open, high, low, close, volume }];
             });
             if (candles.length > 0) {
-              const lastDate = new Date(candles[candles.length - 1].time * 1000).toISOString();
+              const lastDate = new Date(candles[candles.length - 1].time).toISOString();
               console.log(`[DATA] MEXC Success: ${symbol} Last candle: ${lastDate}`);
               return candles;
             }
@@ -157,16 +158,16 @@ async function fetchCandles(symbol: string, market: ScanTarget["market"]): Promi
           } else {
             const payload = await response.json() as { data?: { id: number; open: number; high: number; low: number; close: number; vol: number; }[] };
             const rows = payload.data ?? [];
-            const candles = rows.map((row): Candle => ({
-              time: row.id,
-              open: row.open,
-              high: row.high,
-              low: row.low,
-              close: row.close,
-              volume: row.vol,
-            }));
+            const candles = rows
+              .map((row): Candle | null => {
+                const time = toMs(row.id);
+                if (new Date(time).getFullYear() < 2020) return null;
+                if (![row.open, row.high, row.low, row.close, row.vol].every(Number.isFinite)) return null;
+                return { time, open: row.open, high: row.high, low: row.low, close: row.close, volume: row.vol };
+              })
+              .filter((c): c is Candle => c !== null);
             if (candles.length > 0) {
-              const lastDate = new Date(candles[candles.length - 1].time * 1000).toISOString();
+              const lastDate = new Date(candles[candles.length - 1].time).toISOString();
               console.log(`[DATA] Bitget Success: ${symbol} Last candle: ${lastDate}`);
               return candles;
             }
@@ -183,7 +184,7 @@ async function fetchCandles(symbol: string, market: ScanTarget["market"]): Promi
         const mockCandles: Candle[] = [];
         let price = basePrice;
         for (let i = 29; i >= 0; i--) {
-          const time = Date.now() / 1000 - i * 60;
+          const time = Date.now() - i * 60 * 1000;
           const change = (Math.random() - 0.485) * 200;
           price = Math.max(price + change, 10);
           mockCandles.push({
@@ -258,6 +259,10 @@ async function scanOne(target: ScanTarget): Promise<ScanResult | null> {
   const candles = await fetchCandles(target.symbol, target.market);
   if (candles.length < SCAN_MIN_CANDLES) return null;
 
+  // fetchCandles stores Candle.time in milliseconds. The analysis pipeline
+  // (analyzeMarket → timeAnalysis) expects seconds, so convert here.
+  const analysisCandles = candles.map((c) => ({ ...c, time: Math.floor(c.time / 1000) }));
+
   // Feature 3 — the full analysis is computed once here and cached, so the UI
   // reads it instantly instead of recomputing on every request.
   const market = target.market === "metals" || target.market === "forex" ? "forex" : target.market;
@@ -265,7 +270,7 @@ async function scanOne(target: ScanTarget): Promise<ScanResult | null> {
     symbol: target.symbol,
     market,
     timeframe: "1h",
-    candles,
+    candles: analysisCandles,
     balance: 10000,
     riskPercent: 1,
   });
