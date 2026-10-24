@@ -61,7 +61,96 @@ export const LIVE_CAPS: Record<ScanMarket, number> = {
 /** Which Cloud Firestore statuses are considered resolved (win/loss/expiry). */
 export const RESOLVED_STATUSES = new Set(["WIN", "LOSS", "EXPIRED"]);
 
-/** Chart-pattern anchors (p1/p2/p3 + neckline) — mirrors detectPattern's `PatternResult.points`. */
+/** Minimum 2-hour cooldown between signals for the same symbol */
+export const MARKET_COOLDOWN_HOURS = 2;
+
+/** Quality filter for signal emission.
+ *  Returns true only when all quality criteria are met.
+ *  - Main conditions >= 6/8
+ *  - Experts >= 3/4
+ *  - Pattern is clear (not empty)
+ *  - Trend is clear (Bullish/Bearish, not sideways)
+ *  - Support/Resistance real (non-zero, valid levels)
+ */
+export function passesQualityFilter(signal: EmittedMarketSignal): boolean {
+  // Main conditions >= 6/8
+  const conditionsPassed = signal.conditionsPassed ?? 0;
+  const conditionsTotal = signal.conditionsTotal ?? 8;
+  if (conditionsPassed < 6) {
+    console.debug(`[quality] SKIP: conditions ${conditionsPassed}/${conditionsTotal} < 6`);
+    return false;
+  }
+
+  // Experts >= 3/4
+  const experts = signal.experts ?? 0;
+  if (experts < 3) {
+    console.debug(`[quality] SKIP: experts ${experts} < 3`);
+    return false;
+  }
+
+  // Pattern is clear (not empty)
+  const pattern = signal.pattern ?? "";
+  if (!pattern || pattern.length === 0) {
+    console.debug(`[quality] SKIP: pattern is empty`);
+    return false;
+  }
+
+  // Trend is clear (Bullish/Bearish, not sideways)
+  const trend = signal.trend ?? "neutral";
+  if (trend === "sideways" || trend === "neutral") {
+    console.debug(`[quality] SKIP: trend is ${trend}, not clear direction`);
+    return false;
+  }
+
+  // Support/Resistance real (non-zero values)
+  const support = signal.support;
+  const resistance = signal.resistance;
+  if (support === null || support <= 0 || resistance === null || resistance <= 0) {
+    console.debug(`[quality] SKIP: support=${support} or resistance=${resistance} not real`);
+    return false;
+  }
+
+  console.debug(`[quality] PASS: conditions=${conditionsPassed}/${conditionsTotal}, experts=${experts}, pattern="${pattern}", trend=${trend}, S/R=(${support},${resistance})`);
+  return true;
+}
+
+/** Check if enough time has passed since the last signal for this symbol.
+ *  Skips if last signal was < MARKET_COOLDOWN_HOURS ago for same symbol.
+ */
+export async function checkMarketCooldown(symbol: string, market: string): Promise<boolean> {
+  const cooldownMs = MARKET_COOLDOWN_HOURS * 60 * 60 * 1000;
+  const now = Date.now();
+
+  try {
+    const docs = await readAllSignals();
+    const recent = docs
+      .filter((d) => {
+        // Same symbol and same market
+        if (d.symbol !== symbol || d.market !== market) return false;
+        // Only consider resolved statuses
+        if (!RESOLVED_STATUSES.has(String(d.status ?? "").toUpperCase())) return false;
+        // Has createdAt timestamp
+        if (typeof d.createdAt !== "number") return false;
+        // Within cooldown window
+        return now - d.createdAt < cooldownMs;
+      })
+      .sort((a, b) => (b.createdAt ?? 0) - (a.createdAt ?? 0));
+
+    if (recent.length > 0) {
+      const lastCreatedAt = recent[0].createdAt;
+      const secondsAgo = (now - lastCreatedAt) / 1000;
+      console.debug(`[cooldown] SKIP: last signal for ${symbol} was ${secondsAgo.toFixed(0)}s ago (< ${MARKET_COOLDOWN_HOURS * 3600}s cooldown)`);
+      return false; // Still in cooldown
+    }
+
+    console.debug(`[cooldown] PASS: no recent signal for ${symbol} (or last signal > ${MARKET_COOLDOWN_HOURS}h ago)`);
+    return true;
+  } catch (error) {
+    console.warn(`[cooldown] check failed for ${symbol}:`, error instanceof Error ? error.message : error);
+    // Fail-open: allow signal if check fails
+    return true;
+  }
+}
 export interface SignalPatternPoints {
   p1: { time: number; price: number };
   p2: { time: number; price: number };
@@ -829,6 +918,11 @@ function buildTradePlan(signal: EmittedMarketSignal): {
  * never disagree.
  */
 export function toCloudDoc(signal: EmittedMarketSignal): CloudDoc | null {
+  // Quality filter — synchronous check. If fails, skip this signal.
+  if (!passesQualityFilter(signal)) {
+    console.debug(`[toCloudDoc] SKIP ${signal.symbol} — quality filter failed`);
+    return null;
+  }
   try {
     const now = Date.now();
     const plan = buildTradePlan(signal);
