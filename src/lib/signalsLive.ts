@@ -367,7 +367,7 @@ export async function evaluateStrict(
   //   Tier 1 (PREMIUM): 8/8 conditions + 4/4 experts → score 95 (auto-notification tier)
   //   Tier 2 (STRONG):   7/8 conditions + 3/4 experts → score 85
   //   Tier 3 (GOOD):     6/8 conditions + 3/4 experts → score 80
-  //   5/8 conditions or below, or 2/4 experts or below → REJECT.
+  //   5/8 conditions or below, or 3/4 experts or below → REJECT.
   const tier = computeSignalTier({
     conditionsPassed: full.conditionsPassed,
     indicatorsAgreedCount: 0,

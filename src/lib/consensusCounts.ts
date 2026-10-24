@@ -14,7 +14,7 @@
 // The exact ACCEPTED thresholds a genuine evaluation must clear before the
 // chat presents a setup as consensus-backed:
 //
-//   • 2/4 experts    (ACCEPTED_EXPERT_AGREED)
+//   • 3/4 experts    (ACCEPTED_EXPERT_AGREED)
 //   • 6/8 conditions (ACCEPTED_CONDITIONS_PASSED)
 //
 // Anything malformed or fabricated is rejected (null) — the chat then reports
@@ -137,7 +137,7 @@ export function formatConsensusCounts(consensus: ChatConsensus): string {
 
 /**
  * Accepted only for GENUINE evaluations that clear BOTH exact thresholds —
- * 2/4 experts and 6/8 conditions. A missing side means the evaluation was
+ * 3/4 experts and 6/8 conditions. A missing side means the evaluation was
  * never completed, so nothing is "accepted".
  */
 export function isAcceptedConsensus(consensus: ChatConsensus | null): boolean {
@@ -150,7 +150,7 @@ export function isAcceptedConsensus(consensus: ChatConsensus | null): boolean {
 
 /**
  * Exact counts plus the accepted/below-threshold verdict, e.g.
- * "2/4 experts · 6/8 conditions ✅". Null when nothing genuine exists — the
+ * "3/4 experts · 6/8 conditions ✅". Null when nothing genuine exists — the
  * caller then prints NO count at all.
  */
 export function describeConsensus(consensus: ChatConsensus | null): string | null {
@@ -158,5 +158,5 @@ export function describeConsensus(consensus: ChatConsensus | null): string | nul
   if (!counts) return null;
   return isAcceptedConsensus(consensus)
     ? `${counts} ✅`
-    : `${counts} ⚠️ below accepted threshold (2/4 experts · 6/8 conditions)`;
+    : `${counts} ⚠️ below accepted threshold (3/4 experts · 6/8 conditions)`;
 }

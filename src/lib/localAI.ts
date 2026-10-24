@@ -666,12 +666,12 @@ async function signalDiscussionReply(message: string, sig: DiscussionSignal | nu
   if (score > 0) lines.push(`   Score: ${score}/100 (${qualityWord(score)})`);
   // Consensus counts — GENUINE evaluations only. A malformed/fabricated value
   // ("75%", "3 of 4", …) prints NO count instead of an invented one, and the
-  // exact accepted thresholds are 2/4 experts + 6/8 conditions.
+  // exact accepted thresholds are 3/4 experts + 6/8 conditions.
   const expertCounts = parseExpertCounts(sig.consensus);
   if (expertCounts) {
     const accepted = expertCounts.agreed >= ACCEPTED_EXPERT_AGREED;
     lines.push(
-      `   Consensus: ${expertCounts.agreed}/${expertCounts.total} experts${accepted ? " ✅" : " ⚠️ below accepted threshold (2/4)"}`,
+      `   Consensus: ${expertCounts.agreed}/${expertCounts.total} experts${accepted ? " ✅" : " ⚠️ below accepted threshold (3/4)"}`,
     );
   }
   const conditionCounts = parseConditionsPassed(sig.conditionsPassed);

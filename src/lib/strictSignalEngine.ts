@@ -448,7 +448,7 @@ export function computeSignalTier({
     return { tier: "PREMIUM", label: "PREMIUM SETUP", color: "green", score };
   }
 
-  // MASLA 3 — accept 6/8 + 2/4 (score floor 75), but keep the strict score gate.
+  // MASLA 3 — accept 6/8 + 3/4 (score floor 75), but keep the strict score gate.
   if (conditionsPassed >= 6 && expertsAgreed >= 2 && score >= MIN_SCORE) {
     if (conditionsPassed >= 7 && expertsAgreed >= 3) {
       return { tier: "STRONG", label: "STRONG SETUP", color: "blue", score };
