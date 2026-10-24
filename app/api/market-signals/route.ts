@@ -154,6 +154,8 @@ export interface MarketSignal {
   experts?: { educators: EducatorVerdict[]; consensus: Consensus } | null;
 /** STRICT tier — PREMIUM / STRONG / GOOD / null (rejected). Never null on an emitted card. */
   tier: SignalTier;
+  /** Display badge for the signal card (e.g. "WEAK SETUP" for force fallback). */
+  badge?: string;
   /** ATR(14) of the emitting 1h candles — drives the DYNAMIC TP/SL plan the
    *  card, stored doc and Trade chart all share (atrPlan.ts). */
   atr?: number | null;
@@ -681,7 +683,8 @@ export async function GET(request: Request) {
         label: target.label,
         market: target.market,
         tier: "GOOD",
-        score: 75,
+        score: 65,
+        badge: "WEAK SETUP",
         direction: full.direction as "bullish" | "bearish",
         bias: full.direction === "bullish" ? "Bullish" : "Bearish",
         price: full.price,
@@ -726,7 +729,10 @@ export async function GET(request: Request) {
       try {
         count += 1;
         await addDoc(collection(db, "signals"), doc as any);
-        console.log('Saving signal:', (doc as any).symbol, 'Market:', (doc as any).market, 'Quota:', count + '/10');
+        const sym = (doc as any).symbol;
+        const sc = (doc as any).score ?? 0;
+        console.log('Saving signal:', sym, 'Score:', sc);
+        console.log('Saved to signals:', sym);
       } catch (error) {
         console.warn("[market-signals] save failed (non-fatal):", error);
       }

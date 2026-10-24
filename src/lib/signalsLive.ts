@@ -41,6 +41,8 @@ import { MAX_SIGNALS_PER_MARKET_PER_DAY, remainingEmitSlots, reserveEmitSlot } f
 import { assetKey } from "./signalIdentity";
 import { ema, rsi, sma } from "@/src/analysis/indicators";
 import type { Candle } from "@/src/analysis/types";
+import { db } from "@/src/lib/firebase";
+import { addDoc, collection } from "firebase/firestore";
 
 /** EMISSION FLOOR (Quality with Quantity spec): score < 80 → reject, never shown. Relaxed for slow-market quantity. */
 export const MIN_EMIT_SCORE = 80;
@@ -650,11 +652,29 @@ export async function refresh(market: ScanMarket, origin?: string): Promise<Emit
     try {
       const cloudDoc = toCloudDoc(sig);
       if (cloudDoc) {
-        await persistSignals([cloudDoc]);
-        // Mirror into signals_history — the chart-source store whose originals
-        // archive status updates (track-signals WIN/LOSS/EXPIRED patches) can
-        // never overwrite.
-        await persistToHistory([cloudDoc]);
+        // ── DIRECT SAVE to Firestore `signals` collection (bypass persistSignals,
+        //    which writes to signals_archive). This is the primary write path so
+        //    the Signals page always has docs to read, even if persistSignals fails. ──
+        if (db) {
+          try {
+            await addDoc(collection(db, "signals"), cloudDoc as any);
+            console.log('Saving signal:', cloudDoc.symbol, 'Score:', cloudDoc.score);
+            console.log('Saved to signals:', cloudDoc.symbol);
+          } catch (saveError) {
+            console.warn(`[signalsLive] direct signals save failed for ${sig.symbol}:`, saveError instanceof Error ? saveError.message : saveError);
+          }
+        }
+
+        // persistSignals writes to signals_archive — secondary, non-fatal.
+        try {
+          await persistSignals([cloudDoc]);
+          // Mirror into signals_history — the chart-source store whose originals
+          // archive status updates (track-signals WIN/LOSS/EXPIRED patches) can
+          // never overwrite.
+          await persistToHistory([cloudDoc]);
+        } catch (persistError) {
+          console.warn(`[signalsLive] persistSignals failed for ${sig.symbol}:`, persistError instanceof Error ? persistError.message : persistError);
+        }
       }
     } catch (error) {
       console.warn(`[signalsLive] persist failed for ${sig.symbol}:`, error instanceof Error ? error.message : error);
