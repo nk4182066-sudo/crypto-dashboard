@@ -85,6 +85,15 @@ function computeVolumeRatio(candles: Candle[]): number | null {
   return avg > 0 ? last / avg : null;
 }
 
+/** Chunk array into batches of `size` */
+const chunk = <T>(arr: T[], size: number): T[][] => {
+  const chunks: T[][] = [];
+  for (let i = 0; i < arr.length; i += size) {
+    chunks.push(arr.slice(i, i + size));
+  }
+  return chunks;
+};
+
 /** Buckets raw price/volume ticks into OHLCV candles of `bucketMs` width. */
 function bucketCandles(
   points: Array<{ time: number; price: number; volume: number }>,
@@ -163,7 +172,6 @@ interface BybitTickersResponse {
 async function getCandlesBybit(symbol: string, timeframe: string, limit = 300): Promise<Candle[]> {
   const url = `${BYBIT_BASE}/v5/market/kline`;
   const params = new URLSearchParams({ symbol, interval: timeframe, limit: String(limit) });
-  console.log('[API CHECK]', symbol, 'URL:', url);
   const response = await fetchJson<BybitKlineResponse>(`${url}?${params.toString()}`);
   if (!response || response.retCode !== 0) return [];
   const rows = response.result?.kline?.list ?? [];
@@ -171,9 +179,6 @@ async function getCandlesBybit(symbol: string, timeframe: string, limit = 300): 
   const times = rawTimes.map((rawTime) => rawTime * 1000);
   const firstRaw = rawTimes[0] ?? 0;
   const firstTime = firstRaw ? firstRaw * 1000 : 0;
-  console.log(
-    `[DATA FIX] ${symbol} Bybit kline: firstRaw=${firstRaw} fixed=${firstTime} date=${firstTime ? new Date(firstTime).toISOString() : "invalid"}`,
-  );
   return rows.map((row, index) => ({
     time: times[index],
     open: parseFloat(row[1] ?? "0"),
@@ -195,7 +200,7 @@ async function getLastPriceBybit(symbol: string): Promise<number | null> {
 }
 
 async function getMarketDataBybit(symbol: string): Promise<MarketData | null> {
-  console.log(`[marketData] Using Bybit for ${symbol}`);
+  // Using Bybit for ${symbol}
   const row = findSymbol(symbol);
   if (!row) return null;
   const price = await getLastPriceBybit(row.bybit);
@@ -240,14 +245,10 @@ interface BitgetTickerResponse {
 async function getCandlesBitget(symbol: string, timeframe: string, limit = 300): Promise<Candle[]> {
   const url = `${BITGET_BASE}/api/v2/spot/market/candles`;
   const params = new URLSearchParams({ symbol, interval: timeframe, limit: String(limit) });
-  console.log('[API CHECK]', symbol, 'URL:', url);
   const response = await fetchJson<BitgetCandleResponse>(`${url}?${params.toString()}`);
   if (!response || response.code !== "00000") return [];
   const rows = response.data ?? [];
   const firstRaw = rows.length > 0 ? rows[0].id : 0;
-  console.log(
-    `[DATA FIX] ${symbol} Bitget candles: firstRaw=${firstRaw} alreadyMs=${firstRaw > 1_000_000_000}`,
-  );
   return rows.map((row) => ({
     time: row.id,
     open: parseFloat(row.open ?? "0"),
@@ -269,7 +270,6 @@ async function getLastPriceBitget(symbol: string): Promise<number | null> {
 }
 
 async function getMarketDataBitget(symbol: string): Promise<MarketData | null> {
-  console.log(`[marketData] Bybit failed, trying Bitget for ${symbol}`);
   const row = findSymbol(symbol);
   if (!row) return null;
   const price = await getLastPriceBitget(row.bitget);
@@ -351,11 +351,25 @@ async function getMarketDataCoinGecko(symbol: string): Promise<MarketData | null
   return { price, candles: { oneHour, fourHour, oneDay }, volumeRatio };
 }
 
-/** MASLA 1 orchestrator: Bybit → Bitget → CoinGecko. Null only when all fail. */
+/** Immediate Binance fallback - tries Binance when MEXC/Coingecko returns 0 candles */
+async function getMarketDataBinance(symbol: string): Promise<MarketData | null> {
+  try {
+    const sym = symbol.replace("-USD","").replace("/USD","") + "USDT";
+    const res = await fetch(`https://api.binance.com/api/v3/klines?symbol=${sym}&interval=1h&limit=100`);
+    if(!res.ok) return null;
+    const data = await res.json();
+    if(!data || data.length === 0) return null;
+    const candles = data.map((k:any)=>({ time: k[0], open: parseFloat(k[1]), high: parseFloat(k[2]), low: parseFloat(k[3]), close: parseFloat(k[4]), volume: parseFloat(k[5]) }));
+    return { symbol, candles: { oneHour: candles, fourHour: [], oneDay: [] }, source: "binance" } as any;
+  } catch { return null; }
+}
+
+/** MASLA 1 orchestrator: Bybit → Bitget → Binance → CoinGecko. Null only when all fail. */
 export async function getMarketData(symbol: string): Promise<MarketData | null> {
   const plans: Array<() => Promise<MarketData | null>> = [
     () => getMarketDataBybit(symbol),
     () => getMarketDataBitget(symbol),
+    () => getMarketDataBinance(symbol), // immediate Binance fallback for 0-candle MEXC issues
     () => getMarketDataCoinGecko(symbol),
   ];
   for (const plan of plans) {

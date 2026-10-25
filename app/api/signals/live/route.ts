@@ -16,7 +16,7 @@
 //
 // Educational analysis only — not financial advice.
 
-import { refresh, getLiveSignals, LIVE_CAPS, type EmittedMarketSignal, type ScanMarket } from "@/src/lib/signalsLive";
+import { refresh, LIVE_CAPS, type EmittedMarketSignal, type ScanMarket } from "@/src/lib/signalsLive";
 import { SIGNAL_TTL_MS } from "@/src/lib/signalCloud";
 import { scanUniverse } from "@/src/scanner/universe";
 
@@ -29,7 +29,7 @@ import { scanUniverse } from "@/src/scanner/universe";
 const MARKET_VALUES: ScanMarket[] = [...new Set(scanUniverse.map((s) => s.market))];
 
 export const dynamic = "force-dynamic";
-export const maxDuration = 60;
+export const maxDuration = 25;
 
 function toMarket(market: string | null | undefined): ScanMarket | "all" {
   if (!market) return "all";
@@ -56,22 +56,34 @@ export async function GET(request: Request) {
   // independent I/O chain (scan + history fetches), and serialising them on a
   // cold instance used to risk blowing the serverless duration.
   const markets: ScanMarket[] = market === "all" ? MARKET_VALUES : [market];
-  const pools = await Promise.all(
-    markets.map(async (active): Promise<EmittedMarketSignal[]> => {
+
+  // One accumulator per market — filled as each one finishes. On timeout we
+  // return whatever partial progress exists rather than throwing away every
+  // market that already completed (the old Promise.race + pools=[] on timeout
+  // discarded real results on cold-start slowness).
+  const partialPools: (EmittedMarketSignal[] | null)[] = new Array(markets.length).fill(null);
+
+  // 8s race: return early if the scanner chain takes too long, so the
+  // serverless function never times out even on cold starts with 120 symbols.
+  const timeoutPromise = new Promise<{ timedOut: true }>(
+    (resolve) => setTimeout(() => resolve({ timedOut: true }), 8000),
+  );
+
+  const scanPromise = (async () => {
+    for (let index = 0; index < markets.length; index += 1) {
+      const active = markets[index];
       try {
-        return await refresh(active, origin);
+        partialPools[index] = await refresh(active, origin);
       } catch (error) {
         // console.warn(`[signals/live] refresh failed for ${active}:`, error instanceof Error ? error.message : error);
+        partialPools[index] = [];
       }
-      // Defensive fallback — strict-only pool (never persists, never throws).
-      try {
-        return await getLiveSignals(active, origin);
-      } catch (error) {
-        // console.warn(`[signals/live] strict fallback failed for ${active}:`, error instanceof Error ? error.message : error);
-        return [];
-      }
-    }),
-  );
+    }
+    return { timedOut: false };
+  })();
+
+  const result = await Promise.race([scanPromise, timeoutPromise]);
+  const pools = partialPools.map((pool) => pool ?? []);
 
   const results: Record<string, EmittedMarketSignal[]> = {};
 
@@ -85,8 +97,6 @@ export async function GET(request: Request) {
   }
 
   const filteredPools = pools.map((pool) => pool.filter(isFresh));
-
-  // console.log('[signals/live] markets:', markets, 'raw pool sizes:', pools.map((p) => p?.length ?? 0), 'fresh sizes:', filteredPools.map((p) => p.length));
 
   if (market === "all") {
     const merged: EmittedMarketSignal[] = [];

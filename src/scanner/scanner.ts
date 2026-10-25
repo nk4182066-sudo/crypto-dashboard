@@ -107,11 +107,14 @@ async function fetchCandles(symbol: string, market: ScanTarget["market"]): Promi
         const toMs = (ts: number): number => (ts < 1e11 ? ts * 1000 : ts);
 
         // Try MEXC first
+        // Interval: 60m for 1h, 4h for 4h, 1d for 1d (MEXC does NOT accept "1h")
+        const intervals: Record<string, string> = { "1h": "60m", "4h": "4h", "1d": "1d" };
+        const mxcInterval = intervals[timeframe] ?? "60m"; // default to 60m if unknown
+
         try {
-//           console.log(`[API CHECK] ${market} ${symbol} -> MEXC ${cryptoPair}`);
           const mxcUrl = new URL("https://api.mexc.com/api/v3/klines");
           mxcUrl.searchParams.set("symbol", cryptoPair);
-          mxcUrl.searchParams.set("interval", "1m");
+          mxcUrl.searchParams.set("interval", mxcInterval);
           mxcUrl.searchParams.set("limit", "300");
 
           const response = await fetch(mxcUrl.toString(), { cache: "no-store", signal: AbortSignal.timeout(15000) });
@@ -123,7 +126,8 @@ async function fetchCandles(symbol: string, market: ScanTarget["market"]): Promi
             console.log(`[DATA] MEXC Failed: HTTP ${response.status} for ${cryptoPair}`);
           } else {
             const payload = await response.json() as unknown[];
-            // Log first raw item to verify MEXC response format
+            // Log raw response to diagnose empty candles / rate-limit errors
+            console.log(`[DATA] MEXC Raw Response for ${cryptoPair}:`, JSON.stringify(payload).substring(0, 500));
             if (payload.length > 0) {
 //               console.log(`[DATA] MEXC first raw item for ${cryptoPair}:`, JSON.stringify(payload[0]));
             }
