@@ -79,7 +79,7 @@ function toBybitSymbol(symbol: string): string {
 async function fetchCandles(symbol: string, market: ScanTarget["market"]): Promise<Candle[]> {
   const providerSymbol = toProviderSymbol(symbol);
 
-  console.log(`[DATA] fetchCandles market=${market} symbol=${symbol} providerSymbol=${providerSymbol}`);
+  // console.log(`[DATA] fetchCandles market=${market} symbol=${symbol} providerSymbol=${providerSymbol}`);
 
   // Cache the CONVERTED Candle[] array (not the raw Yahoo payload) under this
   // key. The market-signals route reads `scan:candles:...` and calls
@@ -187,7 +187,7 @@ async function fetchCandles(symbol: string, market: ScanTarget["market"]): Promi
 
         // Both failed — return empty so crypto never falls through to biquote/mock.
         // Individual 400s already returned [] above; this catches non-400 failures.
-        console.warn(`[DATA] ALL DATA SOURCES FAILED for ${market} ${symbol}. No data available.`);
+        console.warn(`[scanner] ${batch[index].symbol} failed:`, errors[index]);
         return [];
       }
 
@@ -196,7 +196,7 @@ async function fetchCandles(symbol: string, market: ScanTarget["market"]): Promi
       // Crypto must never reach this block — it uses MEXC/Bitget above.
       // ========================
       if (market === "forex" || market === "stocks" || market === "metals") {
-        console.log(`[DATA] Yahoo blocked, using biquote for ${market}/${symbol}`);
+        // console.log(`[DATA] Yahoo blocked, using biquote for ${market}/${symbol}`);
         try {
           const bars = await bq.ohlc(providerSymbol, { interval: "1h", limit: 500 });
           // Validate timestamps — reject 1970-01-01 epoch-zero candles
