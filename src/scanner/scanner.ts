@@ -1,12 +1,10 @@
-import type { Candle, MarketAnalysis } from "@/src/analysis/types";
+﻿import type { Candle, MarketAnalysis } from "@/src/analysis/types";
 import { analyzeMarket } from "@/src/analysis";
 import { cacheGet, cached, cacheSet } from "@/src/lib/cache";
 import { detectCandlestickPattern, type CandlestickDetection } from "@/src/lib/signalGenerator";
-import Biquote from "biquote";
 import { mapConcurrent, toBatches } from "./batch";
 import { SCAN_BATCH_SIZE, SCAN_CONCURRENCY, SCAN_MIN_CANDLES, scanUniverse, type ScanTarget } from "./universe";
 
-const bq = new Biquote();
 
 export interface ScanResult {
   symbol: string;
@@ -76,16 +74,79 @@ function toBybitSymbol(symbol: string): string {
     .replace(/[^A-Za-z0-9]/g, "");
 }
 
-async function fetchCandles(symbol: string, market: ScanTarget["market"]): Promise<Candle[]> {
+/** Fetch candles from Yahoo Finance API. */
+async function fetchYahooCandles(symbol: string, market: ScanTarget["market"], timeframe: "1h" | "4h" | "1d"): Promise<Candle[]> {
+  const intervalMap: Record<"1h" | "4h" | "1d", string> = {
+    "1h": "1h",
+    "4h": "4h",
+    "1d": "1d",
+  };
+  const interval = intervalMap[timeframe] ?? "1h";
+
+  let yahooSymbol = symbol;
+  if (market === "forex") {
+    if (!symbol.includes("=")) {
+      yahooSymbol = `${symbol}=X`;
+    }
+  }
+
+  if (market === "metals") {
+    const metalBaseSymbols = ["GDX", "GDXU", "PAAS", "SIL", "AGO", "AAU", "NUE", "AEM", "SMH", "HYG", "LQD", "TTM", "RSP", "IYM", "EWZ", "EEM", "UUP", "USO", "GOLD", "GLD", "SLV", "IAU", "GDXJ", "GDXSE"];
+    if (!metalBaseSymbols.includes(yahooSymbol)) {
+      yahooSymbol = `${yahooSymbol}=X`;
+    }
+  }
+
+  const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(yahooSymbol)}?interval=${interval}&range=1mo`;
+  
+  const response = await fetch(url, { cache: "no-store", signal: AbortSignal.timeout(15000) });
+  
+  if (!response.ok) {
+    console.log(`[DATA] Yahoo Failed: HTTP ${response.status} for ${yahooSymbol} (${symbol})`);
+    return [];
+  }
+
+  const payload = (await response.json()) as YahooChartPayload;
+  const result = payload.chart?.result?.[0];
+  
+  if (!result) {
+    console.log(`[DATA] Yahoo No data: ${yahooSymbol} (${symbol})`);
+    return [];
+  }
+
+  const timestamps = result.timestamp;
+  const indicators = result.indicators?.quote?.[0];
+  
+  if (!timestamps || !indicators) {
+    console.log(`[DATA] Yahoo Invalid payload: ${yahooSymbol}`);
+    return [];
+  }
+
+  const { open, high, low, close, volume } = indicators;
+  
+  const candles = timestamps.map((ts, i) => ({
+    time: ts,
+    open: open?.[i] ?? 0,
+    high: high?.[i] ?? 0,
+    low: low?.[i] ?? 0,
+    close: close?.[i] ?? 0,
+    volume: volume?.[i] ?? 0,
+  })).filter((c) => c.high > 0);
+
+  console.log(`[DATA] Yahoo Success: ${market}/${symbol} Raw Length: ${candles.length}`);
+  
+  if (candles.length > 0) {
+    const lastDate = new Date(candles[candles.length - 1].time * 1000).toISOString();
+    console.log(`[DATA] Yahoo Last candle: ${lastDate} for ${symbol}`);
+  }
+  
+  return candles;
+}
+
+
+async function fetchCandles(symbol: string, market: ScanTarget["market"], timeframe: "1h" | "4h" | "1d"): Promise<Candle[]> {
   const providerSymbol = toProviderSymbol(symbol);
 
-  // console.log(`[DATA] fetchCandles market=${market} symbol=${symbol} providerSymbol=${providerSymbol}`);
-
-  // Cache the CONVERTED Candle[] array (not the raw Yahoo payload) under this
-  // key. The market-signals route reads `scan:candles:...` and calls
-  // candles.slice() on it; caching the raw JSON object here made that throw
-  // "candles.slice is not a function" once the per-symbol details survived.
-  // The scheduler and on-demand reads still share this one cached fetch.
   const cacheKey = market === "crypto"
     ? `scan:candles:${market}:${toBybitSymbol(symbol)}`
     : `scan:candles:${market}:${providerSymbol}`;
@@ -94,149 +155,21 @@ async function fetchCandles(symbol: string, market: ScanTarget["market"]): Promi
     cacheKey,
     { ttlMs: 1 * 60 * 1000, staleMs: 2 * 60 * 1000 },
     async () => {
-      // ========================
-      // CRYPTO: MEXC primary + Bitget fallback
-      // ========================
       if (market === "crypto") {
-        // Normalize symbol to MEXC/Bitget format (BTC-USD -> BTCUSDT)
-        const cryptoPair = providerSymbol.replace(/^([A-Za-z0-9]+)-(USD|USDT)$/, "$1$2").replace(/^([A-Za-z0-9]+)USD$/, "$1USDT").replace(/[^A-Za-z0-9]/g, "");
-
-        // Normalize a raw timestamp to milliseconds.
-        // If < 1e11 it's seconds (10 digits) — multiply by 1000.
-        // If >= 1e11 it's already milliseconds (13 digits) — keep as-is.
-        const toMs = (ts: number): number => (ts < 1e11 ? ts * 1000 : ts);
-
-        // Try MEXC first
-        // Interval: 60m for 1h, 4h for 4h, 1d for 1d (MEXC does NOT accept "1h")
-        const intervals: Record<string, string> = { "1h": "60m", "4h": "4h", "1d": "1d" };
-        const mxcInterval = intervals[timeframe] ?? "60m"; // default to 60m if unknown
-
-        try {
-          const mxcUrl = new URL("https://api.mexc.com/api/v3/klines");
-          mxcUrl.searchParams.set("symbol", cryptoPair);
-          mxcUrl.searchParams.set("interval", mxcInterval);
-          mxcUrl.searchParams.set("limit", "300");
-
-          const response = await fetch(mxcUrl.toString(), { cache: "no-store", signal: AbortSignal.timeout(15000) });
-          if (!response.ok) {
-            if (response.status === 400) {
-//               console.log(`[DATA] Symbol not found on MEXC: ${symbol}`);
-              return [];
-            }
-            console.log(`[DATA] MEXC Failed: HTTP ${response.status} for ${cryptoPair}`);
-          } else {
-            const payload = await response.json() as unknown[];
-            // Log raw response to diagnose empty candles / rate-limit errors
-            console.log(`[DATA] MEXC Raw Response for ${cryptoPair}:`, JSON.stringify(payload).substring(0, 500));
-            if (payload.length > 0) {
-//               console.log(`[DATA] MEXC first raw item for ${cryptoPair}:`, JSON.stringify(payload[0]));
-            }
-            const candles = payload.flatMap((row): Candle[] => {
-              if (!Array.isArray(row) || row.length < 6) return [];
-              const [rawTime, open, high, low, close, volume] = row.map(Number);
-              if (![rawTime, open, high, low, close, volume].every(Number.isFinite)) return [];
-              const time = toMs(rawTime);
-              // Reject 1970/epoch-zero timestamps
-              if (new Date(time).getFullYear() < 2020) return [];
-              return [{ time, open, high, low, close, volume }];
-            });
-            if (candles.length > 0) {
-              const lastDate = new Date(candles[candles.length - 1].time).toISOString();
-//               console.log(`[DATA] MEXC Success: ${symbol} Last candle: ${lastDate}`);
-              return candles;
-            }
-//             console.log(`[DATA] MEXC Success (no candles) for ${cryptoPair}`);
-          }
-        } catch (error) {
-          console.log(`[DATA] MEXC Failed: ${(error as Error).message} for ${cryptoPair}`);
-        }
-
-        // Try Bitget as fallback
-        try {
-          console.log(`[DATA] Trying Bitget for ${cryptoPair}`);
-          const bgUrl = new URL("https://api.bitget.com/api/v3/market/candles");
-          bgUrl.searchParams.set("category", "SPOT");
-          bgUrl.searchParams.set("symbol", cryptoPair);
-          bgUrl.searchParams.set("interval", "1m");
-          bgUrl.searchParams.set("limit", "300");
-
-          const response = await fetch(bgUrl.toString(), { cache: "no-store", signal: AbortSignal.timeout(15000) });
-          if (!response.ok) {
-            if (response.status === 400) {
-//               console.log(`[DATA] Symbol not found on Bitget: ${symbol}`);
-              return [];
-            }
-            console.log(`[DATA] Bitget Failed: HTTP ${response.status} for ${cryptoPair}`);
-          } else {
-            const payload = await response.json() as { data?: { id: number; open: number; high: number; low: number; close: number; vol: number; }[] };
-            const rows = payload.data ?? [];
-            const candles = rows
-              .map((row): Candle | null => {
-                const time = toMs(row.id);
-                if (new Date(time).getFullYear() < 2020) return null;
-                if (![row.open, row.high, row.low, row.close, row.vol].every(Number.isFinite)) return null;
-                return { time, open: row.open, high: row.high, low: row.low, close: row.close, volume: row.vol };
-              })
-              .filter((c): c is Candle => c !== null);
-            if (candles.length > 0) {
-              const lastDate = new Date(candles[candles.length - 1].time).toISOString();
-              console.log(`[DATA] Bitget Success: ${symbol} Last candle: ${lastDate}`);
-              return candles;
-            }
-            console.log(`[DATA] Bitget Success (no candles) for ${cryptoPair}`);
-          }
-        } catch (error) {
-          console.log(`[DATA] Bitget Failed: ${(error as Error).message} for ${cryptoPair}`);
-        }
-
-        // Both failed — return empty so crypto never falls through to biquote/mock.
-        // Individual 400s already returned [] above; this catches non-400 failures.
-        // @ts-ignore
-        console.warn(`[scanner] ${batch[index].symbol} failed:`, errors[index]);
-        return [];
+        return fetchMexcCandles(symbol, market, timeframe);
       }
 
-      // ========================
-      // FOREX / STOCKS / METALS: biquote (MetaTrader 5 feed)
-      // Crypto must never reach this block — it uses MEXC/Bitget above.
-      // ========================
       if (market === "forex" || market === "stocks" || market === "metals") {
-        // console.log(`[DATA] Yahoo blocked, using biquote for ${market}/${symbol}`);
-        try {
-          const bars = await bq.ohlc(providerSymbol, { interval: "1h", limit: 500 });
-          // Validate timestamps — reject 1970-01-01 epoch-zero candles
-          const validCandles: Candle[] = [];
-          for (const bar of bars) {
-            const t = Date.parse(bar.openTime);
-            if (!Number.isFinite(t) || t === 0 || new Date(t).getFullYear() < 2020) continue;
-            validCandles.push({
-              time: Math.floor(t / 1000),
-              open: bar.open,
-              high: bar.high,
-              low: bar.low,
-              close: bar.close,
-              volume: bar.volume,
-            });
-          }
-          if (validCandles.length > 0) {
-            const lastDate = new Date(validCandles[validCandles.length - 1].time * 1000).toISOString();
-            console.log(`[DATA FRESH] ${symbol} Last candle: ${lastDate}`);
-          }
-          return validCandles;
-        } catch (error) {
-          console.warn(`[DATA] biquote failed for ${market}/${symbol}:`, error instanceof Error ? error.message : String(error));
-          return [];
-        }
+        return fetchYahooCandles(symbol, market, timeframe);
       }
 
-      // Should not reach here — crypto returns within the if block above,
-      // non-crypto returns within the biquote guard block.
       console.warn(`[DATA] No data source matched for market=${market} symbol=${symbol}`);
       return [];
     }
   );
 }
-/** Feature 10 — ranks a symbol by its setup quality, not by hope. */
+}
+/** Feature 10 â€” ranks a symbol by its setup quality, not by hope. */
 function toScanResult(target: ScanTarget, analysis: MarketAnalysis): ScanResult {
   return {
     symbol: target.symbol,
@@ -257,10 +190,10 @@ async function scanOne(target: ScanTarget): Promise<ScanResult | null> {
   if (candles.length < SCAN_MIN_CANDLES) return null;
 
   // fetchCandles stores Candle.time in milliseconds. The analysis pipeline
-  // (analyzeMarket → timeAnalysis) expects seconds, so convert here.
+  // (analyzeMarket â†’ timeAnalysis) expects seconds, so convert here.
   const analysisCandles = candles.map((c) => ({ ...c, time: Math.floor(c.time / 1000) }));
 
-  // Feature 3 — the full analysis is computed once here and cached, so the UI
+  // Feature 3 â€” the full analysis is computed once here and cached, so the UI
   // reads it instantly instead of recomputing on every request.
   const market = target.market === "metals" || target.market === "forex" ? "forex" : target.market;
   const analysis = analyzeMarket({
@@ -283,13 +216,13 @@ async function scanOne(target: ScanTarget): Promise<ScanResult | null> {
   return toScanResult(target, analysis);
 }
 
-/** Feature 3 — returns the cached candlestick confirmation for one symbol. */
+/** Feature 3 â€” returns the cached candlestick confirmation for one symbol. */
 export function getCachedCandlestick(symbol: string, market: ScanTarget["market"]): CandlestickDetection | null {
   return cacheGet<CandlestickDetection | null>(`${CANDLE_KEY}:${market}:${symbol}`) ?? null;
 }
 
 /**
- * Feature 1 + 7 + 10 — walks the universe in batches, scans each batch
+ * Feature 1 + 7 + 10 â€” walks the universe in batches, scans each batch
  * concurrently, and stores the ranked snapshot in cache.
  */
 export async function runScan(targets?: readonly ScanTarget[]): Promise<ScanSnapshot> {
@@ -297,14 +230,14 @@ export async function runScan(targets?: readonly ScanTarget[]): Promise<ScanSnap
 const isFullScan = !targets || targets.length === 0;
   const list = isFullScan ? scanUniverse : targets;
 
-  // Feature 7 — chunk the work so each batch is handled in a single pass.
+  // Feature 7 â€” chunk the work so each batch is handled in a single pass.
   const batches = toBatches(list, SCAN_BATCH_SIZE);
 
   const collected: ScanResult[] = [];
   let failed = 0;
 
   for (const batch of batches) {
-    // Feature 1 — bounded concurrency inside each batch.
+    // Feature 1 â€” bounded concurrency inside each batch.
     const { results, errors } = await mapConcurrent(batch, SCAN_CONCURRENCY, scanOne);
     for (let index = 0; index < batch.length; index += 1) {
       const result = results[index];
@@ -315,9 +248,12 @@ const isFullScan = !targets || targets.length === 0;
         console.warn(`[scanner] ${batch[index].symbol} failed:`, errors[index]);
       }
     }
+
+      // Small delay between batches to avoid rate limiting for MEXC API
+      await new Promise<void>((resolve) => setTimeout(resolve, 500));
   }
 
-  // Feature 10 — highest confidence first; "wait" setups sort below real signals.
+  // Feature 10 â€” highest confidence first; "wait" setups sort below real signals.
   const rank = (item: ScanResult) => (item.direction === "wait" ? -1000 : 0) + item.confidence;
   collected.sort((first, second) => rank(second) - rank(first));
 
@@ -334,7 +270,7 @@ const isFullScan = !targets || targets.length === 0;
   // lookup still caches that symbol's analysis, but must not shrink the list.
   if (isFullScan) {
     // The cache is a single shared store and `maxEntries` evicts on every write,
-    // so this bound must stay above the per-symbol detail entries — otherwise the
+    // so this bound must stay above the per-symbol detail entries â€” otherwise the
     // snapshot write would evict them and force on-demand recomputes.
     cacheSet(SNAPSHOT_KEY, snapshot, { ttlMs: SNAPSHOT_TTL_MS, maxEntries: DETAILS_MAX_ENTRIES + 16 });
   }
@@ -346,7 +282,7 @@ export function getCachedSnapshot(): ScanSnapshot | null {
   return cacheGet<ScanSnapshot>(SNAPSHOT_KEY) ?? null;
 }
 
-/** Feature 3 — returns the pre-computed analysis for one symbol. */
+/** Feature 3 â€” returns the pre-computed analysis for one symbol. */
 export function getCachedAnalysis(symbol: string, market: ScanTarget["market"]): MarketAnalysis | null {
   return cacheGet<MarketAnalysis>(`${DETAILS_KEY}:${market}:${symbol}`) ?? null;
 }

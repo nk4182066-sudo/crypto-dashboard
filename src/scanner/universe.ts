@@ -311,7 +311,7 @@ export const SCAN_INTERVAL_MS = 15 * 60 * 1000;
 export const SCAN_BATCH_SIZE = 50;
 
 /** Feature 1 — how many symbols are fetched/analyzed at once. */
-export const SCAN_CONCURRENCY = 6;
+export const SCAN_CONCURRENCY = 2; // Reduced to avoid MEXC rate limits
 
 /** Minimum candles before an analysis is trustworthy. */
 export const SCAN_MIN_CANDLES = 30;
