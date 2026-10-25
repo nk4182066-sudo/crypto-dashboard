@@ -118,7 +118,8 @@ function withScanStability   (fn                  )                    {
       return null;
     }
   };
-}\nasync function cryptoPrices(): Promise<Map<string, number>> {
+}
+async function cryptoPrices(): Promise<Map<string, number>> {
   const map = new Map<string, number>();
   try {
     const response = await fetch("https://api.bybit.com/v5/market/tickers?category=linear", {
