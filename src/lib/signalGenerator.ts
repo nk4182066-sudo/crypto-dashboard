@@ -17,6 +17,7 @@ import { scanCandlestickPatterns } from "@/src/lib/chart/candlestickPatterns";
 import { roundPrice, formatPrice as money } from "@/src/lib/formatPrice";
 // Dynamic SL/TP geometry (ATR + Support/Resistance) — replaces the old static
 // 3% SL / 10-20-30% TP ladder that squished the chart on 1h/15m views.
+import { buildTradeSetup, type TradeSetupOutput } from "@/src/lib/tradeSetup";
 import { buildAtrPlan, type AtrPlan } from "@/src/lib/atrPlan";
 
 export type SignalDirection = "bullish" | "bearish" | "neutral";
@@ -250,48 +251,40 @@ if (input.candlestick?.type === "neutral") {
   const bullish = direction === "bullish";
   const bearish = direction === "bearish";
 
-  const lev = input.leverage && input.leverage > 0 ? input.leverage : 10;
+  const lev = input.leverage && input.leverage > 0 ? input.leverage : 20;
   // Leverage-aware plan: DYNAMIC ATR geometry — the SAME ladder the Trade
   // chart draws (context carries candles/ATR/timeframe + S/R for trimming).
-  const plan = buildLeverageLevels(price, bearish ? "bearish" : "bullish", lev, {
-    candles: input.candles,
-    atr: input.atr,
-    timeframeMinutes: input.timeframeMinutes,
-    // RAW swing levels (not the ±3% display defaults above) — buildAtrPlan
-    // decides whether structure is usable or falls back to its own proxy.
-    support: input.support ?? null,
-    resistance: input.resistance ?? null,
-  });
+  const setup = buildTradeSetup({ price, direction: bullish ? "BUY" : "SELL", leverage: lev, collateralUsdt: 7 });
 
 // Validate SL/TP are solid positive numbers (not 0, not null, not NaN)
-if (plan.stopLoss == null || plan.stopLoss <= 0 || isNaN(plan.stopLoss)) {
+if (setup.stopLoss == null || setup.stopLoss <= 0 || isNaN(setup.stopLoss)) {
   console.warn(`[generateFullSignal] Rejecting signal for ${symbol}: invalid stopLoss`);
   return null;
 }
-if (plan.tp1 == null || plan.tp1 <= 0 || isNaN(plan.tp1)) {
+if (setup.tp1 == null || setup.tp1 <= 0 || isNaN(setup.tp1)) {
   console.warn(`[generateFullSignal] Rejecting signal for ${symbol}: invalid tp1`);
   return null;
 }
-if (plan.tp2 == null || plan.tp2 <= 0 || isNaN(plan.tp2)) {
+if (setup.tp2 == null || setup.tp2 <= 0 || isNaN(setup.tp2)) {
   console.warn(`[generateFullSignal] Rejecting signal for ${symbol}: invalid tp2`);
   return null;
 }
-if (plan.tp3 == null || plan.tp3 <= 0 || isNaN(plan.tp3)) {
+if (setup.tp3 == null || setup.tp3 <= 0 || isNaN(setup.tp3)) {
   console.warn(`[generateFullSignal] Rejecting signal for ${symbol}: invalid tp3`);
   return null;
 }
   // Entry 1 (aggressive) = current price; Entry 2 (conservative) = the S/R
   // level (support for longs, resistance for shorts).
-  const entry1 = plan.entry;
-  const entry2 = bearish ? roundPrice(resistance) : roundPrice(support);
-  const stopLoss = plan.stopLoss;
-  const tp1 = plan.tp1;
-  const tp2 = plan.tp2;
-  const tp3 = plan.tp3;
+  const entry1 = setup.entry1;
+  const entry2 = setup.entry2;
+  const stopLoss = setup.stopLoss;
+  const tp1 = setup.tp1;
+  const tp2 = setup.tp2;
+  const tp3 = setup.tp3;
 
   const riskAbs = Math.abs(entry1 - stopLoss) || 1;
   const rr = (tp: number) => Math.round((Math.abs(tp - entry1) / riskAbs) * 10) / 10;
-  const riskPercent = plan.slPercent;
+  const riskPercent = setup.slPercent;
 
     // MASLA 3: MTF pattern filtering - reject contradictory patterns
   const trendDirection = direction === "bullish" ? "bullish" : direction === "bearish" ? "bearish" : "neutral";
@@ -312,23 +305,7 @@ if (plan.tp3 == null || plan.tp3 <= 0 || isNaN(plan.tp3)) {
   const candlestickConfidence = candle?.confidence ?? 0;
   const candlestickType = candle?.type ?? null;
 
-  // MASLA 4: Ensure SL is strictly below Support by 1.5x ATR buffer
-  let finalStopLoss = stopLoss;
-  if (support > 0 && finalStopLoss >= support) {
-    const atrBuffer = plan.slPercent != null ? (plan.entry * plan.slPercent / 100) * 1.5 : 0.01;
-    const slBelowSupport = Math.max(support - atrBuffer, 0.0001);
-    const entryDist = Math.abs(plan.entry - support);
-    if (entryDist > 0) {
-      const slOffsetFromEntry = entryDist + atrBuffer;
-      const desiredSl = plan.entry - slOffsetFromEntry;
-      finalStopLoss = Math.min(slBelowSupport, desiredSl);
-      if (finalStopLoss >= support) { finalStopLoss = support - 0.0001; }
-      const entryToTp3 = Math.abs(plan.tp3 - plan.entry);
-      const entryToSl = Math.abs(finalStopLoss - plan.entry);
-      if (entryToSl > 0 && entryToTp3 / entryToSl < 3) { finalStopLoss = plan.entry - (entryToTp3 / 3); }
-    }
-  }
-  const stopLossFinal = finalStopLoss;
+  const stopLossFinal = stopLoss;
 
   const dirWord = bearish ? "Bearish" : bullish ? "Bullish" : "Neutral";
   const trend = trendOf(direction, bias);
@@ -431,16 +408,16 @@ if (plan.tp3 == null || plan.tp3 <= 0 || isNaN(plan.tp3)) {
     rr1: rr(tp1),
     rr2: rr(tp2),
     rr3: rr(tp3),
-    leverage: plan.leverage,
-    slPercent: plan.slPercent,
-    slLossPercent: plan.slLossPercent,
-    tp1Percent: plan.tp1Percent,
-    tp2Percent: plan.tp2Percent,
-    tp3Percent: plan.tp3Percent,
-    tp1ProfitPercent: plan.tp1ProfitPercent,
-    tp2ProfitPercent: plan.tp2ProfitPercent,
-    tp3ProfitPercent: plan.tp3ProfitPercent,
-    rr: plan.rr,
+    leverage: lev,
+    slPercent: setup.slPercent,
+    slLossPercent: setup.slLossPercent,
+    tp1Percent: setup.tp1Percent,
+    tp2Percent: setup.tp2Percent,
+    tp3Percent: setup.tp3Percent,
+    tp1ProfitPercent: setup.tp1ProfitPercent,
+    tp2ProfitPercent: setup.tp2ProfitPercent,
+    tp3ProfitPercent: setup.tp3ProfitPercent,
+    rr: setup.riskRewardRatio,
     support,
     resistance,
     prevHigh: resistance,

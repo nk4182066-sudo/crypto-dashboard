@@ -116,6 +116,10 @@ async function fetchCandles(symbol: string, market: ScanTarget["market"]): Promi
 
           const response = await fetch(mxcUrl.toString(), { cache: "no-store", signal: AbortSignal.timeout(15000) });
           if (!response.ok) {
+            if (response.status === 400) {
+              console.log(`[DATA] Symbol not found on MEXC: ${symbol}`);
+              return [];
+            }
             console.log(`[DATA] MEXC Failed: HTTP ${response.status} for ${cryptoPair}`);
           } else {
             const payload = await response.json() as unknown[];
@@ -154,6 +158,10 @@ async function fetchCandles(symbol: string, market: ScanTarget["market"]): Promi
 
           const response = await fetch(bgUrl.toString(), { cache: "no-store", signal: AbortSignal.timeout(15000) });
           if (!response.ok) {
+            if (response.status === 400) {
+              console.log(`[DATA] Symbol not found on Bitget: ${symbol}`);
+              return [];
+            }
             console.log(`[DATA] Bitget Failed: HTTP ${response.status} for ${cryptoPair}`);
           } else {
             const payload = await response.json() as { data?: { id: number; open: number; high: number; low: number; close: number; vol: number; }[] };
@@ -177,26 +185,10 @@ async function fetchCandles(symbol: string, market: ScanTarget["market"]): Promi
           console.log(`[DATA] Bitget Failed: ${(error as Error).message} for ${cryptoPair}`);
         }
 
-        // Both failed
-        console.warn(`[DATA] ALL DATA SOURCES FAILED for ${market} ${symbol}. Using mock fallback.`);
-        // Return 30 candles of mock data so the scanner can at least try to analyze
-        const basePrice = cryptoPair.includes("BTC") ? 86000 : cryptoPair.includes("ETH") ? 3400 : 100;
-        const mockCandles: Candle[] = [];
-        let price = basePrice;
-        for (let i = 29; i >= 0; i--) {
-          const time = Date.now() - i * 60 * 1000;
-          const change = (Math.random() - 0.485) * 200;
-          price = Math.max(price + change, 10);
-          mockCandles.push({
-            time,
-            open: price - change,
-            high: price + Math.random() * 50,
-            low: price - Math.random() * 50,
-            close: price,
-            volume: Math.random() * 1000 + 50,
-          });
-        }
-        return mockCandles;
+        // Both failed — return empty so crypto never falls through to biquote/mock.
+        // Individual 400s already returned [] above; this catches non-400 failures.
+        console.warn(`[DATA] ALL DATA SOURCES FAILED for ${market} ${symbol}. No data available.`);
+        return [];
       }
 
       // ========================

@@ -430,8 +430,14 @@ export async function GET(request: Request) {
     }
   }
 
+  // Crypto must ONLY use MEXC/Bitget (scanner) / Binance/Bybit (history route).
+  // Never fall through to biquote — that leaks crypto symbols to the wrong feed.
+  if (market === "crypto") {
+    return Response.json(synthetic(), { headers: { "Cache-Control": "no-store" } });
+  }
+
   // Yahoo Finance blocks Vercel IPs — switch to biquote (MetaTrader 5 feed, no API key)
-  // for Forex, Stocks, and Metals. Crypto is handled above by Binance/Bybit.
+  // for Forex, Stocks, and Metals only.
   console.log(`[DATA] Yahoo blocked, using biquote for ${market}/${symbol}`);
   try {
     const bars = await bq.ohlc(symbol, { interval: timeframe as any, limit: 500 });
