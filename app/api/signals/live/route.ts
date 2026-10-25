@@ -42,7 +42,7 @@ function toComparable(market: string, symbol: string): string {
 }
 
 export async function GET(request: Request) {
-  console.log('LIVE API HIT: market=', new URL(request.url).searchParams.get('market'), 'Time:', new Date().toISOString());
+  // console.log('LIVE API HIT: market=', new URL(request.url).searchParams.get('market'), 'Time:', new Date().toISOString());
   const { searchParams } = new URL(request.url);
   const market = toMarket(searchParams.get("market"));
   const origin = new URL(request.url).origin;
@@ -61,13 +61,13 @@ export async function GET(request: Request) {
       try {
         return await refresh(active, origin);
       } catch (error) {
-        console.warn(`[signals/live] refresh failed for ${active}:`, error instanceof Error ? error.message : error);
+        // console.warn(`[signals/live] refresh failed for ${active}:`, error instanceof Error ? error.message : error);
       }
       // Defensive fallback — strict-only pool (never persists, never throws).
       try {
         return await getLiveSignals(active, origin);
       } catch (error) {
-        console.warn(`[signals/live] strict fallback failed for ${active}:`, error instanceof Error ? error.message : error);
+        // console.warn(`[signals/live] strict fallback failed for ${active}:`, error instanceof Error ? error.message : error);
         return [];
       }
     }),
@@ -86,7 +86,7 @@ export async function GET(request: Request) {
 
   const filteredPools = pools.map((pool) => pool.filter(isFresh));
 
-  console.log('[signals/live] markets:', markets, 'raw pool sizes:', pools.map((p) => p?.length ?? 0), 'fresh sizes:', filteredPools.map((p) => p.length));
+  // console.log('[signals/live] markets:', markets, 'raw pool sizes:', pools.map((p) => p?.length ?? 0), 'fresh sizes:', filteredPools.map((p) => p.length));
 
   if (market === "all") {
     const merged: EmittedMarketSignal[] = [];
