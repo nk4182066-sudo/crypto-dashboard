@@ -109,7 +109,16 @@ function isYahooSymbol(symbol: string, market: string): boolean {
 }
 
 /** Live USDT-perp prices from Bybit, keyed by pair (e.g. "BTCUSDT"). */
-async function cryptoPrices(): Promise<Map<string, number>> {
+function withScanStability   (fn                  )                    {
+  return async () => {
+    try {
+      return await fn();
+    } catch (error) {
+      console.log('[track-signals] Symbol not found/blocked, skip');
+      return null;
+    }
+  };
+}\nasync function cryptoPrices(): Promise<Map<string, number>> {
   const map = new Map<string, number>();
   try {
     const response = await fetch("https://api.bybit.com/v5/market/tickers?category=linear", {

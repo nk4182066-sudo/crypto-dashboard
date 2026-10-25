@@ -441,10 +441,13 @@ export async function GET(request: Request) {
     }
   }
 
-  // Crypto must ONLY use MEXC/Bitget (scanner) / Binance/Bybit (history route).
-  // Never fall through to biquote — that leaks crypto symbols to the wrong feed.
-  if (market === "crypto") {
-    return Response.json(synthetic(), { headers: { "Cache-Control": "no-store" } });
+  // BULLETPROOF: Stop crypto from EVER reaching biquote.
+  // Must run before any other logic — case-insensitive to catch "Crypto"/"CRYPTO" etc.
+  if (market.toLowerCase() === "crypto") {
+    return new Response(
+      JSON.stringify({ error: "Crypto must use scanner — biquote disabled for crypto" }),
+      { status: 400, headers: { "Content-Type": "application/json", "Cache-Control": "no-store" } }
+    );
   }
 
   // Yahoo Finance blocks Vercel IPs — switch to biquote (MetaTrader 5 feed, no API key)

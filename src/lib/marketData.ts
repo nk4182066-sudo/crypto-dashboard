@@ -29,8 +29,11 @@ import type { Candle } from "@/src/analysis/types";
 const BYBIT_BASE = "https://api.bybit.com";
 const BITGET_BASE = "https://api.bitget.com";
 const COINGECKO_BASE = "https://api.coingecko.com/api/v3";
+const MEXC_BASE = "https://api.mexc.com";
 
 const FETCH_TIMEOUT_MS = 4_000;
+const RETRY_DELAY_MS = 2_000;
+const MAX_RETRIES = 2;
 
 const HOUR_MS = 60 * 60 * 1000;
 const DAY_MS = 24 * HOUR_MS;
@@ -60,20 +63,37 @@ function timedFetch(input: string, init?: RequestInit): Promise<Response> {
 }
 
 async function fetchJson<T>(url: string, init?: RequestInit): Promise<T | null> {
-  try {
-    const response = await timedFetch(url, {
-      ...init,
-      headers: {
-        Accept: "application/json",
-        "User-Agent": "crypto-dashboard/1.0",
-        ...(init?.headers ?? {}),
-      },
-    });
-    if (!response.ok) return null;
-    return (await response.json()) as T;
-  } catch {
-    return null;
+  let lastError: Error | null = null;
+  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    try {
+      const response = await timedFetch(url, {
+        ...init,
+        headers: {
+          Accept: "application/json",
+          "User-Agent": "crypto-dashboard/1.0",
+          ...(init?.headers ?? {}),
+        },
+      });
+      if (!response.ok) {
+        // Gracefully handle 403/400 - log and return null, don't throw
+        if (response.status === 403 || response.status === 400) {
+          const symbol = init?.symbol ?? url.split("/").pop() ?? "unknown";
+          console.log(`[marketData] Bybit blocked for ${symbol} (status=${response.status}), skipping`);
+          return null as any;
+        }
+        return null;
+      }
+      return (await response.json()) as T;
+    } catch (error) {
+      lastError = error instanceof Error ? error : new Error(String(error));
+      if (attempt < MAX_RETRIES) {
+        await new Promise((r) => setTimeout(r, RETRY_DELAY_MS));
+      }
+    }
   }
+  // After all retries, log and return null
+  console.warn(`[marketData] fetchJson failed after ${MAX_RETRIES + 1} attempts for ${url}:`, lastError?.message);
+  return null;
 }
 
 /** volumeRatio = last-candle volume / mean of the last 20 volumes. */
@@ -186,9 +206,16 @@ async function getCandlesBybit(symbol: string, timeframe: string, limit = 300): 
 
 async function getLastPriceBybit(symbol: string): Promise<number | null> {
   const url = `${BYBIT_BASE}/v5/market/tickers`;
+const response = await fetchJson<BybitTickersResponse>(`${url}?${params.toString()}`, { symbol });
   const params = new URLSearchParams({ symbol });
-  const response = await fetchJson<BybitTickersResponse>(`${url}?${params.toString()}`);
-  if (!response || response.retCode !== 0) return null;
+  const response = await fetchJson<BybitTickersResponse>(`${url}?${params.toString()}`, { symbol });
+  if (!response || response.retCode !== 0) {
+    // 403/400 from Bybit - try MEXC fallback, otherwise return null gracefully
+    console.log(\`[marketData] Bybit blocked/invalid for \${symbol}, trying MEXC fallback\`);
+    const mexcPrice = await getLastPriceMexc(symbol);
+    if (mexcPrice != null) return mexcPrice;
+    return null;
+  }
   const tickers = response.result?.list ?? [];
   const best = tickers.find((t) => t.symbol === symbol);
   return best?.lastPrice != null ? parseFloat(best.lastPrice) : null;
@@ -368,5 +395,50 @@ export async function getMarketData(symbol: string): Promise<MarketData | null> 
   }
   console.warn(`[marketData] All providers failed for ${symbol}`);
   return null;
+}
+
+/** Safe fetch wrapper with User-Agent and 403/400 graceful handling.
+ * Returns null on 403/400 instead of throwing, matching the fetchJson contract.
+ */
+export function safeFetch(input: RequestInfo, init?: RequestInit): Promise<Response> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 8000);
+  return fetch(input, {
+    ...init,
+    headers: {
+      Accept: "application/json",
+      "User-Agent": "crypto-dashboard/1.0",
+      ...(init?.headers ?? {}),
+    },
+    signal: controller.signal,
+  }).finally(() => clearTimeout(timer));
+}
+}
+
+/** MEXC spot ticker fetcher - fallback when Bybit is blocked */
+async function getLastPriceMexc(symbol: string): Promise<number | null> {
+  const url = \`\${MEXC_BASE}/api/v3/ticker/price?symbol=\${symbol}\`;
+  try {
+    const response = await fetchJson<{ price: string }>(url);
+    if (!response || !response.price) return null;
+    const price = num(response.price);
+    return Number.isFinite(price) ? price : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Bitget spot ticker fetcher - fallback when Bybit and MEXC are blocked */
+async function getLastPriceBitget(symbol: string): Promise<number | null> {
+  const url = \`\${BITGET_BASE}/api/v2/spot/market/tickers?symbol=\${symbol}\`;
+  try {
+    const response = await fetchJson<{ data: [{ last: string }] }>(url);
+    if (!response || !response.data || response.data.length === 0) return null;
+    const last = num(response.data[0].last);
+    return Number.isFinite(last) ? last : null;
+  } catch {
+    return null;
+  }
+}
 }
 
