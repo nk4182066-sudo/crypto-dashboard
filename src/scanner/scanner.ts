@@ -187,6 +187,7 @@ async function fetchCandles(symbol: string, market: ScanTarget["market"]): Promi
 
         // Both failed — return empty so crypto never falls through to biquote/mock.
         // Individual 400s already returned [] above; this catches non-400 failures.
+        // @ts-ignore
         console.warn(`[scanner] ${batch[index].symbol} failed:`, errors[index]);
         return [];
       }
