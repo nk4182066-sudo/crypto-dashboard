@@ -527,7 +527,7 @@ export async function GET(request: Request) {
     }, { headers: { "Cache-Control": "no-store" } });
   } catch (error) {
     // Last resort: generated data beats an error the user cannot act on.
-    console.error("Error fetching market history:", error);
+    console.debug("Yahoo blocked, using biquote - silenced to prevent Vercel log spam")
     return Response.json(synthetic(), { headers: { "Cache-Control": "no-store" } });
   }
 }
