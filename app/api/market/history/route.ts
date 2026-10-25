@@ -501,3 +501,15 @@ export async function GET(request: Request) {
     return Response.json(synthetic(), { headers: { "Cache-Control": "no-store" } });
   }
 }
+
+/** Global scan stability: wrap each symbol fetch in try/catch */
+function withScanStability<T>(fn: () => Promise<T>): Promise<T | null> {
+  return async () => {
+    try {
+      return await fn();
+    } catch (error) {
+      console.log("[market/history] Symbol not found/blocked, skip");
+      return null;
+    }
+  };
+}
