@@ -22,6 +22,17 @@ import { readAllSignals, updateSignal, updateHistoryDoc, type CloudDoc } from "@
 import { refresh } from "@/src/lib/signalsLive";
 import { type ScanMarket } from "@/src/scanner/universe";
 
+/** withScanStability: wrap each symbol fetch in try/catch so one symbol failure never crashes the entire market scan — logs once and continues to the next. */
+function withScanStability<T>(fn: () => Promise<T>): Promise<T | null> {
+  return async () => {
+    try {
+      return await fn();
+    } catch (error) {
+      console.log("[track-signals] Symbol not found/blocked, skip");
+      return null;
+    }
+  };
+}
 export const dynamic = "force-dynamic";
 export const maxDuration = 30;
 
@@ -108,31 +119,20 @@ function isYahooSymbol(symbol: string, market: string): boolean {
   return toBybitPair(symbol) === null;
 }
 
-/** Live USDT-perp prices from Bybit, keyed by pair (e.g. "BTCUSDT"). */
-function withScanStability   (fn                  )                    {
-  return async () => {
-    try {
-      return await fn();
-    } catch (error) {
-      console.log('[track-signals] Symbol not found/blocked, skip');
-      return null;
-    }
-  };
-}
+/** Live USDT spot prices from MEXC, keyed by pair (e.g. "BTCUSDT"). */
 async function cryptoPrices(): Promise<Map<string, number>> {
   const map = new Map<string, number>();
   try {
-    const response = await fetch("https://api.bybit.com/v5/market/tickers?category=linear", {
+    const response = await fetch("https://api.mexc.com/api/v3/ticker/price", {
       cache: "no-store",
       signal: AbortSignal.timeout(8000),
     });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    const payload = (await response.json()) as { result?: { list?: Array<{ symbol?: string; lastPrice?: string }> } };
-    for (const row of payload.result?.list ?? []) {
-      const price = Number(row?.lastPrice);
-      if (row?.symbol && Number.isFinite(price) && price > 0) map.set(row.symbol, price);
-    }
-  } catch (error) {
+    const payload = (await response.json()) as { symbol: string; price: string }[];
+payload.forEach(item => {
+      const price = Number(item.price);
+      if (Number.isFinite(price) && price > 0) map.set(item.symbol, price);
+    });
     console.warn("[track-signals] Bybit price fetch failed:", error instanceof Error ? error.message : error);
   }
   return map;

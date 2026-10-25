@@ -1,12 +1,8 @@
 import { cached } from "@/src/lib/cache";
 import { fetchTwelveDataHistory } from "@/src/lib/data/twelveData";
-import Biquote from "biquote";
 
 export const dynamic = "force-dynamic";
-export const fetchCache = "force-no-store";
 export const maxDuration = 60;
-
-const bq = new Biquote();
 
 interface Candle {
   time: number;
@@ -357,16 +353,6 @@ export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
   const symbol = searchParams.get("symbol")?.toUpperCase() ?? "";
   const market = searchParams.get("market") ?? "";
-
-  // BULLETPROOF: Stop crypto from EVER reaching biquote.
-  // Must run before any other logic — case-insensitive to catch "Crypto"/"CRYPTO" etc.
-  if (market.toLowerCase() === "crypto") {
-    return new Response(
-      JSON.stringify({ error: "Crypto must use scanner — biquote disabled for crypto" }),
-      { status: 400, headers: { "Content-Type": "application/json", "Cache-Control": "no-store" } }
-    );
-  }
-
   const timeframe = searchParams.get("timeframe") ?? "1h";
   const quoteOnly = searchParams.get("quoteOnly") === "1";
   const interval = intervalOptions[timeframe as keyof typeof intervalOptions];
@@ -441,75 +427,107 @@ export async function GET(request: Request) {
     }
   }
 
-  // BULLETPROOF: Stop crypto from EVER reaching biquote.
-  // Must run before any other logic — case-insensitive to catch "Crypto"/"CRYPTO" etc.
-  if (market.toLowerCase() === "crypto") {
-    return new Response(
-      JSON.stringify({ error: "Crypto must use scanner — biquote disabled for crypto" }),
-      { status: 400, headers: { "Content-Type": "application/json", "Cache-Control": "no-store" } }
-    );
+  // Metals are not listed on Binance or Frankfurter, so they resolve to Yahoo's
+  // futures symbols before the generic Yahoo call below. The spot "XAUUSD=X" /
+  // "XAGUSD=X" tickers were retired by Yahoo (they now answer 404), so these
+  // map to the COMEX futures contracts, which Yahoo still serves.
+  // PASSTHROUGH: universe futures symbols (GC=F, SI=F, MGC=F, ZNC=F …) and the
+  // metals ETFs (GLD, SLV …) already ARE Yahoo tickers — rewriting them used to
+  // produce garbage like "GC=FUSD=X" → Yahoo 404 → SYNTHETIC demo candles, which
+  // the strict gate (rightly) rejected → metals always showed 0 live signals.
+  const metalsYahooSymbol: Record<string, string> = {
+    XAU: "GC=F",
+    XAG: "SI=F",
+    XPT: "PL=F",
+    XPD: "PA=F",
+    XCU: "HG=F",
+    GLD: "GLD",
+    SLV: "SLV",
+  };
+  const metalsBase = symbol.split("-")[0];
+  const providerSymbol = market === "metals"
+    ? (metalsYahooSymbol[metalsBase] ?? (symbol.includes("=") ? symbol : `${metalsBase}USD=X`))
+    : symbol;
+
+  const url = new URL(`https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(providerSymbol)}`);
+  url.searchParams.set("interval", quoteOnly ? "1m" : interval.yahoo);
+  url.searchParams.set("events", "history");
+
+  if (quoteOnly) {
+    url.searchParams.set("range", "1d");
+  } else if (timeframe === "max") {
+    url.searchParams.set("period1", "0");
+    url.searchParams.set("period2", String(now + 60));
+  } else {
+    const periodEnd = endTimeValid ?? before ?? now + 60;
+    const periodDays = before ? interval.chunkDays : interval.initialDays;
+    url.searchParams.set("period1", String(Math.max(0, periodEnd - periodDays * 24 * 60 * 60)));
+    url.searchParams.set("period2", String(periodEnd));
   }
 
-  // Yahoo Finance blocks Vercel IPs — switch to biquote (MetaTrader 5 feed, no API key)
-  // for Forex, Stocks, and Metals only.
-  console.log(`[DATA] Yahoo blocked, using biquote for ${market}/${symbol}`);
+  const payload = await cached<YahooChartResult | null>(
+    `yahoo:${url.toString()}`,
+    { ttlMs: quoteOnly ? 30 * 1000 : 2 * 60 * 1000, staleMs: 15 * 60 * 1000 },
+    async () => {
+      try {
+        const response = await fetch(url, {
+          headers: { "User-Agent": "Mozilla/5.0" },
+          cache: "no-store",
+          signal: AbortSignal.timeout(8000),
+        });
+        if (!response.ok) return null;
+        const body: unknown = await response.json();
+        const record = body as { chart?: { result?: YahooChartResult[] } };
+        return record.chart?.result?.[0] ?? null;
+      } catch {
+        return null;
+      }
+    },
+  );
+
   try {
-    const bars = await bq.ohlc(symbol, { interval: timeframe as any, limit: 500 });
-
-    // Validate timestamps — reject 1970-01-01 epoch-zero candles
-    let validCandles: Candle[] = [];
-    for (const bar of bars) {
-      const t = Date.parse(bar.openTime);
-      if (!Number.isFinite(t) || t === 0 || new Date(t).getFullYear() < 2020) continue;
-      validCandles.push({
-        time: Math.floor(t / 1000),
-        open: bar.open,
-        high: bar.high,
-        low: bar.low,
-        close: bar.close,
-        volume: bar.volume,
-      });
-    }
-
-    if (validCandles.length === 0) {
+    const result = payload;
+    const quote = result?.indicators?.quote?.[0];
+    if (!result || !quote) {
+      // Yahoo gave nothing usable; serve generated data so the chart renders.
       return Response.json(synthetic(), { headers: { "Cache-Control": "no-store" } });
     }
 
-    if (timeframe === "4h") {
-      validCandles.sort((a, b) => a.time - b.time);
-      validCandles = aggregateFourHourCandles(validCandles);
+    const timestamps = result.timestamp ?? [];
+    let candles = timestamps.flatMap((time, index) => {
+      const open = quote.open?.[index];
+      const high = quote.high?.[index];
+      const low = quote.low?.[index];
+      const close = quote.close?.[index];
+      if (open == null || high == null || low == null || close == null) return [];
+      return [{ time, open, high, low, close, volume: quote.volume?.[index] ?? 0 }];
+    });
+
+    if (candles.length === 0) {
+      return Response.json(synthetic(), { headers: { "Cache-Control": "no-store" } });
     }
 
-    const latest = validCandles[validCandles.length - 1];
-    const oldestTime = validCandles[0]?.time ?? null;
-    const historyCutoff = now - (interval.maximumDays || 30) * 24 * 60 * 60;
-    const hasMore = timeframe !== "max" && validCandles.length > 0 && oldestTime !== null && oldestTime > historyCutoff;
+    if (timeframe === "4h") candles = aggregateFourHourCandles(candles);
+
+    const marketPrice = result.meta?.regularMarketPrice ?? candles[candles.length - 1]?.close ?? null;
+    const oldestTime = candles[0]?.time ?? null;
+    const historyCutoff = now - interval.maximumDays * 24 * 60 * 60;
+    const hasMore = timeframe !== "max" && candles.length > 0 && oldestTime !== null && oldestTime > historyCutoff;
 
     return Response.json({
-      candles: quoteOnly ? [] : validCandles,
+      candles: quoteOnly ? [] : candles,
       hasMore,
       quote: {
-        price: latest.close,
-        previousClose: validCandles.length > 1 ? validCandles[validCandles.length - 2].close : null,
-        timestamp: latest.time,
-        currency: "USD",
+        price: marketPrice,
+        previousClose: result.meta?.chartPreviousClose ?? null,
+        timestamp: result.meta?.regularMarketTime ?? candles[candles.length - 1]?.time ?? now,
+        currency: result.meta?.currency ?? "USD",
       },
-      source: "biquote",
+      source: "Yahoo Finance",
     }, { headers: { "Cache-Control": "no-store" } });
   } catch (error) {
-    console.warn(`[DATA] biquote failed for ${market}/${symbol}:`, error instanceof Error ? error.message : String(error));
+    // Last resort: generated data beats an error the user cannot act on.
+    console.error("Error fetching market history:", error);
     return Response.json(synthetic(), { headers: { "Cache-Control": "no-store" } });
   }
-}
-
-/** Global scan stability: wrap each symbol fetch in try/catch */
-function withScanStability<T>(fn: () => Promise<T>): Promise<T | null> {
-  return async () => {
-    try {
-      return await fn();
-    } catch (error) {
-      console.log("[market/history] Symbol not found/blocked, skip");
-      return null;
-    }
-  };
 }
