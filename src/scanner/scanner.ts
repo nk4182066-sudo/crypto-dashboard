@@ -108,7 +108,7 @@ async function fetchCandles(symbol: string, market: ScanTarget["market"]): Promi
 
         // Try MEXC first
         try {
-          console.log(`[API CHECK] ${market} ${symbol} -> MEXC ${cryptoPair}`);
+//           console.log(`[API CHECK] ${market} ${symbol} -> MEXC ${cryptoPair}`);
           const mxcUrl = new URL("https://api.mexc.com/api/v3/klines");
           mxcUrl.searchParams.set("symbol", cryptoPair);
           mxcUrl.searchParams.set("interval", "1m");
@@ -117,7 +117,7 @@ async function fetchCandles(symbol: string, market: ScanTarget["market"]): Promi
           const response = await fetch(mxcUrl.toString(), { cache: "no-store", signal: AbortSignal.timeout(15000) });
           if (!response.ok) {
             if (response.status === 400) {
-              console.log(`[DATA] Symbol not found on MEXC: ${symbol}`);
+//               console.log(`[DATA] Symbol not found on MEXC: ${symbol}`);
               return [];
             }
             console.log(`[DATA] MEXC Failed: HTTP ${response.status} for ${cryptoPair}`);
@@ -125,7 +125,7 @@ async function fetchCandles(symbol: string, market: ScanTarget["market"]): Promi
             const payload = await response.json() as unknown[];
             // Log first raw item to verify MEXC response format
             if (payload.length > 0) {
-              console.log(`[DATA] MEXC first raw item for ${cryptoPair}:`, JSON.stringify(payload[0]));
+//               console.log(`[DATA] MEXC first raw item for ${cryptoPair}:`, JSON.stringify(payload[0]));
             }
             const candles = payload.flatMap((row): Candle[] => {
               if (!Array.isArray(row) || row.length < 6) return [];
@@ -138,10 +138,10 @@ async function fetchCandles(symbol: string, market: ScanTarget["market"]): Promi
             });
             if (candles.length > 0) {
               const lastDate = new Date(candles[candles.length - 1].time).toISOString();
-              console.log(`[DATA] MEXC Success: ${symbol} Last candle: ${lastDate}`);
+//               console.log(`[DATA] MEXC Success: ${symbol} Last candle: ${lastDate}`);
               return candles;
             }
-            console.log(`[DATA] MEXC Success (no candles) for ${cryptoPair}`);
+//             console.log(`[DATA] MEXC Success (no candles) for ${cryptoPair}`);
           }
         } catch (error) {
           console.log(`[DATA] MEXC Failed: ${(error as Error).message} for ${cryptoPair}`);
@@ -159,7 +159,7 @@ async function fetchCandles(symbol: string, market: ScanTarget["market"]): Promi
           const response = await fetch(bgUrl.toString(), { cache: "no-store", signal: AbortSignal.timeout(15000) });
           if (!response.ok) {
             if (response.status === 400) {
-              console.log(`[DATA] Symbol not found on Bitget: ${symbol}`);
+//               console.log(`[DATA] Symbol not found on Bitget: ${symbol}`);
               return [];
             }
             console.log(`[DATA] Bitget Failed: HTTP ${response.status} for ${cryptoPair}`);

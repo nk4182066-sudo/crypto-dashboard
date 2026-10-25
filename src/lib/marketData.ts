@@ -13,9 +13,9 @@
  *   BACKUP   CoinGecko https://api.coingecko.com/api/v3/simple/price
  *                       https://api.coingecko.com/api/v3/coins/{id}/market_chart
  *
- * Console log contract:
- *   "Using Bybit" / "Bybit failed, trying Bitget" / "Bitget failed, trying CoinGecko"
- *   "CoinGecko failed for <symbol>"
+ // Console log contract:
+// Using Bybit / Bybit failed, trying Bitget / Bitget failed, trying CoinGecko
+// CoinGecko failed for <symbol>
  *
  * Only crypto can be sourced from these exchanges. Forex / stocks / metals are
  * out of scope for this provider, so they degrade to [] + null price (the caller
@@ -336,10 +336,10 @@ async function getCandlesCoinGecko(symbol: string, bucketMs: number, days: numbe
 }
 
 async function getMarketDataCoinGecko(symbol: string): Promise<MarketData | null> {
-  console.log(`[marketData] Bitget failed, trying CoinGecko for ${symbol}`);
+  // console.log(`[marketData] Bitget failed, trying CoinGecko for ${symbol}`);
   const price = await getLastPriceCoinGecko(symbol);
   if (price == null) {
-    console.warn(`[marketData] CoinGecko failed for ${symbol}`);
+    // console.warn(`[marketData] CoinGecko failed for ${symbol}`);
     return null;
   }
   const [oneHour, fourHour, oneDay] = await Promise.all([
@@ -363,10 +363,10 @@ export async function getMarketData(symbol: string): Promise<MarketData | null> 
       const result = await plan();
       if (result != null) return result;
     } catch (error) {
-      console.warn("[marketData] provider threw, degrading to the next one:", error);
+      // console.warn("[marketData] provider threw, degrading to the next one:", error);
     }
   }
-  console.warn(`[marketData] All providers failed for ${symbol}`);
+  // console.warn(`[marketData] All providers failed for ${symbol}`);
   return null;
 }
 

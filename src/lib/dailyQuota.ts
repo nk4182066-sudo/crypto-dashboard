@@ -66,7 +66,7 @@ async function countTodaySignals(db: Firestore, market: ScanMarket): Promise<num
     const snap = await getDocs(q);
     return snap.docs.length;
   } catch (error) {
-    console.warn(`[dailyQuota] countTodaySignals failed for ${market}:`, error instanceof Error ? error.message : error);
+    // console.warn(`[dailyQuota] countTodaySignals failed for ${market}:`, error instanceof Error ? error.message : error);
     return 0;
   }
 }
@@ -75,15 +75,15 @@ async function countTodaySignals(db: Firestore, market: ScanMarket): Promise<num
 export async function remainingEmitSlots(market: ScanMarket): Promise<number> {
   const db = getDb();
   if (!db) {
-    console.info(`[dailyQuota] quota off (${initReason}) — ${market} unlimited.`);
+    // console.info(`[dailyQuota] quota off (${initReason}) — ${market} unlimited.`);
     return MAX_SIGNALS_PER_MARKET_PER_DAY;
   }
   try {
     const used = await countTodaySignals(db, market);
-    console.log(`[dailyQuota] ${market}: used=${used} limit=${MAX_SIGNALS_PER_MARKET_PER_DAY} remaining=${Math.max(0, MAX_SIGNALS_PER_MARKET_PER_DAY - used)}`);
+    // console.log(`[dailyQuota] ${market}: used=${used} limit=${MAX_SIGNALS_PER_MARKET_PER_DAY} remaining=${Math.max(0, MAX_SIGNALS_PER_MARKET_PER_DAY - used)}`);
     return Math.max(0, MAX_SIGNALS_PER_MARKET_PER_DAY - used);
   } catch (error) {
-    console.warn(`[dailyQuota] read failed for ${market} (fail-open):`, error instanceof Error ? error.message : error);
+    // console.warn(`[dailyQuota] read failed for ${market} (fail-open):`, error instanceof Error ? error.message : error);
     return MAX_SIGNALS_PER_MARKET_PER_DAY;
   }
 }
@@ -95,10 +95,10 @@ export async function reserveEmitSlot(market: ScanMarket): Promise<boolean> {
   try {
     const used = await countTodaySignals(db, market);
     if (used >= MAX_SIGNALS_PER_MARKET_PER_DAY) {
-      console.log(`[dailyQuota] ${market} quota FULL: ${used}/${MAX_SIGNALS_PER_MARKET_PER_DAY}`);
+      // console.log(`[dailyQuota] ${market} quota FULL: ${used}/${MAX_SIGNALS_PER_MARKET_PER_DAY}`);
       return false;
     }
-    console.log(`[dailyQuota] ${market}: slot reserved (${used + 1}/${MAX_SIGNALS_PER_MARKET_PER_DAY})`);
+    // console.log(`[dailyQuota] ${market}: slot reserved (${used + 1}/${MAX_SIGNALS_PER_MARKET_PER_DAY})`);
     return true;
   } catch (error) {
     console.warn(`[dailyQuota] reserve failed for ${market} (fail-open):`, error instanceof Error ? error.message : error);

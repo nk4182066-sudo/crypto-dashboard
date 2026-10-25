@@ -60,7 +60,7 @@ export function getAvailableKey(providerName: string): string | null {
 /** Puts a failed provider on a 60 second cooldown. */
 export function markKeyFailed(providerName: string, error: string): void {
   blockedUntil.set(providerName, Date.now() + COOLDOWN_MS);
-  console.log(`[AI] ${providerName} cooling down 60s: ${error.slice(0, 160)}`);
+  // console.log(`[AI] ${providerName} cooling down 60s: ${error.slice(0, 160)}`);
 }
 
 /** Clears the cooldown after a successful call. */
@@ -149,22 +149,22 @@ export async function callAI(messages: AIMessage[]): Promise<AIResult> {
 
     const key = getAvailableKey(provider.name);
     if (!key) {
-      console.log(`[AI] Skipping ${provider.name} (key missing or cooling down)`);
+      // console.log(`[AI] Skipping ${provider.name} (key missing or cooling down)`);
       continue;
     }
 
-    console.log(`[AI] Trying ${provider.name} (${maskKey(key)})`);
+    // console.log(`[AI] Trying ${provider.name} (${maskKey(key)})`);
     try {
       const raw = await callProvider(provider, messages);
       const text = normalizeResponse(provider.name, raw).trim();
       if (!text) throw new Error(`${provider.name} returned empty text`);
       markKeySuccess(provider.name);
-      console.log(`[AI] Response from: ${provider.name}`);
+      // console.log(`[AI] Response from: ${provider.name}`);
       return { text, provider: provider.name };
     } catch (error) {
       const message = error instanceof Error ? error.message : "unknown error";
       markKeyFailed(provider.name, message);
-      console.log(`[AI] ${provider.name} failed: ${message}`);
+      // console.log(`[AI] ${provider.name} failed: ${message}`);
     }
   }
 
