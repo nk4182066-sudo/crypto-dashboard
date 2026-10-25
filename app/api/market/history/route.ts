@@ -3,6 +3,7 @@ import { fetchTwelveDataHistory } from "@/src/lib/data/twelveData";
 import Biquote from "biquote";
 
 export const dynamic = "force-dynamic";
+export const fetchCache = "force-no-store";
 export const maxDuration = 60;
 
 const bq = new Biquote();
