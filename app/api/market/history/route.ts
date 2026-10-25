@@ -356,6 +356,16 @@ export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
   const symbol = searchParams.get("symbol")?.toUpperCase() ?? "";
   const market = searchParams.get("market") ?? "";
+
+  // BULLETPROOF: Stop crypto from EVER reaching biquote.
+  // Must run before any other logic — case-insensitive to catch "Crypto"/"CRYPTO" etc.
+  if (market.toLowerCase() === "crypto") {
+    return new Response(
+      JSON.stringify({ error: "Crypto must use scanner — biquote disabled for crypto" }),
+      { status: 400, headers: { "Content-Type": "application/json", "Cache-Control": "no-store" } }
+    );
+  }
+
   const timeframe = searchParams.get("timeframe") ?? "1h";
   const quoteOnly = searchParams.get("quoteOnly") === "1";
   const interval = intervalOptions[timeframe as keyof typeof intervalOptions];
