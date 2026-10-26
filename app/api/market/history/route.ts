@@ -1,5 +1,4 @@
-import { NextResponse } from 'next/server';
-import { fetchTwelveDataHistory } from '@/src/lib/data/twelveData';
+﻿import { NextResponse } from 'next/server';
 
 export async function GET(req: Request) {
   const { searchParams } = new URL(req.url);
@@ -21,10 +20,22 @@ export async function GET(req: Request) {
     console.log(`[DATA] ALL EXCHANGES FAILED for ${symbol}`);
     return NextResponse.json({ symbol, data: [], source: 'none', count: 0 });
   }
-  const result = await fetchTwelveDataHistory(symbol, timeframe, false, null, Date.now());
-  console.log(`[DATA] TwelveData Response for ${symbol}: Status ${result ? 'ok' : 'null'}`);
-  const data = result?.candles ?? [];
-  console.log(`[DATA] TwelveData Success for ${symbol}: Length: ${data.length}`);
-  if (data.length > 0) return NextResponse.json({ symbol, data, source: 'twelvedata', count: data.length });
-  return NextResponse.json({ symbol, data: [], source: 'none', count: 0 });
+  const apiKey = process.env.TWELVEDATA_API_KEY?.trim();
+  console.log(`[DATA] TwelveData Key: ${apiKey ? 'LOADED' : 'MISSING'}`);
+  let tdSymbol = symbol.replace(/-/g, '/').toUpperCase();
+  if (!tdSymbol.includes('/') && tdSymbol.length === 6) tdSymbol = tdSymbol.slice(0,3) + '/' + tdSymbol.slice(3);
+  try {
+    const url = `https://api.twelvedata.com/time_series?symbol=${encodeURIComponent(tdSymbol)}&interval=1h&apikey=${apiKey}&outputsize=200`;
+    const res = await fetch(url, { cache: 'no-store', signal: AbortSignal.timeout(15000) });
+    console.log(`[DATA] TwelveData Response for ${symbol}: Status ${res.status}`);
+    const body = await res.json();
+    if (!res.ok || body?.status === 'error' || !Array.isArray(body?.values)) throw new Error(body?.message || `HTTP ${res.status}`);
+    const data = body.values.map((v: any) => ({ time: new Date(v.datetime).getTime(), open: Number(v.open), high: Number(v.high), low: Number(v.low), close: Number(v.close), volume: Number(v.volume ?? 0) })).filter((c: any) => Number.isFinite(c.close)).reverse();
+    console.log(`[DATA] TwelveData Success for ${symbol}: Length: ${data.length}`);
+    if (data.length > 0) return NextResponse.json({ symbol, data, source: 'twelvedata', count: data.length });
+    return NextResponse.json({ symbol, data: [], source: 'none', count: 0 });
+  } catch (e: any) {
+    console.error('[DATA] TwelveData error for ' + symbol + ': ' + (e?.message || e));
+    return NextResponse.json({ symbol, data: [], source: 'none', count: 0, error: 'TwelveData failed: ' + (e?.message || e) });
+  }
 }
