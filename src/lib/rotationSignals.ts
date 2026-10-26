@@ -228,21 +228,9 @@ export async function evaluateRotatedSignal(
     timeframeMinutes: full.tfMinutes,
     candles: h1.slice(-100),
     patternPoints: null,
-    entry1: tradePlan.entry1,
-    entry2: tradePlan.entry2,
-    stopLoss: tradePlan.stopLoss,
-    tp1: tradePlan.tp1,
-    tp2: tradePlan.tp2,
-    tp3: tradePlan.tp3,
-    riskRewardRatio: tradePlan.riskRewardRatio,
-    expectedProfit: tradePlan.expectedProfit,
-    expectedLoss: tradePlan.expectedLoss,
-    riskPercent: tradePlan.riskPercent,
-    slPercent: tradePlan.slPercent,
-    tp1Percent: tradePlan.tp1Percent,
-    tp2Percent: tradePlan.tp2Percent,
-    crypto: [], forex: [], stocks: [], metals: [],
   };
+}
+}
 
   for (const market of ["crypto", "forex", "stocks", "metals"] as const) {
     const results = scanResults[market];
@@ -253,13 +241,30 @@ export async function evaluateRotatedSignal(
         const signal = await evaluateRotatedSignal(result, origin);
         if (signal) signals.push(signal);
       } catch (error) {
-        console.warn(`[rotationSignals] ${market}/${result.symbol} evaluation failed:`, error instanceof Error ? error.message : error);
       }
     }
 
     signals.sort((a, b) => b.score - a.score || (a.symbol < b.symbol ? -1 : 1));
     output[market] = signals;
-  }
+}
 
+export async function getRotationSignals(origin: string | undefined): Promise<Record<ScanMarket, EmittedMarketSignal[]>> {
+  const { runRotationScan } = await import("@/src/scanner/rotationScanner");
+  const scanResults = await runRotationScan();
+  const output: Record<ScanMarket, EmittedMarketSignal[]> = { crypto: [], forex: [], stocks: [], metals: [] };
+  for (const market of ["crypto", "forex", "stocks", "metals"] as const) {
+    const results = scanResults[market];
+    const signals: EmittedMarketSignal[] = [];
+    for (const result of results) {
+      try {
+        const signal = await evaluateRotatedSignal(result, origin);
+        if (signal) signals.push(signal);
+      } catch (error) {
+        console.warn(`[rotationSignals] ${market}/${result.symbol} evaluation failed:`, error instanceof Error ? error.message : error);
+      }
+    }
+    signals.sort((a, b) => b.score - a.score || (a.symbol < b.symbol ? -1 : 1));
+    output[market] = signals;
+  }
   return output;
 }
