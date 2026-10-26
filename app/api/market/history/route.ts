@@ -29,9 +29,9 @@ export async function GET(req: Request) {
   await sleep(500);
 
   // METALS -> Binance PAXG
-  if (market === 'metals') {\n    console.log('[DATA] Fetching Gold via Binance PAXGUSDT');\n    try {
-      const res = await fetch('https://api.binance.com/api/v3/klines?symbol=PAXGUSDT&interval=1h&limit=100', { cache: 'no-store', signal: AbortSignal.timeout(15000) });
-      if (res.ok) {
+  if (market === 'metals') {
+    console.log('[DATA] Fetching Gold via Binance PAXGUSDT');
+    try {
         const rows = await res.json() as any[];
         const candles = rows.map((k: any[]) => ({ time: Number(k[0]), open: Number(k[1]), high: Number(k[2]), low: Number(k[3]), close: Number(k[4]), volume: Number(k[5] ?? 0) })).filter((c: any) => [c.time, c.open, c.high, c.low, c.close].every(Number.isFinite));
         if (candles.length > 0) { console.log('[DATA] Binance PAXG Success'); console.log(`[DATA] metals ${symbol}: Length: ${candles.length}`); return NextResponse.json({ symbol, data: candles, source: 'binance-paxg', count: candles.length }); }
