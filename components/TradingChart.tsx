@@ -562,11 +562,34 @@ export default function TradingChart({ data, chartKey = "", signals = [], candle
     const prependedCount = firstPreviousIndex > 0 ? firstPreviousIndex : 0;
 
     const candlePatternsByTime = new Map(candlePatterns.map((pattern) => [pattern.time, pattern]));
-    const candles = normalizedData.map((candle) => {
-      const pattern = candlePatternsByTime.get(candle.time);
+
+    // Normalize: time in ms (×1000 if seconds), numeric OHLC via parseFloat,
+    // sorted oldest→newest before handing to lightweight-charts.
+    const processed = normalizedData
+      .map((candle) => ({
+        time: (candle.time < 1e11 ? candle.time * 1000 : candle.time) as UTCTimestamp,
+        _lookupTime: candle.time,
+        open: parseFloat(String(candle.open)),
+        high: parseFloat(String(candle.high)),
+        low: parseFloat(String(candle.low)),
+        close: parseFloat(String(candle.close)),
+      }))
+      .filter((c) => [c.time, c.open, c.high, c.low, c.close].every(Number.isFinite))
+      .sort((a, b) => a.time - b.time);
+
+    console.log("Chart received:", processed);
+
+    // Clear old chart instance data when switching symbols so stale candles
+    // from the previous symbol don't linger behind the new ones.
+    if (isNewChart && candlestickSeries) {
+      candlestickSeries.setData([]);
+    }
+
+    const candles = processed.map((candle) => {
+      const pattern = candlePatternsByTime.get(candle._lookupTime);
       const color = pattern?.direction === "bullish" ? "#2dd4bf" : pattern?.direction === "bearish" ? "#fb7185" : pattern ? "#fbbf24" : undefined;
       return {
-        time: candle.time as UTCTimestamp,
+        time: candle.time,
         open: candle.open,
         high: candle.high,
         low: candle.low,
