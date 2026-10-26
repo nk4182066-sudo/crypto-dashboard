@@ -179,7 +179,7 @@ async function fetchMexcCandles(
   };
   const interval = intervalMap[timeframe] ?? "Min60";
 
-  const cryptoPair = symbol.replace(/^([A-Za-z0-9]+)-(USD|USDT)$/, "$1$2");
+  const cryptoPair = symbol.replace(/^([A-Za-z0-9]+)-(USD|USDT)$/, "$1USDT");
 
   const mxcUrl = new URL("https://api.mexc.com/api/v3/klines");
   mxcUrl.searchParams.set("symbol", cryptoPair);
