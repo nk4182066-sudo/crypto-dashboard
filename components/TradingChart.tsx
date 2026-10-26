@@ -774,9 +774,6 @@ export default function TradingChart({ data, chartKey = "", signals = [], candle
       </div>
     )}
 
-    <div className="relative h-full min-h-0 w-full" style={{ touchAction: "none" }}>
-      <div ref={chartContainerRef} className="h-full min-h-0 w-full" style={{ height: "100%", touchAction: "none" }} />
-
   return (
     <div className="relative h-full min-h-0 w-full" style={{ touchAction: "none" }}>
       <div ref={chartContainerRef} className="h-full min-h-0 w-full" style={{ height: "100%", touchAction: "none" }} />
