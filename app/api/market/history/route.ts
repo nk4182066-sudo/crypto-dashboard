@@ -1,4 +1,4 @@
-﻿import { NextResponse } from 'next/server';
+import { NextResponse } from 'next/server';
 
 export const revalidate = 60;
 
@@ -29,8 +29,7 @@ export async function GET(req: Request) {
   await sleep(500);
 
   // METALS -> Binance PAXG
-  if (market === 'metals') {
-    try {
+  if (market === 'metals') {\n    console.log('[DATA] Fetching Gold via Binance PAXGUSDT');\n    try {
       const res = await fetch('https://api.binance.com/api/v3/klines?symbol=PAXGUSDT&interval=1h&limit=100', { cache: 'no-store', signal: AbortSignal.timeout(15000) });
       if (res.ok) {
         const rows = await res.json() as any[];
@@ -53,7 +52,7 @@ export async function GET(req: Request) {
     const body = JSON.parse(text);
     if (body?.status === 'error' || !Array.isArray(body?.values)) throw new Error(body?.message || `HTTP ${res.status}`);
     const data = body.values.map((v: any) => ({ time: new Date(v.datetime).getTime(), open: Number(v.open), high: Number(v.high), low: Number(v.low), close: Number(v.close), volume: Number(v.volume ?? 0) })).filter((c: any) => Number.isFinite(c.close)).reverse();
-    if (data.length > 0) { console.log('[DATA] TwelveData Success'); console.log(`[DATA] ${market} ${symbol}: Length: ${data.length}`); return NextResponse.json({ symbol, data, source: 'twelvedata', count: data.length }); }
+    if (data.length > 0) { console.log('[DATA] TwelveData Gold Success'); console.log('[DATA] TwelveData Success'); console.log(`[DATA] ${market} ${symbol}: Length: ${data.length}`); return NextResponse.json({ symbol, data, source: 'twelvedata', count: data.length }); }
   } catch (e: any) { console.error('[DATA] TwelveData error for ' + symbol + ': ' + (e?.message || e)); }
 
   await sleep(500);
@@ -88,3 +87,4 @@ export async function GET(req: Request) {
 
   return NextResponse.json({ symbol, data: [], source: 'none', count: 0 });
 }
+
