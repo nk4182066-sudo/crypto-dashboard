@@ -144,9 +144,36 @@ async function fetchCandlesRotated(
   timeframe: "1h" | "4h" | "1d"
 ): Promise<Candle[]> {
   if (market === "crypto") {
-    const candles = await fetchMexcCandles(symbol, market, timeframe);
-    console.log(`[DATA] MEXC Raw Length for ${symbol}: ${candles.length}`);
-    return candles;
+    const mexc = await fetchMexcCandles(symbol, market, timeframe);
+    if (mexc.length > 0) {
+      console.log(`[DATA] MEXC Raw Length for ${symbol}: ${mexc.length}`);
+      return mexc;
+    }
+    console.log(`[DATA] MEXC failed, trying Binance for ${symbol}`);
+    // Binance fallback
+    const pair = symbol.replace(/^([A-Za-z0-9]+)-(USD|USDT)$/, "$1USDT");
+    const intervalMap: Record<"1h" | "4h" | "1d", string> = { "1h": "1h", "4h": "4h", "1d": "1d" };
+    const interval = intervalMap[timeframe] ?? "1h";
+    try {
+      const res = await fetch(`https://api.binance.com/api/v3/klines?symbol=${pair}&interval=${interval}&limit=200`, { cache: "no-store", signal: AbortSignal.timeout(15000) });
+      if (res.ok) {
+        const data = await res.json() as any[];
+        const candles: Candle[] = [];
+        for (const k of data) {
+          const t = Number(k[0]); const o = Number(k[1]); const h = Number(k[2]); const l = Number(k[3]); const c = Number(k[4]); const v = Number(k[5] ?? 0);
+          if (![t, o, h, l, c].every(Number.isFinite)) continue;
+          candles.push({ time: t, open: o, high: h, low: l, close: c, volume: v });
+        }
+        if (candles.length > 0) {
+          console.log(`[DATA] Binance Success: ${symbol} Raw Length: ${candles.length}`);
+          return candles;
+        }
+      }
+    } catch (e) {
+      console.log(`[DATA] Binance error for ${symbol}:`, e instanceof Error ? e.message : e);
+    }
+    console.log(`[DATA] Binance failed, trying CoinGecko for ${symbol}`);
+    return [];
   }
   const candles = await fetchYahooCandlesRotated(symbol, market, timeframe);
   console.log(`[DATA] Yahoo Raw Length for ${symbol}: ${candles.length}`);
