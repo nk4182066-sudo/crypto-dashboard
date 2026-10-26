@@ -154,7 +154,7 @@ async function fetchCandlesRotated(
 }
 
 /** Result of scanning one symbol across all 3 timeframes. */
-interface RotatedScanResult {
+export interface RotatedScanResult {
   symbol: string;
   label: string;
   market: ScanMarket;

@@ -16,8 +16,7 @@ import type { EmittedMarketSignal } from "@/src/lib/signalsLive";
 import { analyzeCoin } from "@/src/lib/analyzeCoin";
 import { computeSignalTier, htfConfluence } from "@/src/lib/strictSignalEngine";
 import { calculateIndicators, indicatorsAgreed } from "@/src/lib/indicatorEngine";
-import { buildTradeSetup } from "@/src/lib/tradeSetup";
-import { ema, rsi, sma } from "@/src/analysis/indicators";
+import { ema } from "@/src/analysis/indicators";
 import { buildConfirmations, buildEducators } from "@/src/lib/confirmations";
 import { reserveEmitSlot, MAX_SIGNALS_PER_MARKET_PER_DAY } from "@/src/lib/dailyQuota";
 import { db } from "@/src/lib/firebase";
@@ -60,8 +59,10 @@ export async function evaluateRotatedSignal(
     full = await analyzeCoin({
       symbol,
       market,
-      timeframe: "1h",
-      candles: h1,
+      primary: h1,
+      h1,
+      h4,
+      d1,
     });
   } catch (error) {
     console.warn(`[rotationSignals] analyzeCoin failed for ${symbol}:`, error instanceof Error ? error.message : error);
@@ -143,19 +144,6 @@ export async function evaluateRotatedSignal(
     }
   }
 
-  let tradePlan: ReturnType<typeof buildTradeSetup>;
-  try {
-    tradePlan = buildTradeSetup({
-      price: full.price,
-      direction: tradeDirection(direction),
-      leverage: 20,
-      collateralUsdt: 7,
-    });
-  } catch (error) {
-    console.warn(`[rotationSignals] trade setup failed for ${symbol}:`, error instanceof Error ? error.message : error);
-    return null;
-  }
-
   const reserved = await reserveEmitSlot(market);
   if (!reserved) {
     console.log(`[rotationSignals] ${market}/${symbol}: daily quota full (${MAX_SIGNALS_PER_MARKET_PER_DAY}/day)`);
@@ -195,26 +183,6 @@ export async function evaluateRotatedSignal(
     timeframeMinutes: full.tfMinutes,
     candles: h1.slice(-100),
     patternPoints: null,
-    entry1: tradePlan.entry1,
-    entry2: tradePlan.entry2,
-    stopLoss: tradePlan.stopLoss,
-    tp1: tradePlan.tp1,
-    tp2: tradePlan.tp2,
-    tp3: tradePlan.tp3,
-    riskRewardRatio: tradePlan.riskRewardRatio,
-    expectedProfit: tradePlan.expectedProfit,
-    expectedLoss: tradePlan.expectedLoss,
-    riskPercent: tradePlan.riskPercent,
-    slPercent: tradePlan.slPercent,
-    tp1Percent: tradePlan.tp1Percent,
-    tp2Percent: tradePlan.tp2Percent,
-    tp3Percent: tradePlan.tp3Percent,
-    slLossPercent: tradePlan.slLossPercent,
-    tp1ProfitPercent: tradePlan.tp1ProfitPercent,
-    tp2ProfitPercent: tradePlan.tp2ProfitPercent,
-    tp3ProfitPercent: tradePlan.tp3ProfitPercent,
-    positionSizeUsdt: tradePlan.positionSizeUsdt,
-    riskAmountUsdt: tradePlan.riskAmountUsdt,
     leverage: 20,
     createdAt: Date.now(),
     status: "PENDING",
@@ -273,26 +241,6 @@ export async function evaluateRotatedSignal(
     slPercent: tradePlan.slPercent,
     tp1Percent: tradePlan.tp1Percent,
     tp2Percent: tradePlan.tp2Percent,
-    tp3Percent: tradePlan.tp3Percent,
-    slLossPercent: tradePlan.slLossPercent,
-    tp1ProfitPercent: tradePlan.tp1ProfitPercent,
-    tp2ProfitPercent: tradePlan.tp2ProfitPercent,
-    tp3ProfitPercent: tradePlan.tp3ProfitPercent,
-    positionSizeUsdt: tradePlan.positionSizeUsdt,
-    riskAmountUsdt: tradePlan.riskAmountUsdt,
-    leverage: 20,
-    createdAt: Date.now(),
-  };
-}
-
-/**
- * Scan all 4 markets (4 coins each = 16 total) with rotation, apply strict
- * signal conditions, and return EmittedMarketSignal[] grouped by market.
- */
-export async function getRotationSignals(origin: string | undefined): Promise<Record<ScanMarket, EmittedMarketSignal[]>> {
-  const { runRotationScan } = await import("@/src/scanner/rotationScanner");
-  const scanResults = await runRotationScan();
-  const output: Record<ScanMarket, EmittedMarketSignal[]> = {
     crypto: [], forex: [], stocks: [], metals: [],
   };
 
