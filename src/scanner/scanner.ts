@@ -144,7 +144,29 @@ async function fetchYahooCandles(symbol: string, market: ScanTarget["market"], t
 }
 
 
-/** Fetch candles from MEXC API — Min60/Min240/Min1440 interval format. */
+async function fetchBinanceCandles(symbol: string, timeframe: "1h" | "4h" | "1d"): Promise<Candle[]> {
+  const intervalMap: Record<"1h" | "4h" | "1d", string> = { "1h": "1h", "4h": "4h", "1d": "1d" };
+  const interval = intervalMap[timeframe] ?? "1h";
+  const pair = symbol.replace(/^([A-Za-z0-9]+)-(USD|USDT)$/, "$1USDT");
+  const url = `https://api.binance.com/api/v3/klines?symbol=${pair}&interval=${interval}&limit=200`;
+  try {
+    const res = await fetch(url, { cache: "no-store", signal: AbortSignal.timeout(15000) });
+    if (!res.ok) return [];
+    const data = await res.json() as any[];
+    const candles: Candle[] = [];
+    for (const k of data) {
+      const t = Number(k[0]);
+      const o = Number(k[1]); const h = Number(k[2]); const l = Number(k[3]); const c = Number(k[4]); const v = Number(k[5] ?? 0);
+      if (![t, o, h, l, c].every(Number.isFinite)) continue;
+      candles.push({ time: t, open: o, high: h, low: l, close: c, volume: v });
+    }
+    console.log(`[DATA] Binance Success: ${pair} Raw Length: ${candles.length}`);
+    return candles;
+  } catch (e) {
+    console.log(`[DATA] Binance error for ${pair}:`, e instanceof Error ? e.message : e);
+    return [];
+  }
+}
 async function fetchMexcCandles(
   symbol: string,
   market: ScanTarget["market"],
@@ -228,7 +250,10 @@ async function fetchCandles(symbol: string, market: ScanTarget["market"], timefr
     { ttlMs: 1 * 60 * 1000, staleMs: 2 * 60 * 1000 },
     async () => {
       if (market === "crypto") {
-        return fetchMexcCandles(symbol, market, timeframe);
+        const mexc = await fetchMexcCandles(symbol, market, timeframe);
+        if (mexc.length > 0) return mexc;
+        console.log(`[DATA] MEXC failed, trying Binance for ${symbol}`);
+        return fetchBinanceCandles(symbol, timeframe);
       }
 
       if (market === "forex" || market === "stocks" || market === "metals") {
