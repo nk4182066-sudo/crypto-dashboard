@@ -85,7 +85,7 @@ async function fetchCandles(
     };
     // Reject demo/synthetic data: a degraded body is NOT real market data.
     if (payload.degraded) return { candles: [], hasMore: false };
-    const candles = Array.isArray(payload.candles) ? payload.candles : [];
+    const candles = Array.isArray(payload.data) ? payload.data : [];
     return { candles, hasMore: Boolean(payload.hasMore) && candles.length > 0 };
   } catch {
     return { candles: [], hasMore: false };
@@ -118,7 +118,7 @@ async function fetchOlderCandles(
       degraded?: boolean;
     };
     if (payload.degraded) return { candles: [], hasMore: false };
-    const candles = Array.isArray(payload.candles) ? payload.candles : [];
+    const candles = Array.isArray(payload.data) ? payload.data : [];
     return { candles, hasMore: Boolean(payload.hasMore) && candles.length > 0 };
   } catch {
     return { candles: [], hasMore: false };
