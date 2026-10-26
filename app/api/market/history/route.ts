@@ -3,10 +3,11 @@
 const YAHOO_URL = 'https://query1.finance.yahoo.com/v8/finance/chart';
 
 function yahooSymbol(symbol: string, market: string): string {
+  const clean = symbol.replace(/-/g, '');
   if (symbol.includes('=')) return symbol;
-  if (market === 'forex') return `${symbol}=X`;
-  if (market === 'metals' && symbol === 'XAUUSD') return 'GC=F';
-  return symbol;
+  if (market === 'forex') return `${clean}=X`;
+  if (market === 'metals' && clean === 'XAUUSD') return 'GC=F';
+  return clean;
 }
 
 async function getYahooHistory(symbol: string, market: string, timeframe: string, limit: number): Promise<any[]> {
@@ -39,7 +40,7 @@ async function getYahooHistory(symbol: string, market: string, timeframe: string
 async function getStooqHistory(symbol: string, limit: number): Promise<any[]> {
   try {
     console.log(`[DATA] Trying Stooq for ${symbol}`);
-    const s = symbol.toLowerCase().replace('=x','').replace('usd','');
+    const s = symbol.toLowerCase().replace(/-/g,'').replace('=x','').replace('usd','');
     const res = await fetch(`https://stooq.com/q/d/l/?s=${s}&i=d`, { headers: { 'User-Agent': 'Mozilla/5.0' }, cache: 'no-store' });
     if (res.ok) {
       const text = await res.text();
