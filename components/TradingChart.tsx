@@ -767,13 +767,6 @@ export default function TradingChart({ data, chartKey = "", signals = [], candle
     }
   };
 
-    {!hasData && (
-      <div className="relative h-full min-h-0 w-full flex items-center justify-center bg-zinc-950/90 text-zinc-400">
-        <div className="text-sm font-medium text-center px-4">No data for this coin</div>
-        <div className="text-xs text-zinc-600 mt-1 text-center px-4">Fetching historical data...</div>
-      </div>
-    )}
-
   return (
     <div className="relative h-full min-h-0 w-full" style={{ touchAction: "none" }}>
       <div ref={chartContainerRef} className="h-full min-h-0 w-full" style={{ height: "100%", touchAction: "none" }} />
