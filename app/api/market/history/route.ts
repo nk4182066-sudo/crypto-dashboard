@@ -3,6 +3,7 @@
 const YAHOO_URL = 'https://query1.finance.yahoo.com/v8/finance/chart';
 
 function yahooSymbol(symbol: string, market: string): string {
+  if (symbol.includes('=')) return symbol;
   if (market === 'forex') return `${symbol}=X`;
   if (market === 'metals' && symbol === 'XAUUSD') return 'GC=F';
   return symbol;
@@ -29,13 +30,16 @@ async function getYahooHistory(symbol: string, market: string, timeframe: string
       const quotes = timestamps.map((t: number, i: number) => ({ time: t * 1000, open: opens[i], high: highs[i], low: lows[i], close: closes[i], volume: volumes[i] ?? 0 })).filter((q: any) => q.open != null && q.close != null);
       return quotes.slice(-limit);
     }
-  } catch (e) {}
+  } catch (e: any) {
+    console.error('[DATA] Forex fetch failed for ' + symbol + ': ' + (e?.message || e));
+  }
   return [];
 }
 
 async function getStooqHistory(symbol: string, limit: number): Promise<any[]> {
   try {
-    const s = symbol.toLowerCase().replace('usd','');
+    console.log(`[DATA] Trying Stooq for ${symbol}`);
+    const s = symbol.toLowerCase().replace('=x','').replace('usd','');
     const res = await fetch(`https://stooq.com/q/d/l/?s=${s}&i=d`, { headers: { 'User-Agent': 'Mozilla/5.0' }, cache: 'no-store' });
     if (res.ok) {
       const text = await res.text();
@@ -43,7 +47,9 @@ async function getStooqHistory(symbol: string, limit: number): Promise<any[]> {
       const data = lines.map(l => { const [date, open, high, low, close] = l.split(','); return { time: Date.parse(date), open: parseFloat(open), high: parseFloat(high), low: parseFloat(low), close: parseFloat(close), volume: 0 }; }).filter(d => !isNaN(d.close));
       if (data.length > 0) return data.slice(-limit);
     }
-  } catch (e) {}
+  } catch (e: any) {
+    console.error('[DATA] Stooq failed for ' + symbol + ': ' + (e?.message || e));
+  }
   return [];
 }
 
@@ -63,13 +69,15 @@ export async function GET(req: Request) {
         const candles = rows.map((k: any[]) => ({ time: Number(k[0]), open: Number(k[1]), high: Number(k[2]), low: Number(k[3]), close: Number(k[4]), volume: Number(k[5] ?? 0) })).filter((c: any) => [c.time, c.open, c.high, c.low, c.close].every(Number.isFinite));
         if (candles.length > 0) { console.log(`[DATA] crypto ${symbol}: Length: ${candles.length}`); return NextResponse.json({ symbol, data: candles, source: 'bitget', count: candles.length }); }
       }
-    } catch {}
+    } catch (e: any) {
+      console.error('[DATA] crypto fetch failed for ' + symbol + ': ' + (e?.message || e));
+    }
     console.log(`[DATA] ALL EXCHANGES FAILED for ${symbol}`);
     return NextResponse.json({ symbol, data: [], source: 'none', count: 0 });
   }
   let data = await getYahooHistory(symbol, market, timeframe, 300);
   if (data.length === 0) data = await getStooqHistory(symbol, 300);
   console.log(`[DATA] ${market} ${symbol}: Length: ${data.length}`);
-  if (data.length > 0) return NextResponse.json({ symbol, data, source: data.length > 0 ? 'yahoo/stooq' : 'none', count: data.length });
+  if (data.length > 0) return NextResponse.json({ symbol, data, source: 'yahoo/stooq', count: data.length });
   return NextResponse.json({ symbol, data: [], source: 'none', count: 0 });
 }
