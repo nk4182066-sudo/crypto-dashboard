@@ -1,4 +1,4 @@
-﻿import { NextResponse } from 'next/server';
+import { NextResponse } from 'next/server';
 import { fetchTwelveDataHistory } from '@/src/lib/data/twelveData';
 
 export async function GET(req: Request) {
@@ -21,7 +21,7 @@ export async function GET(req: Request) {
     console.log(`[DATA] ALL EXCHANGES FAILED for ${symbol}`);
     return NextResponse.json({ symbol, data: [], source: 'none', count: 0 });
   }
-  const result = await fetchTwelveDataHistory(symbol, timeframe, null, Date.now());
+  const result = await fetchTwelveDataHistory(symbol, timeframe, false, null, Date.now());
   console.log(`[DATA] TwelveData Response for ${symbol}: Status ${result ? 'ok' : 'null'}`);
   const data = result?.candles ?? [];
   console.log(`[DATA] TwelveData Success for ${symbol}: Length: ${data.length}`);
