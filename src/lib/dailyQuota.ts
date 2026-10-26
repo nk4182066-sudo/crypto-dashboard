@@ -1,8 +1,8 @@
 /**
  * dailyQuota.ts — "Max 10 signals per market per 24h" Firestore counter
  * (Quality with Quantity spec, item 2). NO FALLBACK: once a market has emitted
- * MAX_SIGNALS_PER_MARKET_PER_DAY setups today (Asia/Karachi day), the engine
- * stops emitting for that market until the Karachi midnight reset.
+ * MAX_SIGNALS_PER_MARKET_PER_DAY setups today (UTC day), the engine
+ * stops emitting for that market until the UTC midnight reset.
  *
  * Quota counts signals directly from Firestore `signals` collection —
  * NOT `signals_history`, NOT `signal_daily_counts`. Only docs with
@@ -53,10 +53,15 @@ function getDb(): Firestore | null {
   return cloudDb;
 }
 
+/** UTC date string (YYYY-MM-DD) — the daily quota resets at UTC 00:00. */
+function utcDateKey(): string {
+  return new Date().toISOString().slice(0, 10);
+}
+
 /** Count today's emitted signals for a market from the `signals` collection.
  *  Only counts docs with dateKey === today and market match — never signals_history. */
 async function countTodaySignals(db: Firestore, market: ScanMarket): Promise<number> {
-  const today = karachiDateKey();
+  const today = utcDateKey();
   try {
     const q = query(
       collection(db, "signals"),

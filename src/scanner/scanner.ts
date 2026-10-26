@@ -144,6 +144,78 @@ async function fetchYahooCandles(symbol: string, market: ScanTarget["market"], t
 }
 
 
+/** Fetch candles from MEXC API — Min60/Min240/Min1440 interval format. */
+async function fetchMexcCandles(
+  symbol: string,
+  market: ScanTarget["market"],
+  timeframe: "1h" | "4h" | "1d"
+): Promise<Candle[]> {
+  const intervalMap: Record<"1h" | "4h" | "1d", string> = {
+    "1h": "Min60",
+    "4h": "Min240",
+    "1d": "Min1440",
+  };
+  const interval = intervalMap[timeframe] ?? "Min60";
+
+  const cryptoPair = symbol.replace(/^([A-Za-z0-9]+)-(USD|USDT)$/, "$1$2");
+
+  const mxcUrl = new URL("https://api.mexc.com/api/v3/klines");
+  mxcUrl.searchParams.set("symbol", cryptoPair);
+  mxcUrl.searchParams.set("interval", interval);
+  mxcUrl.searchParams.set("limit", "200");
+
+  const maxRetries = 2;
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      const response = await fetch(mxcUrl.toString(), {
+        cache: "no-store",
+        signal: AbortSignal.timeout(15000),
+      });
+      if (!response.ok) {
+        if (attempt < maxRetries) {
+          await new Promise((r) => setTimeout(r, Math.pow(2, attempt) * 1000));
+          continue;
+        }
+        console.log(`[DATA] MEXC Failed: HTTP ${response.status} for ${cryptoPair}`);
+        return [];
+      }
+
+      const data = await response.json() as any[];
+      if (!Array.isArray(data) || data.length === 0) {
+        console.log(`[DATA] MEXC No data: ${cryptoPair}`);
+        return [];
+      }
+
+      const candles: Candle[] = [];
+      for (const k of data) {
+        const t = Number(k[0]) * 1000;
+        const o = Number(k[1]);
+        const h = Number(k[2]);
+        const l = Number(k[3]);
+        const c = Number(k[4]);
+        const v = Number(k[5] ?? 0);
+        if (![t, o, h, l, c].every(Number.isFinite)) continue;
+        candles.push({ time: t, open: o, high: h, low: l, close: c, volume: v });
+      }
+      console.log(`[DATA] MEXC Success: ${cryptoPair} Raw Length: ${candles.length}`);
+      return candles;
+    } catch (error) {
+      if (attempt < maxRetries) {
+        await new Promise((r) => setTimeout(r, Math.pow(2, attempt) * 1000));
+        continue;
+      }
+      console.log(
+        `[DATA] MEXC error for ${cryptoPair}:`,
+        error instanceof Error ? error.message : error
+      );
+      return [];
+    }
+  }
+  return [];
+}
+
+export { fetchMexcCandles };
+
 async function fetchCandles(symbol: string, market: ScanTarget["market"], timeframe: "1h" | "4h" | "1d"): Promise<Candle[]> {
   const providerSymbol = toProviderSymbol(symbol);
 
@@ -168,7 +240,6 @@ async function fetchCandles(symbol: string, market: ScanTarget["market"], timefr
     }
   );
 }
-}
 /** Feature 10 â€” ranks a symbol by its setup quality, not by hope. */
 function toScanResult(target: ScanTarget, analysis: MarketAnalysis): ScanResult {
   return {
@@ -186,7 +257,7 @@ function toScanResult(target: ScanTarget, analysis: MarketAnalysis): ScanResult 
 }
 
 async function scanOne(target: ScanTarget): Promise<ScanResult | null> {
-  const candles = await fetchCandles(target.symbol, target.market);
+  const candles = await fetchCandles(target.symbol, target.market, "1h");
   if (candles.length < SCAN_MIN_CANDLES) return null;
 
   // fetchCandles stores Candle.time in milliseconds. The analysis pipeline

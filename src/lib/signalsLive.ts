@@ -429,7 +429,7 @@ function selfOrigin(origin?: string): string {
  * the confidence-ordered candidates ensure the best setups are analysed first —
  * the same style of bound /api/market-signals uses (MAX_FULL_ANALYSES_PER_REQUEST).
  */
-const MAX_CANDIDATES_PER_CALL = 100;
+const MAX_CANDIDATES_PER_CALL = 30;
 
 /** How long one serverless instance reuses its cold-start market scan. */
 const COLD_SCAN_TTL_MS = 5 * 60 * 1000;

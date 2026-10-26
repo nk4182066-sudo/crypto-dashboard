@@ -415,13 +415,15 @@ export interface SignalTierVerdict {
   color: "green" | "blue" | "yellow";
   /** The exact fixed score for this tier — 95 / 85 / 80. */
   score: number;
-}export function tierScore(conditionsPassed: number, expertsAgreed: number): number | null {
-  // Relaxed tier scoring (MIN_CONDITIONS 3, MIN_EXPERTS 1)
-  if (conditionsPassed >= 8 && expertsAgreed >= 4) return 95;
-  if (conditionsPassed >= 7 && expertsAgreed >= 1) return 85;
-  if (conditionsPassed >= 6 && expertsAgreed >= 1) return 75;
-  if (conditionsPassed >= 3 && expertsAgreed >= 1) return 60;
-  if (conditionsPassed >= 3) return 60;
+}export function tierScore(conditionsPassed: number, indicatorsAgreed: number): number | null {
+  // STRICT tier scoring per spec:
+  //   6/8 conditions + 2/4 indicators → score 75 (minimum pass)
+  //   7/8 conditions + 3/4 indicators → score 88 (STRONG)
+  //   8/8 conditions + 4/4 indicators → score 100 (PREMIUM)
+  // Anything below 6/8 + 2/4 → REJECT (null)
+  if (conditionsPassed >= 8 && indicatorsAgreed >= 4) return 100;
+  if (conditionsPassed >= 7 && indicatorsAgreed >= 3) return 88;
+  if (conditionsPassed >= 6 && indicatorsAgreed >= 2) return 75;
   return null;
 }
 
@@ -440,23 +442,36 @@ export function computeSignalTier({
   volumePassed: boolean;
   chartPatternPassed: boolean;
 }): SignalTierVerdict | null {
-  // Original strict tier assignment
-  const score = tierScore(conditionsPassed, expertsAgreed);
+  // STRICT tier: 6/8 conditions + 2/4 indicators → score 75 minimum.
+  const score = tierScore(conditionsPassed, indicatorsAgreedCount);
   if (score === null) return null;
 
-  if (conditionsPassed >= 8 && expertsAgreed >= 4) {
+  if (conditionsPassed >= 8 && indicatorsAgreedCount >= 4) {
     return { tier: "PREMIUM", label: "PREMIUM SETUP", color: "green", score };
   }
 
-  // MASLA 3 — accept 6/8 + 3/4 (score floor 75), but keep the strict score gate.
-  if (conditionsPassed >= 6 && expertsAgreed >= 2 && score >= MIN_SCORE) {
-    if (conditionsPassed >= 7 && expertsAgreed >= 3) {
-      return { tier: "STRONG", label: "STRONG SETUP", color: "blue", score };
-    }
-    return { tier: "GOOD", label: "GOOD SETUP", color: "yellow", score };
+  if (conditionsPassed >= 7 && indicatorsAgreedCount >= 3) {
+    return { tier: "STRONG", label: "STRONG SETUP", color: "blue", score };
   }
 
-  return null;
+  return { tier: "GOOD", label: "GOOD SETUP", color: "yellow", score };
+}
+
+/**
+ * HTF Confluence check — strictly require Higher Timeframe alignment.
+ * If the signal direction is Bullish on 1h, then 4h and 1d must ALSO be Bullish.
+ * Same for Bearish. Returns true only when all three timeframes agree.
+ */
+export function htfConfluence(
+  h1Trend: "bullish" | "bearish" | "neutral",
+  h4Trend: "bullish" | "bearish" | "neutral",
+  d1Trend: "bullish" | "bearish" | "neutral",
+  direction: "bullish" | "bearish"
+): boolean {
+  if (h1Trend !== direction) return false;
+  if (h4Trend !== direction) return false;
+  if (d1Trend !== direction) return false;
+  return true;
 }
 
 export function qualityLabel(quality: Quality | null): Quality | null {

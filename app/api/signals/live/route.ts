@@ -1,35 +1,22 @@
-// GET /api/signals/live — the authoritative 40-signal LIVE POOL.
+// GET /api/signals/live - strict rotation scanner with 7 USDT 20x trade setup.
 //
-// Guarantees exactly 40 live signals (10 per market: Crypto / Forex / Metals /
-// Stocks), selected by the strict tier gate (PREMIUM 8/8 or STRONG 7/8,
-// 3/4 experts, score >= 85) and scored by the shared analyzeCoin() engine. Every signal carries the
-// full trade plan (entries, SL, TP1-3, support/resistance, R:R, chart pattern +
-// candlestick, 4-expert consensus) so the Signals page can render the exact
-// card. Stored PENDING setups from Firestore are always merged in first, so
-// the page can never render "0 setups" while pending signals exist.
+// Scans only 4 coins per market (16 total) with continuous rotation, applies
+// strict signal conditions (6/8 conditions, 2/4 indicators, HTF confluence,
+// score >= 75), and emits the exact 7 USDT 20x trade setup on every signal.
 //
-// GET /api/signals/live?market=crypto   → 10 signals for one market.
-// GET /api/signals/live?market=all      → all 40 (or fewer if a market has
-//                                         fewer than its cap).
-// refresh() runs first so the pool is always populated
-// (auto-refill on loss/expiry is handled by the track-signals cron).
+// GET /api/signals/live?market=crypto   -> signals for one market.
+// GET /api/signals/live?market=all      -> all 4 markets.
 //
-// Educational analysis only — not financial advice.
+// Educational analysis only - not financial advice.
 
-import { refresh, LIVE_CAPS, type EmittedMarketSignal, type ScanMarket } from "@/src/lib/signalsLive";
+import { getRotationSignals } from "@/src/lib/rotationSignals";
+import type { ScanMarket } from "@/src/scanner/universe";
 import { SIGNAL_TTL_MS } from "@/src/lib/signalCloud";
-import { scanUniverse } from "@/src/scanner/universe";
 
-// ONE entry per MARKET — scanUniverse holds one row per SYMBOL (120 today), so
-// mapping it straight to markets produced ["crypto","crypto",…"metals",…] and
-// `market=all` fired refresh() + getLiveSignals() 120 TIMES per request (82
-// before the pool expansion): ~120 Firestore reads + 120 strict passes → the
-// route routinely blew its serverless duration and the Signals page showed
-// "loading" forever. Dedupe to the 4 real markets.
-const MARKET_VALUES: ScanMarket[] = [...new Set(scanUniverse.map((s) => s.market))];
+const MARKET_VALUES: ScanMarket[] = ["crypto", "forex", "stocks", "metals"];
 
 export const dynamic = "force-dynamic";
-export const maxDuration = 120;
+export const maxDuration = 10;
 
 function toMarket(market: string | null | undefined): ScanMarket | "all" {
   if (!market) return "all";
@@ -42,93 +29,73 @@ function toComparable(market: string, symbol: string): string {
 }
 
 export async function GET(request: Request) {
-  // console.log('LIVE API HIT: market=', new URL(request.url).searchParams.get('market'), 'Time:', new Date().toISOString());
   const { searchParams } = new URL(request.url);
   const market = toMarket(searchParams.get("market"));
   const origin = new URL(request.url).origin;
 
-  // ONE pass per market — refresh() reads the stored PENDING docs, merges the
-  // fresh strict candidates in (auto-refill) and RETURNS the capped pool. That
-  // return value IS the response: the old flow awaited refresh() but threw its
-  // pool away, then re-querued the strict-only getLiveSignals() — so a
-  // strict-empty pass answered `results: []` even while PENDING setups sat in
-  // Firestore (the "0 setups" page). Markets run in PARALLEL — each is an
-  // independent I/O chain (scan + history fetches), and serialising them on a
-  // cold instance used to risk blowing the serverless duration.
   const markets: ScanMarket[] = market === "all" ? MARKET_VALUES : [market];
 
-  // One accumulator per market — filled as each one finishes. On timeout we
-  // return whatever partial progress exists rather than throwing away every
-  // market that already completed (the old Promise.race + pools=[] on timeout
-  // discarded real results on cold-start slowness).
-  const partialPools: (EmittedMarketSignal[] | null)[] = new Array(markets.length).fill(null);
-
-  // 8s race: return early if the scanner chain takes too long, so the
-  // serverless function never times out even on cold starts with 120 symbols.
-  const timeoutPromise = new Promise<{ timedOut: true }>(
-    (resolve) => setTimeout(() => resolve({ timedOut: true }), 8000),
+  const timeoutPromise = new Promise<{ timedOut: true }>((resolve) =>
+    setTimeout(() => resolve({ timedOut: true }), 6000)
   );
 
   const scanPromise = (async () => {
-    for (let index = 0; index < markets.length; index += 1) {
-      const active = markets[index];
-      try {
-        partialPools[index] = await refresh(active, origin);
-      } catch (error) {
-        // console.warn(`[signals/live] refresh failed for ${active}:`, error instanceof Error ? error.message : error);
-        partialPools[index] = [];
-      }
-    }
-    return { timedOut: false };
+    return await getRotationSignals(origin);
   })();
 
   const result = await Promise.race([scanPromise, timeoutPromise]);
-  const pools = partialPools.map((pool) => pool ?? []);
-
-  const results: Record<string, EmittedMarketSignal[]> = {};
-
-  // STRICT 24H EXPIRY FILTER — only signals created within last 24 hours are
-  // returned. Older signals are silently dropped so the UI can never show stale
-  // setups that failed to resolve to WIN/LOSS/EXPIRED.
   const now = Date.now();
-  function isFresh(signal: EmittedMarketSignal): boolean {
+
+  function isFresh(signal: { createdAt?: number }): boolean {
     const createdAt = signal.createdAt ?? 0;
     return createdAt > 0 && now - createdAt <= SIGNAL_TTL_MS;
   }
 
-  const filteredPools = pools.map((pool) => pool.filter(isFresh));
+  const results: Record<string, { createdAt?: number }[]> = {};
 
-  if (market === "all") {
-    const merged: EmittedMarketSignal[] = [];
-    markets.forEach((active, index) => {
-      for (const signal of filteredPools[index] ?? []) results[toComparable(active, signal.symbol)] = [signal];
-      merged.push(...(filteredPools[index] ?? []));
-    });
-    merged.sort((a, b) => b.score - a.score || a.market.localeCompare(b.market) || (a.symbol < b.symbol ? -1 : 1));
-    const expiredCount = (pools[0]?.length ?? 0) - (filteredPools[0]?.length ?? 0);
+  if (result && !("timedOut" in result)) {
+    const allSignals: Record<ScanMarket, { createdAt?: number }[]> = result as unknown as Record<ScanMarket, { createdAt?: number }[]>;
+
+    if (market === "all") {
+      const merged: { createdAt?: number }[] = [];
+      for (const m of markets) {
+        const pool = (allSignals[m] ?? []).filter(isFresh);
+        for (const s of pool) results[toComparable(m, (s as { symbol: string }).symbol)] = [s];
+        merged.push(...pool);
+      }
+      merged.sort((a, b) => (b as { score: number }).score - (a as { score: number }).score);
+      return Response.json(
+        {
+          generatedAt: new Date().toISOString(),
+          targets: { crypto: 4, forex: 4, stocks: 4, metals: 4 },
+          results: merged,
+          expiresAt: new Date(now + SIGNAL_TTL_MS).toISOString(),
+        },
+        { headers: { "Cache-Control": "no-store" } }
+      );
+    }
+
+    const pool = (allSignals[market] ?? []).filter(isFresh);
     return Response.json(
       {
         generatedAt: new Date().toISOString(),
-        targets: LIVE_CAPS,
-        results: merged,
+        market,
+        cap: 4,
+        results: pool,
         expiresAt: new Date(now + SIGNAL_TTL_MS).toISOString(),
-        expiredFiltered: expiredCount,
       },
       { headers: { "Cache-Control": "no-store" } }
     );
   }
 
-  const pool = filteredPools[0] ?? [];
-  const cap = LIVE_CAPS[market as ScanMarket];
-  const expiredCount = (pools[0]?.length ?? 0) - (pool.length);
   return Response.json(
     {
       generatedAt: new Date().toISOString(),
       market,
-      cap,
-      results: pool,
+      cap: 4,
+      results: market === "all" ? [] : results,
       expiresAt: new Date(now + SIGNAL_TTL_MS).toISOString(),
-      expiredFiltered: expiredCount,
+      timedOut: true,
     },
     { headers: { "Cache-Control": "no-store" } }
   );
