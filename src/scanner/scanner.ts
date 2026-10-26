@@ -250,10 +250,26 @@ async function fetchCandles(symbol: string, market: ScanTarget["market"], timefr
     { ttlMs: 1 * 60 * 1000, staleMs: 2 * 60 * 1000 },
     async () => {
       if (market === "crypto") {
-        const mexc = await fetchMexcCandles(symbol, market, timeframe);
-        if (mexc.length > 0) return mexc;
-        console.log(`[DATA] MEXC failed, trying Binance for ${symbol}`);
-        return fetchBinanceCandles(symbol, timeframe);
+        const idMap: Record<string, string> = { "BTC-USD": "bitcoin", "ETH-USD": "ethereum", "SOL-USD": "solana" };
+        const coinId = idMap[symbol] ?? symbol.toLowerCase().replace("-USD", "");
+        const url = `https://api.coingecko.com/api/v3/coins/${coinId}/ohlc?vs_currency=usd&days=1`;
+        try {
+          const res = await fetch(url, { cache: "no-store", signal: AbortSignal.timeout(15000) });
+          if (res.ok) {
+            const data = await res.json() as number[][];
+            const candles: Candle[] = [];
+            for (const k of data) {
+              const t = Number(k[0]); const o = Number(k[1]); const h = Number(k[2]); const l = Number(k[3]); const c = Number(k[4]);
+              if (![t, o, h, l, c].every(Number.isFinite)) continue;
+              candles.push({ time: t, open: o, high: h, low: l, close: c, volume: 0 });
+            }
+            console.log(`[DATA] CoinGecko Success: ${symbol} Length: ${candles.length}`);
+            return candles;
+          }
+        } catch (e) {
+          console.log(`[DATA] CoinGecko error for ${symbol}:`, e instanceof Error ? e.message : e);
+        }
+        return [];
       }
 
       if (market === "forex" || market === "stocks" || market === "metals") {
