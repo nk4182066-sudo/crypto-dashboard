@@ -144,25 +144,54 @@ async function fetchCandlesRotated(
   timeframe: "1h" | "4h" | "1d"
 ): Promise<Candle[]> {
   if (market === "crypto") {
-    const idMap: Record<string, string> = { "BTC-USD": "bitcoin", "ETH-USD": "ethereum", "SOL-USD": "solana" };
-    const coinId = idMap[symbol] ?? symbol.toLowerCase().replace("-USD", "");
-    const url = `https://api.coingecko.com/api/v3/coins/${coinId}/ohlc?vs_currency=usd&days=1`;
+    const pair = symbol.replace(/^([A-Za-z0-9]+)-(USD|USDT)$/, "$1USDT");
+    // Bitget
     try {
-      const res = await fetch(url, { cache: "no-store", signal: AbortSignal.timeout(15000) });
+      const res = await fetch(`https://api.bitget.com/api/v2/spot/market/candles?symbol=${pair}&granularity=1h&limit=200`, { cache: "no-store", signal: AbortSignal.timeout(15000) });
       if (res.ok) {
-        const data = await res.json() as number[][];
+        const data = await res.json() as any;
+        const rows = Array.isArray(data?.data) ? data.data : [];
         const candles: Candle[] = [];
-        for (const k of data) {
-          const t = Number(k[0]); const o = Number(k[1]); const h = Number(k[2]); const l = Number(k[3]); const c = Number(k[4]);
+        for (const k of rows) {
+          const t = Number(k[0]); const o = Number(k[1]); const h = Number(k[2]); const l = Number(k[3]); const c = Number(k[4]); const v = Number(k[5] ?? 0);
           if (![t, o, h, l, c].every(Number.isFinite)) continue;
-          candles.push({ time: t, open: o, high: h, low: l, close: c, volume: 0 });
+          candles.push({ time: t, open: o, high: h, low: l, close: c, volume: v });
         }
-        console.log(`[DATA] CoinGecko Success: ${symbol} Length: ${candles.length}`);
-        return candles;
+        if (candles.length > 0) { console.log(`[DATA] Bitget Success for ${symbol}: Length: ${candles.length}`); return candles; }
       }
-    } catch (e) {
-      console.log(`[DATA] CoinGecko error for ${symbol}:`, e instanceof Error ? e.message : e);
-    }
+    } catch {}
+    // Bybit
+    try {
+      const res = await fetch(`https://api.bybit.com/v5/market/kline?category=spot&symbol=${pair}&interval=60&limit=200`, { cache: "no-store", signal: AbortSignal.timeout(15000) });
+      if (res.ok) {
+        const data = await res.json() as any;
+        const rows = Array.isArray(data?.result?.list) ? data.result.list : [];
+        const candles: Candle[] = [];
+        for (const k of rows) {
+          const t = Number(k[0]); const o = Number(k[1]); const h = Number(k[2]); const l = Number(k[3]); const c = Number(k[4]); const v = Number(k[5] ?? 0);
+          if (![t, o, h, l, c].every(Number.isFinite)) continue;
+          candles.push({ time: t, open: o, high: h, low: l, close: c, volume: v });
+        }
+        if (candles.length > 0) { console.log(`[DATA] Bybit Success for ${symbol}: Length: ${candles.length}`); return candles; }
+      }
+    } catch {}
+    // OKX
+    try {
+      const instId = symbol.replace("-", "-");
+      const res = await fetch(`https://www.okx.com/api/v5/market/candles?instId=${instId}&bar=1H&limit=200`, { cache: "no-store", signal: AbortSignal.timeout(15000) });
+      if (res.ok) {
+        const data = await res.json() as any;
+        const rows = Array.isArray(data?.data) ? data.data : [];
+        const candles: Candle[] = [];
+        for (const k of rows) {
+          const t = Number(k[0]); const o = Number(k[1]); const h = Number(k[2]); const l = Number(k[3]); const c = Number(k[4]); const v = Number(k[5] ?? 0);
+          if (![t, o, h, l, c].every(Number.isFinite)) continue;
+          candles.push({ time: t, open: o, high: h, low: l, close: c, volume: v });
+        }
+        if (candles.length > 0) { console.log(`[DATA] OKX Success for ${symbol}: Length: ${candles.length}`); return candles; }
+      }
+    } catch {}
+    console.log(`[DATA] ALL EXCHANGES FAILED for ${symbol}`);
     return [];
   }
   const candles = await fetchYahooCandlesRotated(symbol, market, timeframe);
