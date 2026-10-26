@@ -1,12 +1,12 @@
-/**
- * rotationSignals.ts — strict signal generation from rotation scan results.
+﻿/**
+ * rotationSignals.ts â€” strict signal generation from rotation scan results.
  *
  * Takes RotatedScanResult[] from the rotation scanner, applies strict signal
  * conditions (6/8 conditions passed, 2/4 indicators agreed, HTF confluence,
  * score >= 75), and generates the exact 7 USDT 20x trade setup on every
  * passing signal.
  *
- * Educational analysis only — not financial advice.
+ * Educational analysis only â€” not financial advice.
  */
 
 import type { Candle } from "@/src/analysis/types";
@@ -230,24 +230,6 @@ export async function evaluateRotatedSignal(
     patternPoints: null,
   };
 }
-}
-
-  for (const market of ["crypto", "forex", "stocks", "metals"] as const) {
-    const results = scanResults[market];
-    const signals: EmittedMarketSignal[] = [];
-
-    for (const result of results) {
-      try {
-        const signal = await evaluateRotatedSignal(result, origin);
-        if (signal) signals.push(signal);
-      } catch (error) {
-      }
-    }
-
-    signals.sort((a, b) => b.score - a.score || (a.symbol < b.symbol ? -1 : 1));
-    output[market] = signals;
-}
-
 export async function getRotationSignals(origin: string | undefined): Promise<Record<ScanMarket, EmittedMarketSignal[]>> {
   const { runRotationScan } = await import("@/src/scanner/rotationScanner");
   const scanResults = await runRotationScan();
