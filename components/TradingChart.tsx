@@ -155,6 +155,9 @@ export default function TradingChart({ data, chartKey = "", signals = [], candle
   // normalized) so zooming out / "Fit" always exposes every available candle.
   // Only the *visible* window is limited to the last 100 candles.
   const normalizedData = useMemo(() => normalizeCandles(data), [data]);
+
+  // Handle empty data gracefully — show "No data" message instead of crashing
+  const hasData = normalizedData.length > 0;
   const chartContainerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const candlestickSeriesRef = useRef<ISeriesApi<'Candlestick', Time> | null>(null);
@@ -740,6 +743,16 @@ export default function TradingChart({ data, chartKey = "", signals = [], candle
       pendingDrawingRef.current = points;
     }
   };
+
+    {!hasData && (
+      <div className="relative h-full min-h-0 w-full flex items-center justify-center bg-zinc-950/90 text-zinc-400">
+        <div className="text-sm font-medium text-center px-4">No data for this coin</div>
+        <div className="text-xs text-zinc-600 mt-1 text-center px-4">Fetching historical data...</div>
+      </div>
+    )}
+
+    <div className="relative h-full min-h-0 w-full" style={{ touchAction: "none" }}>
+      <div ref={chartContainerRef} className="h-full min-h-0 w-full" style={{ height: "100%", touchAction: "none" }} />
 
   return (
     <div className="relative h-full min-h-0 w-full" style={{ touchAction: "none" }}>
