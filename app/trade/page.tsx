@@ -79,7 +79,7 @@ async function fetchCandles(
     const response = await fetch(`/api/market/history?${query}`, { cache: "no-store" });
     if (!response.ok) return { candles: [], hasMore: false };
     const payload = (await response.json()) as {
-      candles?: Candle[];
+      data?: Candle[];
       hasMore?: boolean;
       degraded?: boolean;
     };
@@ -113,7 +113,7 @@ async function fetchOlderCandles(
     const response = await fetch(`/api/market/history?${query}`, { cache: "no-store" });
     if (!response.ok) return { candles: [], hasMore: false };
     const payload = (await response.json()) as {
-      candles?: Candle[];
+      data?: Candle[];
       hasMore?: boolean;
       degraded?: boolean;
     };
