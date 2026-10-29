@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { createUserWithEmailAndPassword, type AuthError } from "firebase/auth";
-import { auth, db, COLLECTION_USERS, onAuthStateChanged } from "@/src/lib/firebase";
+import { auth, db, COLLECTION_USERS, onAuthStateChanged, signInWithGoogle } from "@/src/lib/firebase";
 import { clearUser } from "@/src/lib/userAuth";
 import { doc, setDoc, serverTimestamp } from "firebase/firestore";
 
@@ -203,6 +203,21 @@ export default function SignUpPage() {
       setSubmitting(false);
     }
   }
+
+  async function handleGoogle() {
+    if (busy || !auth) return;
+    setSubmitError(null);
+    try {
+      const user = await signInWithGoogle();
+      clearUser();
+      redirecting.current = true;
+      window.location.href = "/";
+    } catch (err) {
+      console.error("[signup] Google error:", err);
+      setSubmitError("Google sign-in fail ho gaya.");
+    }
+  }
+
   return (
     <div className="relative flex min-h-screen items-center justify-center px-4 py-12" style={{ backgroundColor: BG }}>
       <div
@@ -353,6 +368,32 @@ export default function SignUpPage() {
             )}
           </button>
         </form>
+
+        <div className="mt-3 flex items-center justify-center" style={{ gap: 16 }}>
+          <div className="h-px flex-1" style={{ backgroundColor: BORDER }} />
+          <span className="text-xs" style={{ color: MUTED }}>OR</span>
+          <div className="h-px flex-1" style={{ backgroundColor: BORDER }} />
+        </div>
+
+        <button
+          type="button"
+          onClick={handleGoogle}
+          disabled={busy}
+          aria-label="Sign in with Google"
+          style={{ width: "100%", marginTop: "0.5rem", padding: "0.85rem 1.5rem", background: "#FFFFFF", color: "#1F2937", border: `1px solid ${BORDER}`, borderRadius: "0.75rem", fontWeight: 600, fontSize: "1rem", cursor: busy ? "not-allowed" : "pointer", transition: "background 0.15s" }}
+        >
+          {busy ? (
+            <span className="h-5 w-5 animate-spin rounded-full border-2 border-white/40 border-t-white" aria-hidden="true" />
+          ) : (
+            <svg className="h-5 w-5" viewBox="0 0 48 48" aria-hidden="true">
+              <path fill="#FFC107" d="M43.6 20.1H42V20H24v8h11.3C33.7 32.7 29.2 36 24 36c-6.6 0-12-5.4-12-12s5.4-12 12-12c3.1 0 5.8 1.2 7.9 3.1l5.7-5.7C34 6.1 29.3 4 24 4 13 4 4 13 4 24s9 20 20 20 20-9 20-20c0-1.3-.1-2.6-.4-3.9z" />
+              <path fill="#FF3D00" d="M6.3 14.7l6.6 4.8C14.7 15.1 19 12 24 12c3.1 0 5.8 1.2 7.9 3.1l5.7-5.7C34 6.1 29.3 4 24 4 16.3 4 9.7 8.3 6.3 14.7z" />
+              <path fill="#4CAF50" d="M24 44c5.2 0 9.9-2 13.4-5.2l-6.2-5.2C29.2 35.1 26.7 36 24 36c-5.2 0-9.6-3.3-11.3-7.9l-6.5 5C9.5 39.6 16.2 44 24 44z" />
+              <path fill="#1976D2" d="M43.6 20.1H42V20H24v8h11.3c-.8 2.2-2.2 4.1-4.1 5.5l6.2 5.2C36.9 39.2 44 34 44 24c0-1.3-.1-2.6-.4-3.9z" />
+            </svg>
+          )}
+          <span>{busy ? "Signing in..." : "Sign in with Google"}</span>
+        </button>
 
         <p className="mt-5 text-center text-sm" style={{ color: MUTED }}>
           Already have an account?{" "}

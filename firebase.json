@@ -1,0 +1,20 @@
+{
+  "functions": {
+    "source": "functions",
+    "runtime": "nodejs20",
+    "region": "asia-south1"
+  },
+  "firestore": {
+    "rules": "firestore.rules",
+    "indexes": "firestore.indexes.json"
+  },
+  "hosting": {
+    "source": ".",
+    "ignore": [
+      "firebase.json",
+      "**/.*",
+      "**/node_modules/**"
+    ],
+    "site": "crypto-dashboard-67379"
+  }
+}

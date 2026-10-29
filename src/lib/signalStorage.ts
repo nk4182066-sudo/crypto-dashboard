@@ -323,10 +323,16 @@ export function saveSignals(list: StoredSignal[]): void {
  * "BTC-USD" and "BTCUSDT" were treated as two different coins while the same
  * ticker in two markets collided.
  */
-export function cleanDuplicates(): StoredSignal[] {
-  const existing = getSignals();
+export function cleanDuplicates(signals: any): any[] {
+  if (!signals) return [];
+  let arr = signals;
+  if (!Array.isArray(arr)) {
+    if (arr?.today && Array.isArray(arr.today)) arr = arr.today;
+    else if (arr?.signals && Array.isArray(arr.signals)) arr = arr.signals;
+    else return [];
+  }
   const seen = new Set<string>();
-  const cleaned = existing.filter((r) => {
+  const cleaned = arr.filter((r: any) => {
     const key = assetKey(r.symbol, r.market);
     if (seen.has(key)) return false;
     seen.add(key);

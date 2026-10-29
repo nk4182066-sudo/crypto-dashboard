@@ -2,6 +2,9 @@
 
 # dependencies
 /node_modules
+/functions/node_modules
+/functions/.next
+
 /.pnp
 .pnp.*
 .yarn/*
@@ -16,6 +19,10 @@
 # next.js
 /.next/
 /out/
+
+# firebase
+.firebase/
+functions/.next/
 
 # production
 /build

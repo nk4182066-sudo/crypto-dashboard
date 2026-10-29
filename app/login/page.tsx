@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { auth, NOT_CONFIGURED, signInWithGoogle, onAuthStateChanged } from "@/src/lib/firebase";
 import { saveUser } from "@/src/lib/userAuth";
+import { createUserWithEmailAndPassword, signInWithEmailAndPassword, type AuthError } from "firebase/auth";
 
 const BG = "#0B0E11";
 const CARD = "#181A20";
@@ -30,6 +31,39 @@ export default function LoginPage() {
   const [configured, setConfigured] = useState<boolean | null>(null);
   const busy = loading;
   const redirecting = useRef(false);
+
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [loginError, setLoginError] = useState<string | null>(null);
+
+  async function handleLogin(e: React.FormEvent) {
+    e.preventDefault();
+    if (!email.trim() || !password) {
+      setLoginError("Email aur password dono zaroor daain.");
+      return;
+    }
+    setLoginError(null);
+    try {
+      if (!auth) throw new Error(NOT_CONFIGURED);
+      const result = await signInWithEmailAndPassword(auth, email.trim(), password);
+      saveUser({ name: result.user.displayName ?? result.user.email ?? "User", provider: "local" });
+      redirecting.current = true;
+      window.location.href = "/";
+    } catch (err: any) {
+      console.error("[login] Email/password error:", err);
+      setLoginError(friendlyError(err));
+    }
+  }
+
+  function handleEmailChange(v: string) {
+    setEmail(v);
+    if (loginError) setLoginError(null);
+  }
+
+  function handlePasswordChange(v: string) {
+    setPassword(v);
+    if (loginError) setLoginError(null);
+  }
 
   useEffect(() => {
     setConfigured(auth !== null);
@@ -140,6 +174,82 @@ export default function LoginPage() {
             {error}
           </div>
         )}
+
+        {loginError && (
+          <div
+            role="alert"
+            className="mb-4 rounded-lg border p-3 text-center text-sm"
+            style={{
+              backgroundColor: "rgba(245,63,63,0.10)",
+              borderColor: "rgba(245,63,63,0.35)",
+              color: "#F87171",
+            }}
+          >
+            {loginError}
+          </div>
+        )}
+
+        <form onSubmit={handleLogin} noValidate>
+          <div className="mb-3">
+            <label className="mb-1 block text-sm" style={{ color: TEXT }}>Email</label>
+            <input
+              type="email"
+              value={email}
+              onChange={(e) => handleEmailChange(e.target.value)}
+              placeholder="name@domain.com"
+              disabled={busy}
+              style={{
+                width: "100%",
+                background: "#0F1219",
+                border: `1px solid ${BORDER}`,
+                color: TEXT,
+                borderRadius: "0.75rem",
+                padding: "0.75rem 1rem",
+                outline: "none",
+                transition: "border-color 0.15s",
+              }}
+            />
+          </div>
+          <div className="mb-3">
+            <label className="mb-1 block text-sm" style={{ color: TEXT }}>Password</label>
+            <input
+              type="password"
+              value={password}
+              onChange={(e) => handlePasswordChange(e.target.value)}
+              placeholder="••••••"
+              disabled={busy}
+              style={{
+                width: "100%",
+                background: "#0F1219",
+                border: `1px solid ${BORDER}`,
+                color: TEXT,
+                borderRadius: "0.75rem",
+                padding: "0.75rem 1rem",
+                outline: "none",
+                transition: "border-color 0.15s",
+              }}
+            />
+          </div>
+          <button
+            type="submit"
+            disabled={busy}
+            style={{
+              width: "100%",
+              marginTop: "0.75rem",
+              padding: "0.85rem 1.5rem",
+              background: GREEN,
+              color: "white",
+              border: "none",
+              borderRadius: "0.75rem",
+              fontWeight: 600,
+              fontSize: "1rem",
+              cursor: busy ? "not-allowed" : "pointer",
+              transition: "background 0.15s",
+            }}
+          >
+            {loading ? <span className="h-5 w-5 animate-spin rounded-full border-2 border-white/40 border-t-white" aria-hidden="true" /> : "Sign In with Email"}
+          </button>
+        </form>
 
         <button
           type="button"

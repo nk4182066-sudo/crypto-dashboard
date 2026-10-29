@@ -71,6 +71,10 @@ const YELLOW = "#F59E0B";
 type Market = "crypto" | "forex" | "stocks" | "metals";
 
 import { SIGNAL_TTL_MS } from "@/src/lib/signalCloud";
+import {
+  readTodaySignals,
+  type FirestoreSignal,
+} from "@/src/lib/signalsFirestore";
 
 interface MarketSignal {
   symbol: string;
@@ -218,34 +222,50 @@ function SignalsPageContent() {
     return () => window.clearTimeout(timer);
   }, []);
 
-  // Live API — refresh every 30s (spec). Results merge with the cloud/backup
-  // sources below instead of replacing them, so a slow or empty scan never
-  // wipes setups that are already on screen.
+  // Read from Firestore only (No Direct API) — today's signals, limit 10.
+  // Works on mobile data / Wi-Fi even when the PC is off — data lives in the cloud.
   useEffect(() => {
     let cancelled = false;
-    // Next poll is scheduled only when the previous load FINISHES (never an
-    // interval) so slow responses can't stack, and an empty/error response
-    // retries in COLD_RETRY_MS instead of idling out the full 30s.
     let timer: number | undefined;
     let hadResults = false;
     const load = async () => {
       setLoading(true);
       setError(null);
       try {
-        console.log("[signals/page] Fetching signals from API: /api/signals/live?market=", market);
-        const response = await fetch(`/api/signals/live?market=${market}`, { cache: "no-store" });
-        if (!response.ok) throw new Error("Failed to load setups");
-        const payload = (await response.json()) as { generatedAt?: string; results?: MarketSignal[] };
+        const today = await readTodaySignals();
+        // Array.isArray guard — never pass a non-iterable downstream
+        const results = Array.isArray(today) ? today : [];
+        // Filter to the active market
+        const marketSignals = results.filter((s) => s.market === market);
         if (cancelled) return;
-        const results = Array.isArray(payload.results) ? payload.results : [];
-        console.log("[signals/page] Received:", results.length, "signals for market:", market);
-        hadResults = results.length > 0;
-        setApiSignals(results);
-        setUpdatedAt(payload.generatedAt ?? null);
+        hadResults = marketSignals.length > 0;
+        const mapped: MarketSignal[] = marketSignals.map((fs) => ({
+          symbol: fs.symbol,
+          label: fs.symbol,
+          market: fs.market as Market,
+          score: fs.score ?? 0,
+          direction: (fs.direction === "bullish" || fs.direction === "bearish") ? fs.direction : "bullish",
+          createdAt: typeof fs.createdAt === "number" ? fs.createdAt : Date.now(),
+          bias: fs.direction === "bullish" ? "Bullish" : "Bearish",
+          price: fs.price ?? 0,
+          pattern: fs.pattern ?? null,
+          support: fs.support ?? null,
+          resistance: fs.resistance ?? null,
+          watchLevel: fs.support ?? null,
+          reason: `Score ${fs.score ?? 0}/100 — ${fs.conditionsPassed ?? 0}/8 conditions, ${fs.expertsAgreed ?? 0}/4 experts`,
+          analyzedAt: typeof fs.createdAt === "number" ? new Date(fs.createdAt).toISOString() : new Date().toISOString(),
+          chartPattern: fs.pattern ?? null,
+          chartPatternNote: null,
+          candlestickPattern: fs.candlestick ?? null,
+          candlestickConfidence: 0,
+          atr: fs.atr ?? null,
+          timeframeMinutes: 60,
+        }));
+        setApiSignals(mapped);
+        setUpdatedAt(new Date().toISOString());
       } catch {
         if (!cancelled) {
           setError("Setups load nahi ho sake. Thodi der baad try karein.");
-          // Keep whatever we have (cloud + backup) instead of emptying.
         }
       } finally {
         if (!cancelled) {

@@ -571,7 +571,7 @@ export async function POST(request: Request) {
       result = await Promise.race([
         callAI(messages),
         new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error("CHAT_TIMEOUT")), 10000)
+          setTimeout(() => reject(new Error("CHAT_TIMEOUT")), 30000)
         ),
       ]);
     } catch (error) {

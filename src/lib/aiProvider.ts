@@ -39,7 +39,7 @@ const PROVIDERS: Provider[] = [
 ];
 
 const COOLDOWN_MS = 60_000;
-const TIMEOUT_MS = 10_000;
+const TIMEOUT_MS = 30_000;
 
 /** provider name -> epoch ms until which that provider stays blocked. */
 const blockedUntil = new Map<string, number>();

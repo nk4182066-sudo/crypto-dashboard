@@ -26,6 +26,12 @@ import {
 import { subscribeAllSignals, type CloudDoc } from "@/src/lib/signalCloud";
 import { assetKey, signalDateKey } from "@/src/lib/signalIdentity";
 import { cloudIdentity } from "@/src/lib/signalMerge";
+import {
+  readTodaySignals,
+  readWeekSignals,
+  readMonthSignals,
+  type FirestoreSignal,
+} from "@/src/lib/signalsFirestore";
 
 const GREEN = "#00C087";
 const CARD = "#181A20";
@@ -191,12 +197,29 @@ function ResultsPageContent() {
   const [loading, setLoading] = useState(true);
   const [lastCheck, setLastCheck] = useState<string | null>(null);
 
-  // Load stored history on mount (client-only; localStorage lives in the browser).
-  // cleanDuplicates() drops any old per-symbol duplicates written before the
-  // 24h guard existed, so the list shows at most one entry per coin.
+  // Load signals ONLY from Firestore (today: limit 10, week: limit 20, month: limit 30).
+  // Works on mobile data / Wi-Fi even when the PC is off — data lives in the cloud.
   useEffect(() => {
-    setRecords(cleanDuplicates());
-    setLoading(false);
+    let cancelled = false;
+    async function loadFromFirestore() {
+      const [today, week, month] = await Promise.all([
+        readTodaySignals(),
+        readWeekSignals(),
+        readMonthSignals(),
+      ]);
+      const all = [...today, ...week, ...month];
+      // Array.isArray guard — never pass a non-iterable to cleanDuplicates
+      const safe = Array.isArray(all) ? all : [];
+      const deduped = cleanDuplicates(safe);
+      if (!cancelled) {
+        setRecords(deduped as unknown as StoredSignal[]);
+        setLoading(false);
+      }
+    }
+    void loadFromFirestore();
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   // MASLA 2 — Firestore cross-device sync. The server cron (/api/track-signals,
@@ -298,7 +321,7 @@ function ResultsPageContent() {
     let cancelled = false;
 
     async function evaluate() {
-      const current = getSignals();
+      const current = records;
       if (!current.length) return;
 
       try {
@@ -319,7 +342,6 @@ function ResultsPageContent() {
         });
 
         if (!cancelled && JSON.stringify(updated) !== JSON.stringify(current)) {
-          saveSignals(updated);
           setRecords(updated);
         }
         if (!cancelled) {
@@ -368,11 +390,15 @@ function ResultsPageContent() {
   }, [records]);
 
   const filtered = useMemo(() => {
-    if (time === "today") {
-      return records.filter((r) => isToday(r.createdAt));
-    }
     const now = Date.now();
     const day = 24 * 60 * 60 * 1000;
+    const dayAgo = now - day;
+
+    // Daily view = only signals from the last 24 hours.
+    if (time === "today") {
+      return records.filter((r) => r.createdAt >= dayAgo);
+    }
+
     return records.filter((r) => {
       if (status !== "all" && r.status !== status) return false;
       if (time === "week" && now - r.createdAt > 7 * day) return false;
