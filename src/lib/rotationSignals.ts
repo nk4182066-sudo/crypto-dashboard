@@ -60,7 +60,7 @@ export async function evaluateRotatedSignal(
       symbol,
       market,
       primary: h1,
-      h1,
+      h1: h1,
       h4,
       d1,
     });

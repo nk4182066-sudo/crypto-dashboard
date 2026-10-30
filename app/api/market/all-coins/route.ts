@@ -14,7 +14,7 @@
 // failing never breaks the whole response. Whole payload cached 15s in-memory.
 // Educational only. Not financial advice.
 
-export const dynamic = "force-dynamic";
+export const dynamic = "force-static";
 export const revalidate = 0;
 // Vercel — keep this route on the Node.js runtime (not edge): it fans out to
 // five providers with timeouts and caches the payload in Node memory.
@@ -642,3 +642,5 @@ export async function GET(): Promise<Response> {
   cache = { payload, expires: now + CACHE_MS };
   return jsonResponse(payload);
 }
+
+

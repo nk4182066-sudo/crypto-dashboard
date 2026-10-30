@@ -1,3 +1,6 @@
+import type { NextRequest } from "next/server";
+
+export const dynamic = "force-static";
 import { cached } from "@/src/lib/cache";
 
 interface NewsItem {

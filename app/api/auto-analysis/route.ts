@@ -1,8 +1,8 @@
-// Rule-based auto analysis endpoint. Educational only. Not financial advice.
+﻿// Rule-based auto analysis endpoint. Educational only. Not financial advice.
 import { analyzeSymbol } from "@/src/lib/autoAnalysis";
 import { cached } from "@/src/lib/cache";
 
-export const dynamic = "force-dynamic";
+export const dynamic = "force-static";
 
 /** One analysis reads 4 timeframes; reuse the result for 5 minutes. */
 const TTL_MS = 5 * 60 * 1000;
@@ -32,3 +32,4 @@ export async function GET(request: Request) {
     return Response.json({ error: "Analysis could not be generated right now." }, { status: 500 });
   }
 }
+

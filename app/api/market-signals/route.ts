@@ -1,4 +1,4 @@
-import { LIVE_CAPS } from "@/src/lib/signalsLive";
+﻿import { LIVE_CAPS } from "@/src/lib/signalsLive";
 import { cached, cacheGet } from "@/src/lib/cache";
 import { getCachedSnapshot, runScan, type ScanResult, type ScanSnapshot } from "@/src/scanner/scanner";
 import { startScheduler } from "@/src/scanner/scheduler";
@@ -18,7 +18,8 @@ import { computeSignalTier, type SignalTier } from "@/src/lib/strictSignalEngine
 import { MAX_SIGNALS_PER_MARKET_PER_DAY, remainingEmitSlots, reserveEmitSlot } from "@/src/lib/dailyQuota";
 import { qualityFilterMiss } from "@/src/lib/signalsLive";
 
-export const dynamic = "force-dynamic";
+
+export const dynamic = "force-static";
 export const revalidate = 0;
 export const maxDuration = 60;
 
@@ -48,7 +49,7 @@ interface AllCoinsCoin {
 /**
  * Flattens an emitted setup into the Firestore document (MASLA 2 spec fields):
  * entry1/entry2, stopLoss, TP1-3, trend, reasoning, timeframe, consensus "X/4"
- * and the 4 educators — plus the full MarketSignal payload so the Signals page
+ * and the 4 educators â€” plus the full MarketSignal payload so the Signals page
  * can rebuild the exact card from the cloud document.
  */
 function toCloudDoc(signal: MarketSignal, timeframe: string): CloudDoc | null {
@@ -67,7 +68,7 @@ function toCloudDoc(signal: MarketSignal, timeframe: string): CloudDoc | null {
       reason: signal.reason,
       chartPattern: signal.chartPattern,
       chartPatternNote: signal.chartPatternNote,
-      // DYNAMIC ATR plan — the SAME volatility + timeframe the emitting
+      // DYNAMIC ATR plan â€” the SAME volatility + timeframe the emitting
       // analyzeCoin() run used, so stored TP/SL equal the card and chart.
       atr: signal.atr,
       timeframeMinutes: signal.timeframeMinutes,
@@ -143,22 +144,22 @@ export interface MarketSignal {
   candlestick?: { name: string | null; type: "bullish" | "bearish" | "neutral"; confidence: number } | null;
   /** Candlestick confirmation confidence 0-100 (0 when none). */
   candlestickConfidence: number;
-  /** MASLA 1/2 — shared analyzeCoin() condition breakdown so the card shows
+  /** MASLA 1/2 â€” shared analyzeCoin() condition breakdown so the card shows
    *  the exact "X/8 Conditions Passed" both pages compute. */
   conditionsPassed?: number;
   conditions?: ConditionLine[] | null;
-  /* Feature 2 — real-data confirmation breakdown (RSI/MACD/EMA/Volume). */
+  /* Feature 2 â€” real-data confirmation breakdown (RSI/MACD/EMA/Volume). */
   confirmations?: { indicators: ConfirmationIndicator[]; confirmed: number; total: number } | null;
-/** KAAM 4 — the full 10-indicator institutional panel (value/status/side each). */
-  /** KAAM 4 — the full 10-indicator institutional panel (value/status/side each). */
+/** KAAM 4 â€” the full 10-indicator institutional panel (value/status/side each). */
+  /** KAAM 4 â€” the full 10-indicator institutional panel (value/status/side each). */
   indicators?: IndicatorRow[] | null;
-  /** Feature 3 — the 4-educator panel + consensus (agreed >= 3 = delivery-grade). */
+  /** Feature 3 â€” the 4-educator panel + consensus (agreed >= 3 = delivery-grade). */
   experts?: { educators: EducatorVerdict[]; consensus: Consensus } | null;
-/** STRICT tier — PREMIUM / STRONG / GOOD / null (rejected). Never null on an emitted card. */
+/** STRICT tier â€” PREMIUM / STRONG / GOOD / null (rejected). Never null on an emitted card. */
   tier: SignalTier;
   /** Display badge for the signal card (e.g. "WEAK SETUP" for force fallback). */
   badge?: string;
-  /** ATR(14) of the emitting 1h candles — drives the DYNAMIC TP/SL plan the
+  /** ATR(14) of the emitting 1h candles â€” drives the DYNAMIC TP/SL plan the
    *  card, stored doc and Trade chart all share (atrPlan.ts). */
   atr?: number | null;
   /** Timeframe class of the emitting candles in minutes (60 for signals). */
@@ -167,7 +168,7 @@ export interface MarketSignal {
 
 // ------------------------------------------------------------------ response cap
 // Strict quality > quantity. At most MAX_SIGNALS_PER_MARKET_PER_DAY (10)
-// setups per market per request — the value now comes from the SHARED
+// setups per market per request â€” the value now comes from the SHARED
 // Firestore daily quota (src/lib/dailyQuota.ts, Asia/Karachi reset), so the
 // in-memory flip-flop of the old per-instance counter is gone. Duplicate
 // suppression across refreshes stays with persistSignals()'s 4h guard.
@@ -180,10 +181,10 @@ export interface MarketSignal {
 const MAX_FULL_ANALYSES_PER_REQUEST = 24;
 
 /**
- * MASLA 1 — fetch candles from /api/market/history, the EXACT endpoint the
- * Trade page reads (Binance → Yahoo → synthetic chain for crypto, Yahoo for
- * everything else). Scoring these candles — instead of the scanner's separate
- * Yahoo cache — is what guarantees "same coin = same score" on both pages.
+ * MASLA 1 â€” fetch candles from /api/market/history, the EXACT endpoint the
+ * Trade page reads (Binance â†’ Yahoo â†’ synthetic chain for crypto, Yahoo for
+ * everything else). Scoring these candles â€” instead of the scanner's separate
+ * Yahoo cache â€” is what guarantees "same coin = same score" on both pages.
  * Short TTL keeps parity with the Trade page's 30s polling cadence.
  */
 async function fetchHistoryCandles(
@@ -251,7 +252,7 @@ async function loadDynamicTargets(origin: string): Promise<ScanTarget[]> {
       const buckets: Record<ScanMarket, AllCoinsCoin[]> = { crypto: [], forex: [], stocks: [], metals: [] };
       for (const coin of coins) {
         const market: string | undefined = coin.market;
-        // Futures duplicate the spot pairs — skip them so one symbol = one scan.
+        // Futures duplicate the spot pairs â€” skip them so one symbol = one scan.
         if (!market || market === "futures" || !(market in buckets)) continue;
         buckets[market as ScanMarket].push(coin);
       }
@@ -280,8 +281,8 @@ async function loadDynamicTargets(origin: string): Promise<ScanTarget[]> {
  * Market signals endpoint. Scans every coin the all-coins API knows about
  * (plus the static universe), merges with the scanner's ranked snapshot, and
  * returns the requested market sorted by score (highest first). Failures
- * degrade to whatever is cached — never an empty tab.
- * Educational analysis only — not financial advice.
+ * degrade to whatever is cached â€” never an empty tab.
+ * Educational analysis only â€” not financial advice.
  */
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
@@ -293,7 +294,7 @@ export async function GET(request: Request) {
 
   const snapshot: ScanSnapshot | null = getCachedSnapshot();
 
-  // Extra targets from the all-coins API — a provider hiccup must not break
+  // Extra targets from the all-coins API â€” a provider hiccup must not break
   // the tab, so we simply fall back to the static universe only.
   let dynamicTargets: ScanTarget[] = [];
   try {
@@ -319,7 +320,7 @@ export async function GET(request: Request) {
   //
   // maxEntries raised from 2: cacheSet() evicts the ENTIRE global in-process
   // store down to this number, so the old value of 2 destroyed every per-symbol
-  // analysis detail runScan() had just written — getCachedAnalysis() then
+  // analysis detail runScan() had just written â€” getCachedAnalysis() then
   // returned null for all candidates and the page showed 0 signals on a cold
   // serverless instance. Kept high enough that the scan results coexist with
   // the detail/candlestick entries they depend on.
@@ -337,7 +338,7 @@ export async function GET(request: Request) {
 
   // ------------------------------------------------------------------ strict gate
   // Every candidate runs the 8-check gate. Only gate-passing, in-frequency
-  // signals are emitted. Anything else is dropped — the UI then shows
+  // signals are emitted. Anything else is dropped â€” the UI then shows
   // "No clear setup. Wait karein." Strict quality > quantity.
   const emitted: MarketSignal[] = [];
   const window = rotationWindowSymbols(market);
@@ -348,21 +349,21 @@ export async function GET(request: Request) {
     .filter((item) => !failedSymbols.has(item.symbol))
     .sort((first, second) => second.confidence - first.confidence);
 
-  // DAILY QUOTA — at most 10 emissions per market per Asia/Karachi day (shared
+  // DAILY QUOTA â€” at most 10 emissions per market per Asia/Karachi day (shared
   // Firestore counter, NO fallback). Short-circuit when today's quota is done.
   let quotaLeft = await remainingEmitSlots(market);
   if (quotaLeft <= 0) {
     console.log(
-      `[LIVE] ${market} today ${MAX_SIGNALS_PER_MARKET_PER_DAY}/${MAX_SIGNALS_PER_MARKET_PER_DAY} — quota full, market-signals emitting nothing.`,
+      `[LIVE] ${market} today ${MAX_SIGNALS_PER_MARKET_PER_DAY}/${MAX_SIGNALS_PER_MARKET_PER_DAY} â€” quota full, market-signals emitting nothing.`,
     );
   }
 
-  // Audit — candidate pool per market + per-request emission cap.
+  // Audit â€” candidate pool per market + per-request emission cap.
   console.log(`[signals ${market}] ${ordered.length} candidates, cap ${MAX_SIGNALS_PER_MARKET_PER_DAY}, quotaLeft ${quotaLeft}`);
 
   type Candidate = (typeof ordered)[number];
 
-  /** One emitted card — shared by the strict tier path. */
+  /** One emitted card â€” shared by the strict tier path. */
   function emitSignal(
     item: Candidate,
     full: ReturnType<typeof analyzeCoin>,
@@ -378,7 +379,7 @@ export async function GET(request: Request) {
       label: item.label,
       market: item.market,
       tier,
-      // MASLA 3 — score = (conditions_passed / 8) * 100 straight from the
+      // MASLA 3 â€” score = (conditions_passed / 8) * 100 straight from the
       // shared engine (8/8=100, 7/8=88, 6/8=75): identical on Trade + Signals.
       score,
       direction,
@@ -405,13 +406,13 @@ export async function GET(request: Request) {
       confirmations,
       indicators: indicatorRows,
       experts,
-      // DYNAMIC plan volatility — cards/docs rebuild the exact same TP/SL.
+      // DYNAMIC plan volatility â€” cards/docs rebuild the exact same TP/SL.
       atr: full.atr,
       timeframeMinutes: full.tfMinutes,
     };
   }
 
-  // Debug counters (?debug=1) — surface where candidates get dropped live so a
+  // Debug counters (?debug=1) â€” surface where candidates get dropped live so a
   // 0-signal response is diagnosable instead of a silent empty array.
   const drops = {
     candidates: ordered.length,
@@ -427,13 +428,13 @@ export async function GET(request: Request) {
     conditionDetails: [] as Array<{ symbol: string; conditionsPassed: number; failed: string[] }>,
   };
 
-  // MASLA 1 — origin for the shared /api/market/history calls (the exact
+  // MASLA 1 â€” origin for the shared /api/market/history calls (the exact
   // endpoint the Trade page reads for its candles and its score).
   const origin = new URL(request.url).origin;
   let fullAnalysesLeft = MAX_FULL_ANALYSES_PER_REQUEST;
 
   for (const item of ordered) {
-    // ── Cheap pre-filter on the scanner's own cached candles (no network).
+    // â”€â”€ Cheap pre-filter on the scanner's own cached candles (no network).
     // Only candidates that could realistically clear 8/8 pay for history
     // fetches. The defensive array check stays: a stale/legacy non-array
     // cache value must never crash the route (candles.slice is not a function).
@@ -444,7 +445,7 @@ export async function GET(request: Request) {
       continue;
     }
     const prelim = analyzeCoin({ symbol: item.symbol, market: item.market, primary: scanCandles });
-    // Only the neutral scan ("wait") is skipped here — the DEEP gate below
+    // Only the neutral scan ("wait") is skipped here â€” the DEEP gate below
     // (8/8 conditions + 4/4 experts + 8/10 indicators) alone decides emission,
     // and MAX_FULL_ANALYSES_PER_REQUEST bounds how many history fetches that
     // deep pass may cost per request.
@@ -464,7 +465,7 @@ export async function GET(request: Request) {
       continue;
     }
 
-    // ── MASLA 1 — the SAME /api/market/history candles + the SAME
+    // â”€â”€ MASLA 1 â€” the SAME /api/market/history candles + the SAME
     // analyzeCoin() the Trade page runs, so both pages score identically.
     const [h1, h4, d1] = await Promise.all([
       fetchHistoryCandles(origin, item.market, item.symbol, "1h"),
@@ -485,7 +486,7 @@ export async function GET(request: Request) {
       h4,
       d1,
     });
-    // ZERO PRICE GUARD — never persist signals with $0 prices (SHIB fetch bug fix)
+    // ZERO PRICE GUARD â€” never persist signals with $0 prices (SHIB fetch bug fix)
     if (full.price <= 0) {
       console.warn(`[market-signals] REJECT ${item.symbol}: price ${full.price} <= 0`);
       continue;
@@ -502,17 +503,17 @@ export async function GET(request: Request) {
       continue;
     }
 
-    // Audit log — passing setups only (7/8+). Score 88 at 7/8; the page shows
+    // Audit log â€” passing setups only (7/8+). Score 88 at 7/8; the page shows
     // the exact same X/8 conditions for Trade + Signals.
     if (full.conditionsPassed >= 7) {
-      console.log(`[signals] ${item.symbol}: ${full.conditionsPassed}/8 conditions, Score ${full.score} → SIGNAL`);
+      console.log(`[signals] ${item.symbol}: ${full.conditionsPassed}/8 conditions, Score ${full.score} â†’ SIGNAL`);
     }
 
-    // ── INVARIANT GUARD (masla 3 / no-pattern contradiction) ──
+    // â”€â”€ INVARIANT GUARD (masla 3 / no-pattern contradiction) â”€â”€
     // The chart-pattern condition is condition #1 of 8. A signal that failed it
     // (no directional chart pattern) can never legitimately pass 8/8; its ceiling
     // is 7/8. score is derived from conditionsPassed in analyzeCoin(), so this is
-    // normally unreachable — but a stale/legacy build that inflated the score must
+    // normally unreachable â€” but a stale/legacy build that inflated the score must
     // not surface on the page as "8/8 with No pattern". Recompute score from the
     // authoritative count and drop anything still implying a pattern it lacks.
     if (!full.chartPattern && full.conditionsPassed > 7) {
@@ -523,11 +524,11 @@ export async function GET(request: Request) {
       full.score = Math.round((7 / 8) * 100);
     }
 
-    // ── QUALITY GATE (Quality with Quantity spec) ──
+    // â”€â”€ QUALITY GATE (Quality with Quantity spec) â”€â”€
     // No relaxation, no fallback, no near-miss buffer. A setup is emitted
     // only when it clears PREMIUM (8/8 = 100) or STRONG (7/8 = 88) with 3/4+
     // experts AND the Perfect-Balance filters (trend/volume/RSI) above.
-    // Anything below is REJECTED — the market tab shows the "Aaj ke liye best
+    // Anything below is REJECTED â€” the market tab shows the "Aaj ke liye best
     // setups pure ho gaye hain" empty state instead of garbage cards.
 
     const insightInput = {
@@ -562,7 +563,7 @@ export async function GET(request: Request) {
       }
     }
 
-    // ── Strict tier computation from all available data ────────────────────
+    // â”€â”€ Strict tier computation from all available data â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     const indicatorsAgreedCount = indicatorRows ? indicatorsAgreed(indicatorRows) : 0;
     const expertsAgreed = experts?.consensus.agreed ?? 0;
     const candlestickConfirmed = full.candlestickType !== "neutral" && (full.candlestickConfidence ?? 0) >= 70;
@@ -580,7 +581,7 @@ export async function GET(request: Request) {
       chartPatternPassed,
     });
 
-    // REJECT — below the gate, never emit
+    // REJECT â€” below the gate, never emit
     if (!tierVerdict) {
       if (!candlestickConfirmed || !volumePassed || !chartPatternPassed) drops.conditions += 1;
       else if (expertsAgreed < 3) drops.experts += 1;
@@ -588,7 +589,7 @@ export async function GET(request: Request) {
       continue;
     }
 
-    // DAILY QUOTA — reserve the emit slot before accepting. When today's 10
+    // DAILY QUOTA â€” reserve the emit slot before accepting. When today's 10
     // are used up, stop emitting for this market (no fallback filler).
     // Slow-market relaxation: if fewer than 3 signals emitted for this market
     // today, allow signals with score >= 70 even if they don't meet the full
@@ -596,7 +597,7 @@ export async function GET(request: Request) {
     const marketEmittedCount = emitted.filter((s: any) => s.market === item.market).length;
     const scoreQualifiesForSlowMarket = !tierVerdict && (full.conditionsPassed >= 5 || (full.conditionsPassed >= 4 && (experts?.consensus?.agreed ?? 0) >= 2)) && (full.candlestickType !== "neutral" && (full.candlestickConfidence ?? 0) >= 50);
 
-    // ── Build the DYNAMIC ATR plan (same geometry the Trade chart uses) ──
+    // â”€â”€ Build the DYNAMIC ATR plan (same geometry the Trade chart uses) â”€â”€
     const price = full.price;
     const direction = full.direction;
     const bullish = direction === "bullish";
@@ -651,7 +652,7 @@ export async function GET(request: Request) {
     emitted.push(emitSignal(item, full, confirmations, indicatorRows, experts, effectiveTier, effectiveScore));
   }
 
-  // SHELL MODE — FORCE FALLBACK (user-specific):
+  // SHELL MODE â€” FORCE FALLBACK (user-specific):
   // If the strict scan produced zero setups for this market, build five real-data
   // setups from the top coins (BTC, ETH, EURUSD, GOLD, AAPL) with the exact same
   // /api/market/history chain the app already uses and emit them as WEAK SETUP.
@@ -694,7 +695,7 @@ export async function GET(request: Request) {
         support: full.support,
         resistance: full.resistance,
         watchLevel: full.direction === "bearish" ? full.resistance : full.support,
-        reason: `WEAK SETUP — Force fallback: no strict signals from ${target.market}`,
+        reason: `WEAK SETUP â€” Force fallback: no strict signals from ${target.market}`,
         analyzedAt: new Date().toISOString(),
         chartPattern: full.chartPattern,
         chartPatternNote: full.chartPattern
@@ -717,12 +718,12 @@ export async function GET(request: Request) {
     }
   }
 
-  // MASLA 2 — persist every emitted setup (Firestore `signals` collection) so
-  // the Signals page survives reloads. Dedupe (same symbol+timeframe <4h →
+  // MASLA 2 â€” persist every emitted setup (Firestore `signals` collection) so
+  // the Signals page survives reloads. Dedupe (same symbol+timeframe <4h â†’
   // skip) and the 4h auto-delete sweep live inside persistSignals(); failures
   // never break the response (localStorage backup still covers the page).
-  // Wrapped defensively: toCloudDoc() → generateFullSignal() runs here and, if
-  // it ever threw for one odd signal shape, it must not 500 the whole route —
+  // Wrapped defensively: toCloudDoc() â†’ generateFullSignal() runs here and, if
+  // it ever threw for one odd signal shape, it must not 500 the whole route â€”
   // persistence is best-effort, the emitted array is what matters.
   const cloudDocs = emitted.map((signal) => toCloudDoc(signal, "1h")).filter((doc): doc is CloudDoc => doc !== null);
   console.log("[market-signals] db initialized:", !!db, "cloudDocs:", cloudDocs.length);
@@ -730,13 +731,13 @@ export async function GET(request: Request) {
     let count = 0;
     for (const doc of cloudDocs) {
       if (!doc) {
-        console.error("[market-signals] SKIPPING — doc is undefined/null");
+        console.error("[market-signals] SKIPPING â€” doc is undefined/null");
         continue;
       }
       const sym = (doc as any).symbol;
       const sc = (doc as any).score ?? 0;
       if (!sym) {
-        console.error("[market-signals] SKIPPING — doc.symbol is undefined");
+        console.error("[market-signals] SKIPPING â€” doc.symbol is undefined");
         continue;
       }
       try {
@@ -750,13 +751,13 @@ export async function GET(request: Request) {
       }
     }
   } else {
-    console.warn("[market-signals] SKIPPING signals save — db is null or no cloudDocs");
+    console.warn("[market-signals] SKIPPING signals save â€” db is null or no cloudDocs");
     if (!db) {
-      console.error("[market-signals] CRITICAL: Firebase db is null — check NEXT_PUBLIC_FIREBASE_* env vars on Vercel");
+      console.error("[market-signals] CRITICAL: Firebase db is null â€” check NEXT_PUBLIC_FIREBASE_* env vars on Vercel");
     }
   }
 
-  // FORCE TEST — prove Firestore write path works
+  // FORCE TEST â€” prove Firestore write path works
   if (db) {
     try {
       console.log("[market-signals] FORCE TEST: Attempting to save to signals collection: BTC-USD");
@@ -775,9 +776,9 @@ export async function GET(request: Request) {
       console.error("TEST SAVE FAILED:", e instanceof Error ? e.message : e);
     }
   } else {
-    console.warn("[market-signals] FORCE TEST SKIPPED — db is null");
+    console.warn("[market-signals] FORCE TEST SKIPPED â€” db is null");
   }
-  // ── FINAL FORCE SAVE — absolute safety net ──
+  // â”€â”€ FINAL FORCE SAVE â€” absolute safety net â”€â”€
   // If emitted is still 0 after scan + force fallback, force save top 5 coins
   // directly to `signals` collection so the screen never shows 0 signals.
   if (emitted.length === 0 && db) {
@@ -806,7 +807,7 @@ export async function GET(request: Request) {
           support: 0,
           resistance: 0,
           watchLevel: 0,
-          reason: `WEAK SETUP — Final force save: no signals emitted for ${target.market}`,
+          reason: `WEAK SETUP â€” Final force save: no signals emitted for ${target.market}`,
           analyzedAt: new Date().toISOString(),
           chartPattern: null,
           chartPatternNote: null,
@@ -831,7 +832,7 @@ export async function GET(request: Request) {
       }
     }
   } else if (emitted.length === 0) {
-    console.warn("[market-signals] FINAL FORCE SAVE SKIPPED — db is null");
+    console.warn("[market-signals] FINAL FORCE SAVE SKIPPED â€” db is null");
   }
 
   return Response.json(
@@ -844,3 +845,6 @@ export async function GET(request: Request) {
     { headers: { "Cache-Control": "no-store" } }
   );
 }
+
+
+

@@ -1,14 +1,14 @@
-/**
- * app/api/analyze/route.ts — POST /api/analyze
+﻿/**
+ * app/api/analyze/route.ts â€” POST /api/analyze
  *
  * STRICT & GROUNDED AI analysis.
  *
  * The frontend fetches candles DIRECTLY from the exchanges (Binance / TwelveData /
  * Frankfurter) in the browser and POSTs them here. This backend never touches
- * market data — it only runs the AI.
+ * market data â€” it only runs the AI.
  *
  *   - Rotates up to 10 API keys (GROQ_KEY_1..GROQ_KEY_10) with try/catch per key
- *     so the route NEVER crashes — if every key fails it returns a graceful
+ *     so the route NEVER crashes â€” if every key fails it returns a graceful
  *     NO SETUP response.
  *   - Strict prompt: the AI only names a pattern if it is clearly visible in the
  *     provided 200 candles, otherwise "NO PATTERN".
@@ -16,12 +16,12 @@
  *     found AND at least 6 of 8 strict conditions align AND the HTF trend agrees.
  *     Otherwise "NO SETUP".
  *
- * Educational only — not financial advice.
+ * Educational only â€” not financial advice.
  */
 
 import { NextResponse } from "next/server";
 
-export const dynamic = "force-dynamic";
+export const dynamic = "force-static";
 export const revalidate = 0;
 
 export interface Candle {
@@ -53,7 +53,7 @@ interface AiOutput {
   reasoning: string;
 }
 
-/* ───────────────── 10 API key rotation (Groq) ───────────────── */
+/* â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ 10 API key rotation (Groq) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 
 function getRotationKeys(): string[] {
   const keys: string[] = [];
@@ -128,7 +128,7 @@ async function runAi(
   }
   return null;
 }
-/* ───────────────── Deterministic indicators (ground the AI prompt) ───────────────── */
+/* â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ Deterministic indicators (ground the AI prompt) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 
 function sma(values: number[], period: number): number[] {
   const out: number[] = [];
@@ -238,7 +238,7 @@ function htfTrend(htfCandles: Candle[] | undefined, fallback: IndicatorRefs): "b
   return fallback.trend;
 }
 
-/* ───────────────── Strict 8-condition evaluation ───────────────── */
+/* â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ Strict 8-condition evaluation â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 
 interface ConditionResult {
   passed: number;
@@ -319,7 +319,7 @@ function noSetup(reason: string): AiOutput {
   };
 }
 
-/* ───────────────── Strict AI prompt ───────────────── */
+/* â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ Strict AI prompt â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 
 function buildPrompt(
   symbol: string,
@@ -336,21 +336,21 @@ function buildPrompt(
   const system = `You are a STRICT, GROUNDED technical analyst. You act ONLY on what is clearly visible in the provided candles. You must NEVER guess, assume, or hallucinate a pattern.
 
 HARD RULES:
-1. PATTERN: Name a classical chart pattern (Double Bottom, Head & Shoulders, Inverse Head & Shoulders, Triangle, Flag, Wedge, Cup & Handle) ONLY if it is clearly and unambiguously visible in the 200 candles — defined swings, neckline/breakout level, confirmation near the latest candles. Otherwise set pattern = "NO PATTERN". Do not force a fit. Do not invent patterns from noise.
+1. PATTERN: Name a classical chart pattern (Double Bottom, Head & Shoulders, Inverse Head & Shoulders, Triangle, Flag, Wedge, Cup & Handle) ONLY if it is clearly and unambiguously visible in the 200 candles â€” defined swings, neckline/breakout level, confirmation near the latest candles. Otherwise set pattern = "NO PATTERN". Do not force a fit. Do not invent patterns from noise.
 2. SIGNAL: Output BUY or SELL ONLY if ALL hold: (a) pattern is not "NO PATTERN", (b) at least 6 of the 8 pre-computed conditions below PASSED, (c) the HTF trend aligns with the signal direction. Otherwise signal = "NO SETUP".
 3. LEVELS: Only set entry/sl/tp when signal is BUY or SELL, derived from REAL candle prices (breakout price, nearby swing low/high, measured move) with risk/reward >= 1:2. Otherwise entry/sl/tp = null.
-4. OUTPUT: raw JSON only — no markdown fences, no prose before or after.`;
+4. OUTPUT: raw JSON only â€” no markdown fences, no prose before or after.`;
 
   const user = `SYMBOL: ${symbol} (${market}) | Timeframe: ${timeframe}
 
-200 CANDLES (oldest→newest): ${candlesJson}
+200 CANDLES (oldestâ†’newest): ${candlesJson}
 
 HTF CANDLES (trend context): ${htfJson}
 
 PRE-COMPUTED REFERENCE (verify against the candles; do not contradict visible price action):
-- Close: ${ind.lastClose.toFixed(4)} | SMA20: ${ind.sma20?.toFixed(4) ?? "—"} | SMA50: ${ind.sma50?.toFixed(4) ?? "—"} | SMA200: ${ind.sma200?.toFixed(4) ?? "—"} | RSI14: ${ind.rsi?.toFixed(1) ?? "—"} | MACD hist: ${ind.macdHist?.toFixed(4) ?? "—"}
+- Close: ${ind.lastClose.toFixed(4)} | SMA20: ${ind.sma20?.toFixed(4) ?? "â€”"} | SMA50: ${ind.sma50?.toFixed(4) ?? "â€”"} | SMA200: ${ind.sma200?.toFixed(4) ?? "â€”"} | RSI14: ${ind.rsi?.toFixed(1) ?? "â€”"} | MACD hist: ${ind.macdHist?.toFixed(4) ?? "â€”"}
 - Volume: last ${(ind.volumeRatio ?? 0).toFixed(2)}x the 20-bar average
-- Recent swing low: ${ind.swingLow?.toFixed(4) ?? "—"} | Recent swing high: ${ind.swingHigh?.toFixed(4) ?? "—"}
+- Recent swing low: ${ind.swingLow?.toFixed(4) ?? "â€”"} | Recent swing high: ${ind.swingHigh?.toFixed(4) ?? "â€”"}
 - Conditions passed (this server's deterministic read): ${ind.trend} trend context
 - HTF trend: ${htfTrendValue}
 
@@ -367,12 +367,12 @@ Return JSON only:
   "reasoning": "one or two sentences grounded in visible levels, swings and candles"
 }
 
-Be conservative: when in doubt → NO PATTERN / NO SETUP. Educational only — not financial advice.`;
+Be conservative: when in doubt â†’ NO PATTERN / NO SETUP. Educational only â€” not financial advice.`;
 
   return { system, user };
 }
 
-/* ───────────────── Response parsing ───────────────── */
+/* â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ Response parsing â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 
 function parseAiOutput(text: string): AiOutput | null {
   try {
@@ -405,14 +405,14 @@ function parseAiOutput(text: string): AiOutput | null {
   }
 }
 
-/* ───────────────── Route handler ───────────────── */
+/* â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ Route handler â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 
 export async function POST(request: Request): Promise<Response> {
   let body: AnalyzeRequest = {};
   try {
     body = (await request.json()) as AnalyzeRequest;
   } catch {
-    // Invalid JSON — never crash; return a graceful NO SETUP.
+    // Invalid JSON â€” never crash; return a graceful NO SETUP.
     return NextResponse.json({ error: "Invalid request body", signal: "NO SETUP" }, { status: 400 });
   }
 
@@ -429,7 +429,7 @@ export async function POST(request: Request): Promise<Response> {
     );
   }
 
-  // Use the last 50 candles for the AI (oldest→newest) to keep it fast.
+  // Use the last 50 candles for the AI (oldestâ†’newest) to keep it fast.
   const series = candles.slice(-50);
   const ind = computeIndicators(series);
   const htfTrendValue = htfTrend(htfCandles.length > 0 ? htfCandles : series, ind);
@@ -437,7 +437,7 @@ export async function POST(request: Request): Promise<Response> {
   const { system, user } = buildPrompt(symbol, market, timeframe, series, htfCandles.length > 0 ? htfCandles : series, ind, htfTrendValue);
   const ai = await runAi(system, user);
 
-  // ── If no AI key is healthy, never crash — degrade to NO SETUP. ─────────
+  // â”€â”€ If no AI key is healthy, never crash â€” degrade to NO SETUP. â”€â”€â”€â”€â”€â”€â”€â”€â”€
   if (!ai) {
     return NextResponse.json({
       symbol, market, timeframe,
@@ -462,7 +462,7 @@ export async function POST(request: Request): Promise<Response> {
     });
   }
 
-  // ── Strict enforcement: the code re-gates the AI so it cannot ship a fake setup. ──
+  // â”€â”€ Strict enforcement: the code re-gates the AI so it cannot ship a fake setup. â”€â”€
   const direction = parsed.signal === "BUY" ? "bullish" : "bearish";
   let final = parsed;
   if (parsed.signal !== "NO SETUP") {
@@ -492,4 +492,6 @@ export async function POST(request: Request): Promise<Response> {
     conditionsDetail: evaluateConditions(ind, direction, final.pattern, final.entry, final.sl, final.tp).list,
   });
 }
+
+
 

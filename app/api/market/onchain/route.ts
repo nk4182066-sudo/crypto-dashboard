@@ -1,3 +1,5 @@
+export const dynamic = "force-static";
+
 interface StablecoinRecord {
   symbol?: unknown;
   circulating?: { peggedUSD?: unknown };

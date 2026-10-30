@@ -1,12 +1,12 @@
-import { runNow, schedulerState, startScheduler } from "@/src/scanner/scheduler";
+﻿import { runNow, schedulerState, startScheduler } from "@/src/scanner/scheduler";
 import { getCachedAnalysis, getCachedSnapshot, runScan } from "@/src/scanner/scanner";
 import type { ScanMarket, ScanTarget } from "@/src/scanner/universe";
 
-export const dynamic = "force-dynamic";
+export const dynamic = "force-static";
 
 const validMarkets: ScanMarket[] = ["crypto", "forex", "stocks", "metals"];
 
-/** Feature 3 — ensure the 15-minute background job is running. */
+/** Feature 3 â€” ensure the 15-minute background job is running. */
 startScheduler();
 
 export async function GET(request: Request) {
@@ -15,7 +15,7 @@ export async function GET(request: Request) {
   const market = searchParams.get("market") as ScanMarket | null;
   const force = searchParams.get("force") === "1";
 
-  // Feature 3 — serve a single symbol's pre-computed analysis when available.
+  // Feature 3 â€” serve a single symbol's pre-computed analysis when available.
   if (symbol && market && validMarkets.includes(market)) {
     const analysis = getCachedAnalysis(symbol, market);
     if (analysis) {
@@ -32,7 +32,7 @@ export async function GET(request: Request) {
     return Response.json({ error: "No analysis is available for that symbol yet." }, { status: 404 });
   }
 
-  // Feature 10 — the ranked snapshot, from cache unless force is set.
+  // Feature 10 â€” the ranked snapshot, from cache unless force is set.
   if (force) {
     const snapshot = await runNow();
     return Response.json({ ...snapshot, scheduler: schedulerState() }, { headers: { "Cache-Control": "no-store" } });

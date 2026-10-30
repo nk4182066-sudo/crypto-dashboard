@@ -1,7 +1,7 @@
-import { db } from "@/src/lib/firebase";
+﻿import { db } from "@/src/lib/firebase";
 import { addDoc, collection } from "firebase/firestore";
 
-export const dynamic = "force-dynamic";
+
 
 export async function GET() {
   const results: Record<string, unknown> = {
@@ -10,7 +10,7 @@ export async function GET() {
   };
 
   if (!db) {
-    results.error = "db is null — Firebase not configured";
+    results.error = "db is null â€” Firebase not configured";
     return Response.json(results, { status: 500 });
   }
 
@@ -41,3 +41,5 @@ export async function GET() {
 export async function POST() {
   return GET();
 }
+
+

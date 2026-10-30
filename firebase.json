@@ -1,20 +1,21 @@
 {
-  "functions": {
-    "source": "functions",
-    "runtime": "nodejs20",
-    "region": "asia-south1"
-  },
   "firestore": {
     "rules": "firestore.rules",
     "indexes": "firestore.indexes.json"
   },
   "hosting": {
-    "source": ".",
+    "public": ".next",
     "ignore": [
       "firebase.json",
       "**/.*",
       "**/node_modules/**"
     ],
-    "site": "crypto-dashboard-67379"
+    "site": "crypto-dashboard-67379",
+    "rewrites": [
+      {
+        "source": "**",
+        "destination": "/index.html"
+      }
+    ]
   }
 }

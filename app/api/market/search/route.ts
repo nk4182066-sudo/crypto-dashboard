@@ -1,3 +1,5 @@
+export const dynamic = "force-static";
+
 type SearchMarket = "crypto" | "forex" | "stocks";
 
 interface AssetSearchResult {

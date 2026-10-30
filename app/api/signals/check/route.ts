@@ -1,9 +1,12 @@
-// GET /api/signals/check — returns the setups that score at or above minScore.
+import type { NextRequest } from "next/server";
+
+export const dynamic = "force-static";
+﻿// GET /api/signals/check â€” returns the setups that score at or above minScore.
 // Powers the background notification watcher (95+ only). Educational only.
 import { analyzeSymbol, type AutoAnalysis } from "@/src/lib/autoAnalysis";
 import { cached } from "@/src/lib/cache";
 
-export const dynamic = "force-dynamic";
+
 
 /** One setup the watcher can raise an alert for. */
 interface AlertSignal {
@@ -20,7 +23,7 @@ interface AlertSignal {
 
 /**
  * Curated major coins the watcher scans. Kept deliberately small (12) so one
- * check does not fan out into hundreds of history requests — each analysis
+ * check does not fan out into hundreds of history requests â€” each analysis
  * itself reads 4 timeframes.
  */
 const SYMBOLS = [
@@ -85,3 +88,5 @@ export async function GET(request: Request) {
     return Response.json({ error: "Failed" }, { status: 500 });
   }
 }
+
+

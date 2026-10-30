@@ -1,4 +1,4 @@
-// GET /api/signals/live - strict rotation scanner with 7 USDT 20x trade setup.
+﻿// GET /api/signals/live - strict rotation scanner with 7 USDT 20x trade setup.
 //
 // Scans only 4 coins per market (16 total) with continuous rotation, applies
 // strict signal conditions (6/8 conditions, 2/4 indicators, HTF confluence,
@@ -15,7 +15,7 @@ import { SIGNAL_TTL_MS } from "@/src/lib/signalCloud";
 
 const MARKET_VALUES: ScanMarket[] = ["crypto", "forex", "stocks", "metals"];
 
-export const dynamic = "force-dynamic";
+
 export const maxDuration = 10;
 
 function toMarket(market: string | null | undefined): ScanMarket | "all" {
@@ -100,3 +100,4 @@ export async function GET(request: Request) {
     { headers: { "Cache-Control": "no-store" } }
   );
 }
+
